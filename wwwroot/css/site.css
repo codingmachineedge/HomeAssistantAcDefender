@@ -1,15 +1,15 @@
 :root {
   color-scheme: light;
-  --bg: #f5f7f6;
+  --bg: #f4f6f5;
   --panel: #ffffff;
   --ink: #17211c;
-  --muted: #63706a;
-  --line: #dce4df;
-  --accent: #0f8b6d;
-  --accent-strong: #09624d;
+  --muted: #64716b;
+  --line: #dbe4df;
+  --accent: #0f7d67;
+  --accent-strong: #095d4c;
+  --blue: #166da8;
   --heat: #b94a2f;
-  --cool: #126fae;
-  --warn: #8b5e00;
+  --warn: #8a5a00;
   --shadow: 0 18px 40px rgba(24, 35, 31, 0.08);
 }
 
@@ -50,7 +50,7 @@ input {
 button {
   cursor: pointer;
   padding: 0 16px;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 button:hover {
@@ -59,8 +59,9 @@ button:hover {
 
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
-  outline: 3px solid rgba(15, 139, 109, 0.25);
+select:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgba(15, 125, 103, 0.25);
   outline-offset: 2px;
 }
 
@@ -76,26 +77,30 @@ select:focus-visible {
 }
 
 .app-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: 20px;
   min-height: 72px;
   padding: 0 32px;
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.94);
   position: sticky;
   top: 0;
   z-index: 5;
+}
+
+.brand,
+.app-nav a {
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 800;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  color: var(--ink);
-  text-decoration: none;
-  font-weight: 800;
 }
 
 .brand-mark {
@@ -107,6 +112,21 @@ select:focus-visible {
   background: var(--ink);
   color: #fff;
   letter-spacing: 0;
+}
+
+.app-nav {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.app-nav a {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbfa;
 }
 
 .header-status,
@@ -121,28 +141,32 @@ select:focus-visible {
   background: #f9fbfa;
   color: var(--muted);
   font-size: 0.9rem;
-  font-weight: 700;
+  font-weight: 800;
   text-transform: capitalize;
+  white-space: nowrap;
 }
 
 .app-shell {
-  width: min(1180px, calc(100% - 32px));
+  width: min(1220px, calc(100% - 32px));
   margin: 28px auto 48px;
 }
 
 .status-grid,
-.work-grid {
+.work-grid,
+.settings-grid {
   display: grid;
   gap: 20px;
 }
 
 .status-grid {
-  grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.5fr);
+  grid-template-columns: minmax(280px, 0.75fr) minmax(420px, 1.5fr);
   margin-bottom: 20px;
 }
 
-.work-grid {
-  grid-template-columns: minmax(360px, 0.95fr) minmax(360px, 1.2fr);
+.work-grid,
+.settings-grid {
+  grid-template-columns: repeat(2, minmax(340px, 1fr));
+  margin-bottom: 20px;
 }
 
 .panel {
@@ -161,6 +185,10 @@ select:focus-visible {
   margin-bottom: 18px;
 }
 
+.panel-head.tight {
+  margin-bottom: 10px;
+}
+
 .panel h2 {
   margin: 2px 0 0;
   font-size: 1.15rem;
@@ -172,7 +200,7 @@ select:focus-visible {
   display: block;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 900;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -195,11 +223,26 @@ select:focus-visible {
   font-size: 1.3rem;
 }
 
-.inline-controls {
+.inline-controls,
+.fan-row,
+.settings-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) auto auto;
   gap: 10px;
   align-items: end;
+}
+
+.inline-controls {
+  grid-template-columns: minmax(120px, 1fr) auto auto;
+}
+
+.fan-row {
+  grid-template-columns: minmax(170px, 1fr) auto;
+  margin-top: 16px;
+}
+
+.settings-row {
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  margin-top: 14px;
 }
 
 .field {
@@ -207,10 +250,11 @@ select:focus-visible {
   gap: 6px;
   color: var(--muted);
   font-size: 0.85rem;
-  font-weight: 700;
+  font-weight: 800;
 }
 
-.field input {
+.field input,
+.field select {
   width: 100%;
   padding: 0 12px;
 }
@@ -223,6 +267,11 @@ select:focus-visible {
   font-weight: 800;
 }
 
+.switch-row.compact {
+  margin: 0;
+  align-self: end;
+}
+
 .switch-row input {
   width: 22px;
   height: 22px;
@@ -232,7 +281,7 @@ select:focus-visible {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(96px, 1fr));
+  grid-template-columns: repeat(4, minmax(118px, 1fr));
   gap: 12px;
 }
 
@@ -250,7 +299,18 @@ select:focus-visible {
   display: block;
   margin-top: 6px;
   overflow-wrap: anywhere;
-  font-size: 1.35rem;
+  font-size: 1.25rem;
+}
+
+.next-action {
+  min-height: 44px;
+  margin-top: 14px;
+  border: 1px solid rgba(22, 109, 168, 0.22);
+  border-radius: 8px;
+  background: #eef6fb;
+  color: #164d72;
+  padding: 10px 12px;
+  font-weight: 900;
 }
 
 .command-line,
@@ -258,7 +318,7 @@ select:focus-visible {
   min-height: 26px;
   margin-top: 14px;
   color: var(--muted);
-  font-weight: 700;
+  font-weight: 800;
 }
 
 .error-line {
@@ -278,8 +338,43 @@ select:focus-visible {
   margin-top: 16px;
 }
 
+.change-log {
+  display: grid;
+  gap: 10px;
+  max-height: 360px;
+  min-height: 210px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+  padding: 10px;
+}
+
+.change-item {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #cddad4;
+  border-left: 5px solid var(--heat);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.change-item strong {
+  color: var(--heat);
+  font-size: 1.08rem;
+}
+
+.change-item span,
+.change-item small,
+.empty-log {
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .event-log {
   display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
   gap: 10px;
   max-height: 320px;
   margin: 14px 0 0;
@@ -306,26 +401,101 @@ select:focus-visible {
   display: block;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 900;
 }
 
-@media (max-width: 900px) {
+.schedule-panel {
+  margin-top: 20px;
+}
+
+.schedule-rows {
+  display: grid;
+  gap: 12px;
+}
+
+.schedule-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1.2fr 0.7fr 0.7fr 0.7fr 1.2fr auto auto;
+  gap: 10px;
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbfa;
+  padding: 12px;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+@media (max-width: 1050px) {
   .status-grid,
   .work-grid,
+  .settings-grid,
   .metric-grid,
   .thermostat-face,
-  .control-group,
-  .inline-controls {
+  .settings-row,
+  .event-log {
     grid-template-columns: 1fr;
   }
 
+  .schedule-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  body {
+    font-size: 15px;
+  }
+
   .app-header {
-    align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    padding: 14px 16px;
+  }
+
+  .app-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .app-nav a,
+  .header-status {
+    justify-content: center;
+  }
+
+  .app-shell {
+    width: min(100% - 20px, 1220px);
+    margin: 14px auto 28px;
+  }
+
+  .panel {
     padding: 16px;
   }
 
   .temperature-readout span:first-child {
-    font-size: 3.4rem;
+    font-size: 3.2rem;
+  }
+
+  .inline-controls,
+  .fan-row,
+  .control-group,
+  .schedule-row,
+  .settings-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-actions {
+    display: grid;
+  }
+
+  button,
+  select,
+  input {
+    width: 100%;
   }
 }

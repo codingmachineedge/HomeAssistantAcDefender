@@ -40,6 +40,14 @@
                 <strong id="haSetpoint">--</strong>
             </div>
             <div>
+                <span class="metric-label">Outdoor</span>
+                <strong id="outdoorTemp">--</strong>
+            </div>
+            <div>
+                <span class="metric-label">Weather</span>
+                <strong id="weatherCondition">--</strong>
+            </div>
+            <div>
                 <span class="metric-label">Mode</span>
                 <strong id="haMode">--</strong>
             </div>
@@ -47,13 +55,22 @@
                 <span class="metric-label">Action</span>
                 <strong id="haAction">--</strong>
             </div>
+            <div>
+                <span class="metric-label">Fan</span>
+                <strong id="haFan">--</strong>
+            </div>
+            <div>
+                <span class="metric-label">Cooldown</span>
+                <strong id="cooldown">--</strong>
+            </div>
         </div>
+        <div class="next-action" id="nextAction">Waiting for defender status.</div>
         <div class="command-line" id="lastCommand">No commands yet</div>
         <div class="error-line" id="lastError"></div>
     </article>
 </section>
 
-<section class="work-grid" aria-label="Real controls and event log">
+<section class="work-grid" aria-label="Real controls and thermostat audit log">
     <article class="panel thermostat-panel">
         <div class="panel-head">
             <div>
@@ -80,10 +97,28 @@
             <button id="forceTarget" type="button">Force target</button>
             <button id="forceBoost" type="button" class="primary">Force cooling</button>
         </div>
+        <div class="fan-row">
+            <label class="field">
+                <span>Fan mode</span>
+                <select id="fanModeSelect"></select>
+            </label>
+            <button id="applyFanMode" type="button">Set fan</button>
+        </div>
     </article>
 
-    <article class="panel events-panel">
-        <div class="panel-label">Activity</div>
-        <ol id="eventLog" class="event-log"></ol>
+    <article class="panel audit-panel">
+        <div class="panel-head tight">
+            <div>
+                <div class="panel-label">Thermostat Touch Log</div>
+                <h2>External changes</h2>
+            </div>
+            <span class="pill" id="touchCount">0</span>
+        </div>
+        <div id="changeLog" class="change-log" role="listbox" aria-label="External thermostat changes"></div>
     </article>
+</section>
+
+<section class="panel events-panel" aria-label="Activity">
+    <div class="panel-label">Activity</div>
+    <ol id="eventLog" class="event-log"></ol>
 </section>

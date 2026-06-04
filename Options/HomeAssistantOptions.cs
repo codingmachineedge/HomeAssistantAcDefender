@@ -10,6 +10,10 @@ public sealed class HomeAssistantOptions
 
     public string EntityId { get; set; } = "climate.dining_room";
 
+    public string WeatherEntityId { get; set; } = "";
+
+    public string OutdoorTemperatureEntityId { get; set; } = "";
+
     public string? Username { get; set; }
 
     public string? Password { get; set; }

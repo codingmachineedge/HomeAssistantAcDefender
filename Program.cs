@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HomeAssistantAcDefender.Models;
 using HomeAssistantAcDefender.Options;
 using HomeAssistantAcDefender.Services;
@@ -27,6 +28,22 @@ app.MapRazorPages()
    .WithStaticAssets();
 
 app.MapGet("/api/status", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
+app.MapGet("/api/settings", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
+
+app.MapGet("/api/status/stream", async (HttpContext context, DefenderStateStore store, CancellationToken cancellationToken) =>
+{
+    context.Response.Headers.CacheControl = "no-cache";
+    context.Response.Headers.Connection = "keep-alive";
+    context.Response.ContentType = "text/event-stream";
+
+    while (!cancellationToken.IsCancellationRequested)
+    {
+        var json = JsonSerializer.Serialize(store.GetSnapshot(), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        await context.Response.WriteAsync($"data: {json}\n\n", cancellationToken);
+        await context.Response.Body.FlushAsync(cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+    }
+});
 
 app.MapPost("/api/target/generate", (DefenderStateStore store) =>
 {
@@ -43,6 +60,12 @@ app.MapPost("/api/target", (TargetTemperatureRequest request, DefenderStateStore
 app.MapPost("/api/defender", (DefenderEnabledRequest request, DefenderStateStore store) =>
 {
     var snapshot = store.SetDefenderEnabled(request.Enabled);
+    return Results.Ok(snapshot);
+});
+
+app.MapPost("/api/settings", (SettingsRequest request, DefenderStateStore store) =>
+{
+    var snapshot = store.UpdateSettings(request);
     return Results.Ok(snapshot);
 });
 
@@ -79,6 +102,20 @@ app.MapPost("/api/thermostat/force-boost", async (AcDefenderService defender, De
     try
     {
         await defender.ForceCoolingBoostAsync(cancellationToken);
+        return Results.Ok(store.GetSnapshot());
+    }
+    catch (Exception ex)
+    {
+        store.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
+    }
+});
+
+app.MapPost("/api/thermostat/fan", async (FanModeRequest request, AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await defender.ForceFanModeAsync(request.FanMode, cancellationToken);
         return Results.Ok(store.GetSnapshot());
     }
     catch (Exception ex)

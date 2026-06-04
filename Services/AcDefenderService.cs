@@ -1,4 +1,6 @@
 using HomeAssistantAcDefender.Models;
+using HomeAssistantAcDefender.Options;
+using Microsoft.Extensions.Options;
 
 namespace HomeAssistantAcDefender.Services;
 
@@ -6,15 +8,18 @@ public sealed class AcDefenderService
 {
     private readonly DefenderStateStore stateStore;
     private readonly HomeAssistantClient homeAssistantClient;
+    private readonly IOptionsMonitor<DefenderOptions> options;
     private readonly ILogger<AcDefenderService> logger;
 
     public AcDefenderService(
         DefenderStateStore stateStore,
         HomeAssistantClient homeAssistantClient,
+        IOptionsMonitor<DefenderOptions> options,
         ILogger<AcDefenderService> logger)
     {
         this.stateStore = stateStore;
         this.homeAssistantClient = homeAssistantClient;
+        this.options = options;
         this.logger = logger;
     }
 
@@ -23,16 +28,38 @@ public sealed class AcDefenderService
         try
         {
             var snapshot = stateStore.GetSnapshot();
-            if (!snapshot.DefenderEnabled)
-            {
-                await RefreshReadingAsync(cancellationToken);
-                return;
-            }
+            var nextCheck = DateTimeOffset.UtcNow.AddSeconds(Math.Max(3, options.CurrentValue.PollIntervalSeconds));
 
             var reading = await RefreshReadingAsync(cancellationToken);
             if (reading is null)
             {
                 return;
+            }
+
+            if (!snapshot.DefenderEnabled)
+            {
+                stateStore.SetNextAction("Defender paused; still checking thermostat 24/7.", nextCheck);
+                return;
+            }
+
+            var rules = stateStore.ApplyScheduleAndWeatherRules(reading);
+            if (!rules.WeatherAllowsDefender)
+            {
+                stateStore.SetNextAction($"Weather rule '{rules.WeatherActivationMode}' is not met; checking again.", nextCheck);
+                return;
+            }
+
+            if (stateStore.TryGetCooldown(DateTimeOffset.UtcNow, out var cooldownUntil))
+            {
+                stateStore.SetNextAction($"Cooldown active after manual thermostat change; next correction after {cooldownUntil:yyyy-MM-dd HH:mm:ss}.", cooldownUntil);
+                return;
+            }
+
+            if (stateStore.ShouldUseFanSaver(reading))
+            {
+                var fanMode = stateStore.GetFanSaverMode();
+                await homeAssistantClient.SetFanModeAsync(reading.EntityId, fanMode, cancellationToken);
+                stateStore.RecordCommand($"Home Assistant {reading.EntityId} fan set to {fanMode} for energy saver.");
             }
 
             var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, reading.HvacAction);
@@ -41,9 +68,13 @@ public sealed class AcDefenderService
 
             if (changed)
             {
+                stateStore.SetNextAction($"Correcting real thermostat to {expectedSetPoint:0.0} C.", DateTimeOffset.UtcNow);
                 await homeAssistantClient.SetCoolingAsync(reading.EntityId, expectedSetPoint, cancellationToken);
-                stateStore.RecordCommand($"Home Assistant {reading.EntityId} forced to {expectedSetPoint:0.0} C.");
+                stateStore.RecordCommand($"Home Assistant {reading.EntityId} forced to {expectedSetPoint:0.0} C.", expectedSetPoint);
+                return;
             }
+
+            stateStore.SetNextAction($"No correction needed; next 24/7 check at {nextCheck:HH:mm:ss}.", nextCheck);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -60,7 +91,8 @@ public sealed class AcDefenderService
         var reading = await RequireReadingAsync(cancellationToken);
         var target = stateStore.GetTargetTemperature();
         await homeAssistantClient.SetCoolingAsync(reading.EntityId, target, cancellationToken);
-        stateStore.RecordCommand($"Home Assistant {reading.EntityId} set to exact target {target:0.0} C.");
+        stateStore.RecordCommand($"Home Assistant {reading.EntityId} set to exact target {target:0.0} C.", target);
+        stateStore.SetNextAction("Exact target command sent; waiting for the next live reading.", DateTimeOffset.UtcNow.AddSeconds(options.CurrentValue.PollIntervalSeconds));
     }
 
     public async Task ForceCoolingBoostAsync(CancellationToken cancellationToken)
@@ -68,7 +100,15 @@ public sealed class AcDefenderService
         var reading = await RequireReadingAsync(cancellationToken);
         var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, "idle");
         await homeAssistantClient.SetCoolingAsync(reading.EntityId, expectedSetPoint, cancellationToken);
-        stateStore.RecordCommand($"Home Assistant {reading.EntityId} cooling boost set to {expectedSetPoint:0.0} C.");
+        stateStore.RecordCommand($"Home Assistant {reading.EntityId} cooling boost set to {expectedSetPoint:0.0} C.", expectedSetPoint);
+        stateStore.SetNextAction("Cooling boost command sent; waiting for the next live reading.", DateTimeOffset.UtcNow.AddSeconds(options.CurrentValue.PollIntervalSeconds));
+    }
+
+    public async Task ForceFanModeAsync(string fanMode, CancellationToken cancellationToken)
+    {
+        var reading = await RequireReadingAsync(cancellationToken);
+        await homeAssistantClient.SetFanModeAsync(reading.EntityId, fanMode, cancellationToken);
+        stateStore.RecordCommand($"Home Assistant {reading.EntityId} fan set to {fanMode}.");
     }
 
     public async Task RefreshRealThermostatAsync(CancellationToken cancellationToken)
@@ -83,6 +123,9 @@ public sealed class AcDefenderService
             stateStore.RecordHomeAssistantUnavailable("Home Assistant token is not configured.");
             return null;
         }
+
+        var weather = await homeAssistantClient.GetWeatherAsync(cancellationToken);
+        stateStore.RecordWeatherReading(weather);
 
         var reading = await homeAssistantClient.GetDiningRoomClimateAsync(cancellationToken);
         if (reading is null)

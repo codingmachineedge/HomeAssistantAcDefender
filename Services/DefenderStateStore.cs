@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using HomeAssistantAcDefender.Models;
 using HomeAssistantAcDefender.Options;
@@ -73,10 +74,60 @@ public sealed class DefenderStateStore
         }
     }
 
+    public DefenderSnapshot UpdateSettings(SettingsRequest request)
+    {
+        lock (gate)
+        {
+            state.Settings.ScheduleEnabled = request.ScheduleEnabled;
+            state.Settings.WeatherActivationMode = NormalizeWeatherMode(request.WeatherActivationMode);
+            state.Settings.BaseCooldownSeconds = Math.Clamp(request.BaseCooldownSeconds, 0, 3600);
+            state.Settings.MaxCooldownSeconds = Math.Clamp(request.MaxCooldownSeconds, 0, 7200);
+            state.Settings.TouchFrequencyWindowMinutes = Math.Clamp(request.TouchFrequencyWindowMinutes, 1, 1440);
+            state.Settings.FanEnergySaverEnabled = request.FanEnergySaverEnabled;
+            state.Settings.FanEnergySaverThresholdCelsius = Math.Clamp(request.FanEnergySaverThresholdCelsius, 0.1, 5.0);
+            state.Settings.FanEnergySaverMode = string.IsNullOrWhiteSpace(request.FanEnergySaverMode)
+                ? "auto"
+                : request.FanEnergySaverMode.Trim();
+            state.Settings.DefenderRunsContinuously = true;
+            state.Schedule = request.Schedule
+                .Select(NormalizeScheduleEntry)
+                .Take(24)
+                .ToList();
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            AddEvent("info", "Settings updated.");
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    public DefenderSnapshot RecordWeatherReading(WeatherReading? reading)
+    {
+        lock (gate)
+        {
+            if (reading is not null)
+            {
+                state.Weather = new WeatherRuntimeState
+                {
+                    OutdoorTemperatureCelsius = reading.OutdoorTemperatureCelsius,
+                    Condition = reading.Condition,
+                    EntityId = reading.EntityId,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
+            }
+
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
     public DefenderSnapshot RecordHomeAssistantReading(ThermostatReading reading)
     {
         lock (gate)
         {
+            var now = DateTimeOffset.UtcNow;
+            DetectExternalSetPointChange(reading, now);
+
             state.ConnectionState = "home-assistant";
             state.HomeAssistantEntityId = reading.EntityId;
             state.HomeAssistantThermostat = new ThermostatRuntimeState
@@ -85,10 +136,13 @@ public sealed class DefenderStateStore
                 SetPointCelsius = reading.SetPointCelsius,
                 HvacMode = reading.HvacMode,
                 HvacAction = reading.HvacAction,
-                UpdatedAt = DateTimeOffset.UtcNow
+                FanMode = reading.FanMode,
+                AvailableFanModes = reading.AvailableFanModes.ToList(),
+                UpdatedAt = now
             };
+            state.LastObservedSetPointCelsius = reading.SetPointCelsius;
             state.LastError = null;
-            state.UpdatedAt = DateTimeOffset.UtcNow;
+            state.UpdatedAt = now;
             SaveState();
             return CreateSnapshot();
         }
@@ -100,6 +154,8 @@ public sealed class DefenderStateStore
         {
             state.ConnectionState = "unavailable";
             state.LastError = message;
+            state.NextAction = "Waiting for Home Assistant connection.";
+            state.NextActionAt = DateTimeOffset.UtcNow.AddSeconds(options.PollIntervalSeconds);
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("warning", message);
             SaveState();
@@ -107,15 +163,70 @@ public sealed class DefenderStateStore
         }
     }
 
-    public DefenderSnapshot RecordCommand(string message)
+    public DefenderSnapshot RecordCommand(string message, double? commandedSetPointCelsius = null)
     {
         lock (gate)
         {
             state.LastCommand = message;
             state.UpdatedAt = DateTimeOffset.UtcNow;
+            if (commandedSetPointCelsius is { } setPoint)
+            {
+                state.PendingCommandSetPointCelsius = setPoint;
+                state.PendingCommandAt = state.UpdatedAt;
+            }
+
             AddEvent("info", message);
             SaveState();
             return CreateSnapshot();
+        }
+    }
+
+    public DefenderSnapshot SetNextAction(string message, DateTimeOffset? when = null)
+    {
+        lock (gate)
+        {
+            state.NextAction = message;
+            state.NextActionAt = when;
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    public bool TryGetCooldown(DateTimeOffset now, out DateTimeOffset cooldownUntil)
+    {
+        lock (gate)
+        {
+            cooldownUntil = state.CooldownUntil ?? DateTimeOffset.MinValue;
+            return state.CooldownUntil is { } until && until > now;
+        }
+    }
+
+    public ActiveRuleResult ApplyScheduleAndWeatherRules(ThermostatReading reading)
+    {
+        lock (gate)
+        {
+            var now = DateTimeOffset.Now;
+            var activeSchedule = state.Settings.ScheduleEnabled
+                ? state.Schedule.FirstOrDefault(item => IsScheduleActive(item, now))
+                : null;
+
+            var weatherMode = state.Settings.WeatherActivationMode;
+            if (activeSchedule is not null)
+            {
+                weatherMode = NormalizeWeatherMode(activeSchedule.WeatherActivationMode);
+                if (Math.Abs(state.TargetTemperatureCelsius - activeSchedule.TargetTemperatureCelsius) > 0.05)
+                {
+                    state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
+                    state.BoostOffsetCelsius = 1.0;
+                    AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C.");
+                }
+            }
+
+            var allowed = IsWeatherRuleAllowed(weatherMode, reading, state.Weather);
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveState();
+            return new ActiveRuleResult(activeSchedule, weatherMode, allowed);
         }
     }
 
@@ -157,6 +268,90 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool ShouldUseFanSaver(ThermostatReading reading)
+    {
+        lock (gate)
+        {
+            return state.Settings.FanEnergySaverEnabled
+                && !string.IsNullOrWhiteSpace(state.Settings.FanEnergySaverMode)
+                && Math.Abs(reading.CurrentTemperatureCelsius - state.TargetTemperatureCelsius) <= state.Settings.FanEnergySaverThresholdCelsius
+                && !string.Equals(reading.FanMode, state.Settings.FanEnergySaverMode, StringComparison.OrdinalIgnoreCase)
+                && (reading.AvailableFanModes.Count == 0
+                    || reading.AvailableFanModes.Contains(state.Settings.FanEnergySaverMode, StringComparer.OrdinalIgnoreCase));
+        }
+    }
+
+    public string GetFanSaverMode()
+    {
+        lock (gate)
+        {
+            return state.Settings.FanEnergySaverMode;
+        }
+    }
+
+    private void DetectExternalSetPointChange(ThermostatReading reading, DateTimeOffset now)
+    {
+        if (state.LastObservedSetPointCelsius is not { } previous
+            || Math.Abs(previous - reading.SetPointCelsius) <= 0.05)
+        {
+            return;
+        }
+
+        var commandGrace = TimeSpan.FromSeconds(Math.Max(15, options.CommandGraceSeconds));
+        var matchesPendingCommand = state.PendingCommandSetPointCelsius is { } pending
+            && state.PendingCommandAt is { } pendingAt
+            && now - pendingAt <= commandGrace
+            && Math.Abs(pending - reading.SetPointCelsius) <= 0.15;
+
+        if (matchesPendingCommand)
+        {
+            state.PendingCommandSetPointCelsius = null;
+            state.PendingCommandAt = null;
+            return;
+        }
+
+        PruneTouchTimes(now);
+        state.ExternalTouchTimes.Add(now);
+        var cooldownSeconds = CalculateDynamicCooldownSeconds(now);
+        if (cooldownSeconds > 0)
+        {
+            state.CooldownUntil = now.AddSeconds(cooldownSeconds);
+        }
+
+        var audit = new ThermostatChangeAudit(
+            now,
+            reading.EntityId,
+            Math.Round(previous, 1),
+            Math.Round(reading.SetPointCelsius, 1),
+            reading.CurrentTemperatureCelsius,
+            state.Weather?.OutdoorTemperatureCelsius,
+            state.Weather?.Condition);
+
+        state.ThermostatChanges.Insert(0, audit);
+        if (state.ThermostatChanges.Count > 100)
+        {
+            state.ThermostatChanges.RemoveRange(100, state.ThermostatChanges.Count - 100);
+        }
+
+        AddEvent("warning",
+            $"External thermostat change: {previous:0.0} C to {reading.SetPointCelsius:0.0} C at {now:yyyy-MM-dd HH:mm:ss}.");
+    }
+
+    private int CalculateDynamicCooldownSeconds(DateTimeOffset now)
+    {
+        PruneTouchTimes(now);
+        var touches = Math.Max(1, state.ExternalTouchTimes.Count);
+        var baseSeconds = Math.Max(0, state.Settings.BaseCooldownSeconds);
+        var maxSeconds = Math.Max(baseSeconds, state.Settings.MaxCooldownSeconds);
+        return Math.Min(maxSeconds, baseSeconds * touches);
+    }
+
+    private void PruneTouchTimes(DateTimeOffset now)
+    {
+        var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.TouchFrequencyWindowMinutes));
+        state.ExternalTouchTimes.RemoveAll(item => now - item > window);
+    }
+
     private DefenderRuntimeState LoadState()
     {
         try
@@ -190,11 +385,12 @@ public sealed class DefenderStateStore
             saved.ConnectionState = "unavailable";
         }
 
-        if (saved.LastCommand?.Contains("dummy", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            saved.LastCommand = null;
-        }
-
+        saved.Settings ??= new DefenderSettings();
+        saved.Settings.DefenderRunsContinuously = true;
+        saved.Schedule ??= [];
+        saved.Events ??= [];
+        saved.ThermostatChanges ??= [];
+        saved.ExternalTouchTimes ??= [];
         saved.Events.RemoveAll(item => item.Message.Contains("dummy", StringComparison.OrdinalIgnoreCase)
             || item.Message.Contains("simulator", StringComparison.OrdinalIgnoreCase));
     }
@@ -207,10 +403,20 @@ public sealed class DefenderStateStore
             state.BoostOffsetCelsius,
             state.ConnectionState,
             state.HomeAssistantThermostat?.ToSnapshot(),
+            state.Weather?.ToSnapshot(),
             state.HomeAssistantEntityId,
+            state.Weather?.EntityId,
             !string.IsNullOrWhiteSpace(state.HomeAssistantEntityId),
             state.LastCommand,
             state.LastError,
+            state.NextAction,
+            state.NextActionAt,
+            state.CooldownUntil is { } until && until > DateTimeOffset.UtcNow
+                ? (int)Math.Ceiling((until - DateTimeOffset.UtcNow).TotalSeconds)
+                : 0,
+            CloneSettings(state.Settings),
+            state.Schedule.Select(CloneScheduleEntry).ToArray(),
+            state.ThermostatChanges.ToArray(),
             state.UpdatedAt,
             state.Events.ToArray());
     }
@@ -250,6 +456,103 @@ public sealed class DefenderStateStore
         }
     }
 
+    private static bool IsWeatherRuleAllowed(string mode, ThermostatReading reading, WeatherRuntimeState? weather)
+    {
+        var outdoor = weather?.OutdoorTemperatureCelsius;
+        return NormalizeWeatherMode(mode) switch
+        {
+            "room-above-outdoor" => outdoor is not null && reading.CurrentTemperatureCelsius > outdoor,
+            "room-below-outdoor" => outdoor is not null && reading.CurrentTemperatureCelsius < outdoor,
+            "outdoor-above-target" => outdoor is not null && outdoor > reading.SetPointCelsius,
+            "outdoor-below-target" => outdoor is not null && outdoor < reading.SetPointCelsius,
+            _ => true
+        };
+    }
+
+    private static bool IsScheduleActive(ScheduleEntry entry, DateTimeOffset now)
+    {
+        if (!entry.Enabled || !DayMatches(entry.Days, now.DayOfWeek))
+        {
+            return false;
+        }
+
+        if (!TimeSpan.TryParseExact(entry.StartTime, "hh\\:mm", CultureInfo.InvariantCulture, out var start)
+            || !TimeSpan.TryParseExact(entry.EndTime, "hh\\:mm", CultureInfo.InvariantCulture, out var end))
+        {
+            return false;
+        }
+
+        var current = now.TimeOfDay;
+        return start <= end
+            ? current >= start && current <= end
+            : current >= start || current <= end;
+    }
+
+    private static bool DayMatches(string days, DayOfWeek dayOfWeek)
+    {
+        var token = dayOfWeek.ToString()[..3];
+        return days.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Any(item => string.Equals(item, token, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static ScheduleEntry NormalizeScheduleEntry(ScheduleEntry entry)
+    {
+        return new ScheduleEntry
+        {
+            Id = string.IsNullOrWhiteSpace(entry.Id) ? Guid.NewGuid().ToString("N") : entry.Id,
+            Enabled = entry.Enabled,
+            Name = string.IsNullOrWhiteSpace(entry.Name) ? "Schedule" : entry.Name.Trim(),
+            Days = string.IsNullOrWhiteSpace(entry.Days) ? "Mon,Tue,Wed,Thu,Fri,Sat,Sun" : entry.Days.Trim(),
+            StartTime = string.IsNullOrWhiteSpace(entry.StartTime) ? "00:00" : entry.StartTime.Trim(),
+            EndTime = string.IsNullOrWhiteSpace(entry.EndTime) ? "23:59" : entry.EndTime.Trim(),
+            TargetTemperatureCelsius = Math.Round(Math.Clamp(entry.TargetTemperatureCelsius, 10, 35), 1),
+            WeatherActivationMode = NormalizeWeatherMode(entry.WeatherActivationMode)
+        };
+    }
+
+    private static ScheduleEntry CloneScheduleEntry(ScheduleEntry entry)
+    {
+        return new ScheduleEntry
+        {
+            Id = entry.Id,
+            Enabled = entry.Enabled,
+            Name = entry.Name,
+            Days = entry.Days,
+            StartTime = entry.StartTime,
+            EndTime = entry.EndTime,
+            TargetTemperatureCelsius = entry.TargetTemperatureCelsius,
+            WeatherActivationMode = entry.WeatherActivationMode
+        };
+    }
+
+    private static DefenderSettings CloneSettings(DefenderSettings settings)
+    {
+        return new DefenderSettings
+        {
+            ScheduleEnabled = settings.ScheduleEnabled,
+            WeatherActivationMode = settings.WeatherActivationMode,
+            BaseCooldownSeconds = settings.BaseCooldownSeconds,
+            MaxCooldownSeconds = settings.MaxCooldownSeconds,
+            TouchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes,
+            FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
+            FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
+            FanEnergySaverMode = settings.FanEnergySaverMode,
+            DefenderRunsContinuously = true
+        };
+    }
+
+    private static string NormalizeWeatherMode(string? mode)
+    {
+        return (mode ?? "always").Trim().ToLowerInvariant() switch
+        {
+            "room-above-outdoor" => "room-above-outdoor",
+            "room-below-outdoor" => "room-below-outdoor",
+            "outdoor-above-target" => "outdoor-above-target",
+            "outdoor-below-target" => "outdoor-below-target",
+            _ => "always"
+        };
+    }
+
     private static string ResolveStatePath(string configuredPath, string contentRoot)
     {
         if (Path.IsPathRooted(configuredPath))
@@ -272,11 +575,33 @@ public sealed class DefenderStateStore
 
         public ThermostatRuntimeState? HomeAssistantThermostat { get; set; }
 
+        public WeatherRuntimeState? Weather { get; set; }
+
         public string? HomeAssistantEntityId { get; set; }
 
         public string? LastCommand { get; set; }
 
         public string? LastError { get; set; }
+
+        public string NextAction { get; set; } = "Waiting for the next 24/7 check.";
+
+        public DateTimeOffset? NextActionAt { get; set; }
+
+        public double? LastObservedSetPointCelsius { get; set; }
+
+        public double? PendingCommandSetPointCelsius { get; set; }
+
+        public DateTimeOffset? PendingCommandAt { get; set; }
+
+        public DateTimeOffset? CooldownUntil { get; set; }
+
+        public DefenderSettings Settings { get; set; } = new();
+
+        public List<ScheduleEntry> Schedule { get; set; } = [];
+
+        public List<ThermostatChangeAudit> ThermostatChanges { get; set; } = [];
+
+        public List<DateTimeOffset> ExternalTouchTimes { get; set; } = [];
 
         public DateTimeOffset UpdatedAt { get; set; }
 
@@ -293,6 +618,10 @@ public sealed class DefenderStateStore
 
         public string HvacAction { get; set; } = "unknown";
 
+        public string? FanMode { get; set; }
+
+        public List<string> AvailableFanModes { get; set; } = [];
+
         public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
         public ThermostatSnapshot ToSnapshot()
@@ -302,7 +631,30 @@ public sealed class DefenderStateStore
                 SetPointCelsius,
                 HvacMode,
                 HvacAction,
+                FanMode,
+                AvailableFanModes.ToArray(),
                 UpdatedAt);
         }
     }
+
+    private sealed class WeatherRuntimeState
+    {
+        public double? OutdoorTemperatureCelsius { get; set; }
+
+        public string? Condition { get; set; }
+
+        public string EntityId { get; set; } = "";
+
+        public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+        public WeatherSnapshot ToSnapshot()
+        {
+            return new WeatherSnapshot(OutdoorTemperatureCelsius, Condition, EntityId, UpdatedAt);
+        }
+    }
 }
+
+public sealed record ActiveRuleResult(
+    ScheduleEntry? ActiveSchedule,
+    string WeatherActivationMode,
+    bool WeatherAllowsDefender);

@@ -21,4 +21,6 @@ public sealed class DefenderOptions
     public int PollIntervalSeconds { get; set; } = 5;
 
     public string StateFilePath { get; set; } = "/data/defender-state.json";
+
+    public int CommandGraceSeconds { get; set; } = 120;
 }
