@@ -16,6 +16,8 @@ body {
 
 .top-bar {
   border-bottom: 1px solid #dbe4df;
+  height: auto !important;
+  position: relative;
 }
 
 .brand-text {
@@ -121,6 +123,7 @@ body {
   }
 
   .top-bar .mud-toolbar {
+    height: auto !important;
     min-height: auto;
     flex-wrap: wrap;
     gap: 8px;
@@ -128,9 +131,22 @@ body {
     padding-bottom: 10px;
   }
 
+  .top-bar .mud-spacer {
+    display: none;
+  }
+
+  .top-bar .brand-text {
+    width: 100%;
+  }
+
   .top-bar .mud-button-root,
   .top-bar .mud-chip {
-    width: 100%;
+    flex: 1 1 calc(50% - 8px);
+    min-width: 0;
+  }
+
+  .top-bar .mud-chip {
+    flex-basis: 100%;
   }
 
   .action-with-help,
