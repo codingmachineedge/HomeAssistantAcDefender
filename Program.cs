@@ -7,6 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<HomeAssistantOptions>(builder.Configuration.GetSection(HomeAssistantOptions.SectionName));
 builder.Services.Configure<DefenderOptions>(builder.Configuration.GetSection(DefenderOptions.SectionName));
 builder.Services.AddSingleton<DefenderStateStore>();
+builder.Services.AddSingleton<AcDefenderService>();
 builder.Services.AddHttpClient<HomeAssistantClient>();
 builder.Services.AddHostedService<AcDefenderWorker>();
 builder.Services.AddRazorPages();
@@ -45,10 +46,46 @@ app.MapPost("/api/defender", (DefenderEnabledRequest request, DefenderStateStore
     return Results.Ok(snapshot);
 });
 
-app.MapPost("/api/dummy", (DummyThermostatRequest request, DefenderStateStore store) =>
+app.MapPost("/api/thermostat/refresh", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
 {
-    var snapshot = store.UpdateDummyThermostat(request);
-    return Results.Ok(snapshot);
+    try
+    {
+        await defender.RefreshRealThermostatAsync(cancellationToken);
+        return Results.Ok(store.GetSnapshot());
+    }
+    catch (Exception ex)
+    {
+        store.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
+    }
+});
+
+app.MapPost("/api/thermostat/force-target", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await defender.ForceTargetAsync(cancellationToken);
+        return Results.Ok(store.GetSnapshot());
+    }
+    catch (Exception ex)
+    {
+        store.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
+    }
+});
+
+app.MapPost("/api/thermostat/force-boost", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await defender.ForceCoolingBoostAsync(cancellationToken);
+        return Results.Ok(store.GetSnapshot());
+    }
+    catch (Exception ex)
+    {
+        store.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
+    }
 });
 
 app.Run();

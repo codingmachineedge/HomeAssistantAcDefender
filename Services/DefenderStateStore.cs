@@ -73,38 +73,11 @@ public sealed class DefenderStateStore
         }
     }
 
-    public DefenderSnapshot UpdateDummyThermostat(DummyThermostatRequest request)
-    {
-        lock (gate)
-        {
-            if (request.CurrentTemperatureCelsius is { } current)
-            {
-                state.DummyThermostat.CurrentTemperatureCelsius = Math.Round(current, 1);
-            }
-
-            if (request.SetPointCelsius is { } setPoint)
-            {
-                state.DummyThermostat.SetPointCelsius = Math.Round(setPoint, 1);
-                AddEvent("warning", $"Dummy thermostat changed to {state.DummyThermostat.SetPointCelsius:0.0} C.");
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.HvacMode))
-            {
-                state.DummyThermostat.HvacMode = request.HvacMode.Trim().ToLowerInvariant();
-            }
-
-            state.DummyThermostat.UpdatedAt = DateTimeOffset.UtcNow;
-            state.UpdatedAt = DateTimeOffset.UtcNow;
-            SaveState();
-            return CreateSnapshot();
-        }
-    }
-
     public DefenderSnapshot RecordHomeAssistantReading(ThermostatReading reading)
     {
         lock (gate)
         {
-            state.ActiveSource = "home-assistant";
+            state.ConnectionState = "home-assistant";
             state.HomeAssistantEntityId = reading.EntityId;
             state.HomeAssistantThermostat = new ThermostatRuntimeState
             {
@@ -125,7 +98,7 @@ public sealed class DefenderStateStore
     {
         lock (gate)
         {
-            state.ActiveSource = "dummy";
+            state.ConnectionState = "unavailable";
             state.LastError = message;
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("warning", message);
@@ -146,30 +119,11 @@ public sealed class DefenderStateStore
         }
     }
 
-    public DefenderSnapshot ApplyDummyDefenderCycle()
+    public double GetTargetTemperature()
     {
         lock (gate)
         {
-            var dummy = state.DummyThermostat;
-            var cooling = dummy.HvacMode == "cool" && dummy.SetPointCelsius < dummy.CurrentTemperatureCelsius - 0.05;
-            dummy.HvacAction = cooling ? "cooling" : "idle";
-            dummy.CurrentTemperatureCelsius = Math.Round(cooling
-                ? Math.Max(dummy.SetPointCelsius, dummy.CurrentTemperatureCelsius - 0.2)
-                : Math.Min(28.0, dummy.CurrentTemperatureCelsius + 0.05), 1);
-
-            var expectedSetPoint = CalculateExpectedSetPoint(dummy.CurrentTemperatureCelsius, dummy.HvacAction);
-            if (state.DefenderEnabled && Math.Abs(dummy.SetPointCelsius - expectedSetPoint) > 0.05)
-            {
-                dummy.SetPointCelsius = expectedSetPoint;
-                dummy.HvacMode = "cool";
-                state.LastCommand = $"Dummy thermostat forced to {expectedSetPoint:0.0} C.";
-                AddEvent("info", state.LastCommand);
-            }
-
-            dummy.UpdatedAt = DateTimeOffset.UtcNow;
-            state.UpdatedAt = DateTimeOffset.UtcNow;
-            SaveState();
-            return CreateSnapshot();
+            return state.TargetTemperatureCelsius;
         }
     }
 
@@ -212,6 +166,7 @@ public sealed class DefenderStateStore
                 var saved = JsonSerializer.Deserialize<DefenderRuntimeState>(File.ReadAllText(stateFilePath), jsonOptions);
                 if (saved is not null)
                 {
+                    SanitizeLoadedState(saved);
                     return saved;
                 }
             }
@@ -224,16 +179,24 @@ public sealed class DefenderStateStore
         return new DefenderRuntimeState
         {
             TargetTemperatureCelsius = options.DefaultTargetCelsius,
-            DummyThermostat = new ThermostatRuntimeState
-            {
-                CurrentTemperatureCelsius = 25.0,
-                SetPointCelsius = options.DefaultTargetCelsius + 2.0,
-                HvacMode = "cool",
-                HvacAction = "idle",
-                UpdatedAt = DateTimeOffset.UtcNow
-            },
             UpdatedAt = DateTimeOffset.UtcNow
         };
+    }
+
+    private void SanitizeLoadedState(DefenderRuntimeState saved)
+    {
+        if (string.Equals(saved.ConnectionState, "dummy", StringComparison.OrdinalIgnoreCase))
+        {
+            saved.ConnectionState = "unavailable";
+        }
+
+        if (saved.LastCommand?.Contains("dummy", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            saved.LastCommand = null;
+        }
+
+        saved.Events.RemoveAll(item => item.Message.Contains("dummy", StringComparison.OrdinalIgnoreCase)
+            || item.Message.Contains("simulator", StringComparison.OrdinalIgnoreCase));
     }
 
     private DefenderSnapshot CreateSnapshot()
@@ -242,8 +205,7 @@ public sealed class DefenderStateStore
             state.TargetTemperatureCelsius,
             state.DefenderEnabled,
             state.BoostOffsetCelsius,
-            state.ActiveSource,
-            state.DummyThermostat.ToSnapshot(),
+            state.ConnectionState,
             state.HomeAssistantThermostat?.ToSnapshot(),
             state.HomeAssistantEntityId,
             !string.IsNullOrWhiteSpace(state.HomeAssistantEntityId),
@@ -255,6 +217,14 @@ public sealed class DefenderStateStore
 
     private void AddEvent(string level, string message)
     {
+        if (state.Events.FirstOrDefault() is { } latest
+            && latest.Level == level
+            && latest.Message == message
+            && DateTimeOffset.UtcNow - latest.Timestamp < TimeSpan.FromMinutes(2))
+        {
+            return;
+        }
+
         state.Events.Insert(0, new DefenderEvent(DateTimeOffset.UtcNow, level, message));
         if (state.Events.Count > 40)
         {
@@ -298,9 +268,7 @@ public sealed class DefenderStateStore
 
         public double BoostOffsetCelsius { get; set; } = 1.0;
 
-        public string ActiveSource { get; set; } = "dummy";
-
-        public ThermostatRuntimeState DummyThermostat { get; set; } = new();
+        public string ConnectionState { get; set; } = "unavailable";
 
         public ThermostatRuntimeState? HomeAssistantThermostat { get; set; }
 
@@ -321,9 +289,9 @@ public sealed class DefenderStateStore
 
         public double SetPointCelsius { get; set; }
 
-        public string HvacMode { get; set; } = "cool";
+        public string HvacMode { get; set; } = "unknown";
 
-        public string HvacAction { get; set; } = "idle";
+        public string HvacAction { get; set; } = "unknown";
 
         public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 

@@ -4,7 +4,7 @@ const state = {
 
 const byId = (id) => document.getElementById(id);
 const temp = (value) => Number.isFinite(value) ? `${value.toFixed(1)} C` : "--";
-const time = (value) => value ? new Date(value).toLocaleTimeString() : "--";
+const shortTime = (value) => value ? new Date(value).toLocaleTimeString() : "--";
 const text = (id, value) => {
   const element = byId(id);
   if (element) {
@@ -19,28 +19,37 @@ async function request(path, method = "GET", body = null) {
     body: body ? JSON.stringify(body) : undefined
   });
 
+  const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    if (payload) {
+      render(payload);
+    }
+
+    throw new Error(payload?.lastError || `${response.status} ${response.statusText}`);
   }
 
-  return await response.json();
+  return payload;
 }
 
 function render(snapshot) {
   state.snapshot = snapshot;
   const target = Number(snapshot.targetTemperatureCelsius);
-  const dummy = snapshot.dummyThermostat;
   const ha = snapshot.homeAssistantThermostat;
+  const connection = snapshot.connectionState || "unavailable";
+  const hasHomeAssistant = connection === "home-assistant" && ha;
 
   text("targetTemp", Number.isFinite(target) ? target.toFixed(1) : "--");
   if (document.activeElement !== byId("targetInput")) {
     byId("targetInput").value = Number.isFinite(target) ? target.toFixed(1) : "";
   }
-  byId("defenderToggle").checked = snapshot.defenderEnabled;
-  text("activeSource", snapshot.activeSource || "--");
-  text("headerStatus", snapshot.defenderEnabled ? "Defender active" : "Paused");
 
-  text("haEntity", snapshot.homeAssistantEntityId || "Dummy mode");
+  byId("defenderToggle").checked = snapshot.defenderEnabled;
+  text("connectionState", connection);
+  text("headerStatus", snapshot.defenderEnabled
+    ? hasHomeAssistant ? "Defender active" : "Home Assistant unavailable"
+    : "Paused");
+
+  text("haEntity", snapshot.homeAssistantEntityId || "No entity");
   text("haCurrent", ha ? temp(Number(ha.currentTemperatureCelsius)) : "--");
   text("haSetpoint", ha ? temp(Number(ha.setPointCelsius)) : "--");
   text("haMode", ha?.hvacMode || "--");
@@ -48,17 +57,14 @@ function render(snapshot) {
   text("lastCommand", snapshot.lastCommand || "No commands yet");
   text("lastError", snapshot.lastError || "");
 
-  text("dummyCurrent", temp(Number(dummy.currentTemperatureCelsius)));
-  text("dummySetpoint", temp(Number(dummy.setPointCelsius)));
-  text("dummyAction", dummy.hvacAction || "--");
-  text("dummyModeReadout", dummy.hvacMode || "--");
-  text("dummyUpdated", time(dummy.updatedAt));
-  if (document.activeElement !== byId("dummyMode")) {
-    byId("dummyMode").value = dummy.hvacMode || "cool";
-  }
+  text("boostOffset", Number.isFinite(Number(snapshot.boostOffsetCelsius))
+    ? `${Number(snapshot.boostOffsetCelsius).toFixed(1)} C`
+    : "--");
+  text("haUpdated", ha ? shortTime(ha.updatedAt) : "--");
+  text("realEntity", snapshot.homeAssistantEntityId || "--");
 
   const events = byId("eventLog");
-  events.replaceChildren(...snapshot.events.map((event) => {
+  events.replaceChildren(...(snapshot.events || []).map((event) => {
     const item = document.createElement("li");
     item.className = event.level || "info";
 
@@ -82,19 +88,6 @@ async function mutate(path, body = null) {
   render(await request(path, "POST", body));
 }
 
-function dummyChange(setPointDelta, currentDelta) {
-  const dummy = state.snapshot?.dummyThermostat;
-  if (!dummy) {
-    return;
-  }
-
-  mutate("/api/dummy", {
-    setPointCelsius: Number(dummy.setPointCelsius) + setPointDelta,
-    currentTemperatureCelsius: Number(dummy.currentTemperatureCelsius) + currentDelta,
-    hvacMode: byId("dummyMode").value
-  }).catch(showClientError);
-}
-
 function showClientError(error) {
   text("lastError", error.message);
 }
@@ -114,11 +107,17 @@ function initializeDashboard() {
     mutate("/api/defender", { enabled: event.target.checked }).catch(showClientError);
   });
 
-  byId("dummyMode").addEventListener("change", () => dummyChange(0, 0));
-  byId("dummySetDown").addEventListener("click", () => dummyChange(-1, 0));
-  byId("dummySetUp").addEventListener("click", () => dummyChange(1, 0));
-  byId("dummyRoomDown").addEventListener("click", () => dummyChange(0, -1));
-  byId("dummyRoomUp").addEventListener("click", () => dummyChange(0, 1));
+  byId("refreshReal").addEventListener("click", () => {
+    mutate("/api/thermostat/refresh").catch(showClientError);
+  });
+
+  byId("forceTarget").addEventListener("click", () => {
+    mutate("/api/thermostat/force-target").catch(showClientError);
+  });
+
+  byId("forceBoost").addEventListener("click", () => {
+    mutate("/api/thermostat/force-boost").catch(showClientError);
+  });
 
   refresh().catch(showClientError);
   setInterval(() => refresh().catch(showClientError), 1000);
