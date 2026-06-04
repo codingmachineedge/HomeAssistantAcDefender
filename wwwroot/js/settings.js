@@ -63,10 +63,24 @@ function renderScheduleRows(rows) {
   container.replaceChildren(...rows.map(createScheduleRow));
 }
 
+function createScheduleId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  if (window.crypto?.getRandomValues) {
+    const values = new Uint32Array(4);
+    window.crypto.getRandomValues(values);
+    return `schedule-${Array.from(values, (value) => value.toString(16)).join("")}`;
+  }
+
+  return `schedule-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function createScheduleRow(row = {}) {
   const wrapper = document.createElement("div");
   wrapper.className = "schedule-row";
-  wrapper.dataset.id = row.id || crypto.randomUUID();
+  wrapper.dataset.id = row.id || createScheduleId();
   const selectedDays = new Set((row.days || "Mon,Tue,Wed,Thu,Fri,Sat,Sun")
     .split(",")
     .map((day) => day.trim())
