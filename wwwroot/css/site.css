@@ -1,0 +1,331 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f7f6;
+  --panel: #ffffff;
+  --ink: #17211c;
+  --muted: #63706a;
+  --line: #dce4df;
+  --accent: #0f8b6d;
+  --accent-strong: #09624d;
+  --heat: #b94a2f;
+  --cool: #126fae;
+  --warn: #8b5e00;
+  --shadow: 0 18px 40px rgba(24, 35, 31, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+select,
+input {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+}
+
+button {
+  cursor: pointer;
+  padding: 0 16px;
+  font-weight: 700;
+}
+
+button:hover {
+  border-color: #aab9b1;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid rgba(15, 139, 109, 0.25);
+  outline-offset: 2px;
+}
+
+.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.primary:hover {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-height: 72px;
+  padding: 0 32px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 800;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  letter-spacing: 0;
+}
+
+.header-status,
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #f9fbfa;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.app-shell {
+  width: min(1180px, calc(100% - 32px));
+  margin: 28px auto 48px;
+}
+
+.status-grid,
+.work-grid {
+  display: grid;
+  gap: 20px;
+}
+
+.status-grid {
+  grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.5fr);
+  margin-bottom: 20px;
+}
+
+.work-grid {
+  grid-template-columns: minmax(360px, 0.95fr) minmax(360px, 1.2fr);
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.panel h2 {
+  margin: 2px 0 0;
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+
+.panel-label,
+.metric-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.temperature-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 8px 0 20px;
+  font-weight: 900;
+}
+
+.temperature-readout span:first-child {
+  font-size: 4.3rem;
+  line-height: 0.95;
+}
+
+.temperature-readout span:last-child {
+  color: var(--muted);
+  font-size: 1.3rem;
+}
+
+.inline-controls {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.field input {
+  width: 100%;
+  padding: 0 12px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  font-weight: 800;
+}
+
+.switch-row input {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  accent-color: var(--accent);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(96px, 1fr));
+  gap: 12px;
+}
+
+.metric-grid > div,
+.thermostat-face > div {
+  min-height: 86px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #f9fbfa;
+}
+
+.metric-grid strong,
+.thermostat-face strong {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 1.35rem;
+}
+
+.command-line,
+.error-line {
+  min-height: 26px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.error-line {
+  color: var(--warn);
+}
+
+.thermostat-face {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  gap: 12px;
+}
+
+.control-group {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(82px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.event-log {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  margin: 14px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.event-log li {
+  border-left: 4px solid var(--accent);
+  background: #f9fbfa;
+  padding: 10px 12px;
+}
+
+.event-log li.warning {
+  border-left-color: var(--warn);
+}
+
+.event-log li.error {
+  border-left-color: var(--heat);
+}
+
+.event-log time {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+@media (max-width: 900px) {
+  .status-grid,
+  .work-grid,
+  .metric-grid,
+  .thermostat-face,
+  .control-group,
+  .inline-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .app-header {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 16px;
+  }
+
+  .temperature-readout span:first-child {
+    font-size: 3.4rem;
+  }
+}

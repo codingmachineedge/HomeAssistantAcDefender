@@ -1,0 +1,13 @@
+bin/
+obj/
+.git/
+.github/
+.vs/
+.vscode/
+App_Data/
+*.user
+*.suo
+.env
+.env.*
+!*.env.example
+README.local.md

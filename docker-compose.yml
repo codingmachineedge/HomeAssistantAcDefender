@@ -1,0 +1,18 @@
+services:
+  ac-defender:
+    build: .
+    container_name: homeassistant-ac-defender
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    env_file:
+      - .env
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Defender__StateFilePath: /data/defender-state.json
+      Defender__PollIntervalSeconds: 5
+    volumes:
+      - ac-defender-data:/data
+
+volumes:
+  ac-defender-data:
