@@ -347,9 +347,10 @@ public sealed class DefenderStateStore
                     options.MaximumBoostOffsetCelsius);
             }
 
+            var lowestNormalSetPoint = Math.Max(options.MinimumCoolingSetPointCelsius, target);
             return Math.Round(Math.Max(
-                options.MinimumCoolingSetPointCelsius,
-                target - state.BoostOffsetCelsius), 1);
+                lowestNormalSetPoint,
+                currentTemperatureCelsius - state.BoostOffsetCelsius), 1);
         }
     }
 

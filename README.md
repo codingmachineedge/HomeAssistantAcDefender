@@ -62,7 +62,7 @@ Every cycle:
 10. Correct the thermostat setpoint when it does not match the defender decision.
 11. Update the real-time dashboard status.
 
-When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the website target to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle, bounded by `Defender__MinimumCoolingSetPointCelsius`. When the room reaches target, the setpoint returns to the exact website target.
+When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
 ## Dynamic Cooldown
 

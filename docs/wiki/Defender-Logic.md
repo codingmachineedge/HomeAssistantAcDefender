@@ -17,7 +17,7 @@ Every cycle performs these steps:
 
 ## Cooling Behavior
 
-When room temperature is above target, a new defender correction starts by setting the thermostat exactly 1 C below the website target to force cooling. If Home Assistant reports idle/off while the room is still above target, the defender lowers the setpoint one additional degree per cycle until the configured minimum cooling setpoint.
+When room temperature is above target, a new defender correction starts by setting the thermostat exactly 1 C below the current room temperature to force cooling. If Home Assistant reports idle/off while the room is still above target, the defender lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target.
 
 When room temperature reaches target, the defender returns the thermostat setpoint to the exact website target.
 
