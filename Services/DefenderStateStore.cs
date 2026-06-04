@@ -88,6 +88,13 @@ public sealed class DefenderStateStore
             state.Settings.FanEnergySaverMode = string.IsNullOrWhiteSpace(request.FanEnergySaverMode)
                 ? "auto"
                 : request.FanEnergySaverMode.Trim();
+            state.Settings.UpstairsComfortEnabled = request.UpstairsComfortEnabled;
+            state.Settings.UpstairsTemperatureEntityIds = request.UpstairsTemperatureEntityIds?.Trim() ?? string.Empty;
+            state.Settings.UpstairsMaxComfortCelsius = Math.Round(Math.Clamp(request.UpstairsMaxComfortCelsius, 15, 35), 1);
+            state.Settings.UpstairsComfortTargetCelsius = Math.Round(Math.Clamp(request.UpstairsComfortTargetCelsius, 10, 30), 1);
+            state.Settings.UpstairsComfortBoostCelsius = Math.Round(Math.Clamp(request.UpstairsComfortBoostCelsius, 0, 5), 1);
+            state.Settings.HomePresenceRequired = request.HomePresenceRequired;
+            state.Settings.PresenceEntityIds = request.PresenceEntityIds?.Trim() ?? string.Empty;
             state.Settings.DefenderRunsContinuously = true;
             state.Schedule = request.Schedule
                 .Select(NormalizeScheduleEntry)
@@ -115,6 +122,33 @@ public sealed class DefenderStateStore
                 };
             }
 
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    public DefenderSnapshot RecordComfortReadings(
+        IReadOnlyList<TemperatureSensorReading> upstairsSensors,
+        IReadOnlyList<PresenceReading> presence)
+    {
+        lock (gate)
+        {
+            var hottest = upstairsSensors
+                .Where(sensor => sensor.TemperatureCelsius is not null)
+                .OrderByDescending(sensor => sensor.TemperatureCelsius)
+                .FirstOrDefault();
+            var hasPresenceSignals = presence.Count > 0;
+            state.IsHome = !hasPresenceSignals || presence.Any(item => item.IsHome);
+            state.UpstairsSensors = upstairsSensors.ToList();
+            state.Presence = presence.ToList();
+            state.HottestUpstairsTemperatureCelsius = hottest?.TemperatureCelsius;
+            state.HottestUpstairsEntityId = hottest?.EntityId;
+            state.UpstairsTooHot = state.Settings.UpstairsComfortEnabled
+                && (!state.Settings.HomePresenceRequired || state.IsHome)
+                && hottest?.TemperatureCelsius is { } temp
+                && temp > state.Settings.UpstairsMaxComfortCelsius;
+            state.ComfortStatus = BuildComfortStatus();
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
             return CreateSnapshot();
@@ -227,6 +261,57 @@ public sealed class DefenderStateStore
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
             return new ActiveRuleResult(activeSchedule, weatherMode, allowed);
+        }
+    }
+
+    public ComfortRuleResult ApplyComfortRules()
+    {
+        lock (gate)
+        {
+            if (!state.Settings.UpstairsComfortEnabled)
+            {
+                state.ComfortStatus = "Upstairs comfort guard is disabled.";
+                return new ComfortRuleResult(false, false, state.TargetTemperatureCelsius, state.ComfortStatus);
+            }
+
+            if (state.Settings.HomePresenceRequired && !state.IsHome)
+            {
+                state.ComfortStatus = "No one is home; upstairs comfort guard is watching only.";
+                return new ComfortRuleResult(false, false, state.TargetTemperatureCelsius, state.ComfortStatus);
+            }
+
+            if (!state.UpstairsTooHot)
+            {
+                state.ComfortStatus = BuildComfortStatus();
+                return new ComfortRuleResult(false, false, state.TargetTemperatureCelsius, state.ComfortStatus);
+            }
+
+            var comfortTarget = Math.Min(state.TargetTemperatureCelsius, state.Settings.UpstairsComfortTargetCelsius);
+            if (Math.Abs(state.TargetTemperatureCelsius - comfortTarget) > 0.05)
+            {
+                state.TargetTemperatureCelsius = Math.Round(comfortTarget, 1);
+                state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
+                AddEvent("warning", $"Upstairs comfort guard lowered target to {state.TargetTemperatureCelsius:0.0} C.");
+            }
+            else
+            {
+                state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
+            }
+
+            state.ComfortStatus = BuildComfortStatus();
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveState();
+            var bypassCooldown = state.HottestUpstairsTemperatureCelsius is { } hottest
+                && hottest >= state.Settings.UpstairsMaxComfortCelsius + 1.0;
+            return new ComfortRuleResult(true, bypassCooldown, state.TargetTemperatureCelsius, state.ComfortStatus);
+        }
+    }
+
+    public DefenderSettings GetSettings()
+    {
+        lock (gate)
+        {
+            return CloneSettings(state.Settings);
         }
     }
 
@@ -385,12 +470,17 @@ public sealed class DefenderStateStore
             saved.ConnectionState = "unavailable";
         }
 
-        saved.Settings ??= new DefenderSettings();
-        saved.Settings.DefenderRunsContinuously = true;
+            saved.Settings ??= new DefenderSettings();
+            saved.Settings.DefenderRunsContinuously = true;
         saved.Schedule ??= [];
         saved.Events ??= [];
         saved.ThermostatChanges ??= [];
         saved.ExternalTouchTimes ??= [];
+        saved.UpstairsSensors ??= [];
+        saved.Presence ??= [];
+        saved.ComfortStatus = string.IsNullOrWhiteSpace(saved.ComfortStatus)
+            ? "Waiting for upstairs comfort readings."
+            : saved.ComfortStatus;
         saved.Events.RemoveAll(item => item.Message.Contains("dummy", StringComparison.OrdinalIgnoreCase)
             || item.Message.Contains("simulator", StringComparison.OrdinalIgnoreCase));
     }
@@ -414,6 +504,16 @@ public sealed class DefenderStateStore
             state.CooldownUntil is { } until && until > DateTimeOffset.UtcNow
                 ? (int)Math.Ceiling((until - DateTimeOffset.UtcNow).TotalSeconds)
                 : 0,
+            new ComfortSnapshot(
+                state.Settings.UpstairsComfortEnabled,
+                state.Settings.HomePresenceRequired,
+                state.IsHome,
+                state.UpstairsTooHot,
+                state.HottestUpstairsTemperatureCelsius,
+                state.HottestUpstairsEntityId,
+                state.ComfortStatus,
+                state.UpstairsSensors.ToArray(),
+                state.Presence.ToArray()),
             CloneSettings(state.Settings),
             state.Schedule.Select(CloneScheduleEntry).ToArray(),
             state.ThermostatChanges.ToArray(),
@@ -537,8 +637,39 @@ public sealed class DefenderStateStore
             FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
             FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
             FanEnergySaverMode = settings.FanEnergySaverMode,
+            UpstairsComfortEnabled = settings.UpstairsComfortEnabled,
+            UpstairsTemperatureEntityIds = settings.UpstairsTemperatureEntityIds,
+            UpstairsMaxComfortCelsius = settings.UpstairsMaxComfortCelsius,
+            UpstairsComfortTargetCelsius = settings.UpstairsComfortTargetCelsius,
+            UpstairsComfortBoostCelsius = settings.UpstairsComfortBoostCelsius,
+            HomePresenceRequired = settings.HomePresenceRequired,
+            PresenceEntityIds = settings.PresenceEntityIds,
             DefenderRunsContinuously = true
         };
+    }
+
+    private string BuildComfortStatus()
+    {
+        if (!state.Settings.UpstairsComfortEnabled)
+        {
+            return "Upstairs comfort guard is disabled.";
+        }
+
+        if (state.UpstairsSensors.Count == 0)
+        {
+            return "No upstairs temperature sensors found yet.";
+        }
+
+        var homeStatus = state.Settings.HomePresenceRequired
+            ? state.IsHome ? "home" : "away"
+            : "home check optional";
+        var hottest = state.HottestUpstairsTemperatureCelsius is { } temp
+            ? $"{temp:0.0} C"
+            : "--";
+
+        return state.UpstairsTooHot
+            ? $"Upstairs is hot at {hottest}; comfort guard active ({homeStatus})."
+            : $"Upstairs comfort ok at {hottest}; watching ({homeStatus}).";
     }
 
     private static string NormalizeWeatherMode(string? mode)
@@ -603,6 +734,20 @@ public sealed class DefenderStateStore
 
         public List<DateTimeOffset> ExternalTouchTimes { get; set; } = [];
 
+        public List<TemperatureSensorReading> UpstairsSensors { get; set; } = [];
+
+        public List<PresenceReading> Presence { get; set; } = [];
+
+        public bool IsHome { get; set; } = true;
+
+        public bool UpstairsTooHot { get; set; }
+
+        public double? HottestUpstairsTemperatureCelsius { get; set; }
+
+        public string? HottestUpstairsEntityId { get; set; }
+
+        public string ComfortStatus { get; set; } = "Waiting for upstairs comfort readings.";
+
         public DateTimeOffset UpdatedAt { get; set; }
 
         public List<DefenderEvent> Events { get; set; } = [];
@@ -658,3 +803,9 @@ public sealed record ActiveRuleResult(
     ScheduleEntry? ActiveSchedule,
     string WeatherActivationMode,
     bool WeatherAllowsDefender);
+
+public sealed record ComfortRuleResult(
+    bool Active,
+    bool BypassCooldown,
+    double EffectiveTargetCelsius,
+    string Status);

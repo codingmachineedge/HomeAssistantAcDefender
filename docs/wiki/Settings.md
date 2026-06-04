@@ -22,6 +22,27 @@ The settings page controls defender behavior without editing configuration files
 
 When enabled, the app can set a configured Home Assistant fan mode when the room is close to target. This is optional and depends on the climate entity exposing supported `fan_modes`.
 
+## Upstairs Comfort
+
+Settings include:
+
+- Protect upstairs comfort
+- Upstairs temperature entity IDs
+- Max upstairs comfort C
+- Comfort target C
+- Extra boost C
+
+If upstairs temperature entity IDs are blank, the app tries to discover temperature sensors with names like upstairs, second floor, 2nd floor, bedroom, or master.
+
+## Home Presence
+
+Presence settings include:
+
+- Only prioritize upstairs when someone is home
+- Presence entity IDs
+
+If presence entity IDs are blank, the app discovers `person.*` and `device_tracker.*` entities.
+
 ## Schedule Rows
 
 Each schedule row contains name, enabled flag, days, start time, end time, target temperature, and weather activation rule.

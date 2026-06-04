@@ -71,6 +71,31 @@
 </section>
 
 <section class="work-grid" aria-label="Real controls and thermostat audit log">
+    <article class="panel comfort-panel">
+        <div class="panel-head">
+            <div>
+                <div class="panel-label">Upstairs Comfort</div>
+                <h2 id="comfortStatus">Waiting for upstairs readings</h2>
+            </div>
+            <span class="pill" id="homePresence">--</span>
+        </div>
+        <div class="thermostat-face">
+            <div>
+                <span class="metric-label">Hottest upstairs</span>
+                <strong id="upstairsHottest">--</strong>
+            </div>
+            <div>
+                <span class="metric-label">Guard</span>
+                <strong id="upstairsGuard">--</strong>
+            </div>
+            <div>
+                <span class="metric-label">Presence</span>
+                <strong id="presenceRequired">--</strong>
+            </div>
+        </div>
+        <div id="upstairsSensors" class="sensor-list"></div>
+    </article>
+
     <article class="panel thermostat-panel">
         <div class="panel-head">
             <div>

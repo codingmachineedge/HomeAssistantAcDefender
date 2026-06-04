@@ -15,4 +15,11 @@ public sealed record SettingsRequest(
     bool FanEnergySaverEnabled,
     double FanEnergySaverThresholdCelsius,
     string FanEnergySaverMode,
+    bool UpstairsComfortEnabled,
+    string UpstairsTemperatureEntityIds,
+    double UpstairsMaxComfortCelsius,
+    double UpstairsComfortTargetCelsius,
+    double UpstairsComfortBoostCelsius,
+    bool HomePresenceRequired,
+    string PresenceEntityIds,
     IReadOnlyList<ScheduleEntry> Schedule);

@@ -54,6 +54,44 @@
             </label>
         </div>
     </article>
+
+    <article class="panel">
+        <div class="panel-label">Upstairs Comfort</div>
+        <label class="switch-row">
+            <input id="settingsUpstairsEnabled" type="checkbox" />
+            <span>Protect upstairs comfort</span>
+        </label>
+        <label class="field">
+            <span>Upstairs temperature entity IDs</span>
+            <input id="settingsUpstairsEntities" type="text" placeholder="sensor.upstairs_temperature, sensor.primary_bedroom_temperature" />
+        </label>
+        <div class="settings-row">
+            <label class="field">
+                <span>Max upstairs comfort C</span>
+                <input id="settingsUpstairsMax" type="number" min="15" max="35" step="0.1" />
+            </label>
+            <label class="field">
+                <span>Comfort target C</span>
+                <input id="settingsUpstairsTarget" type="number" min="10" max="30" step="0.1" />
+            </label>
+            <label class="field">
+                <span>Extra boost C</span>
+                <input id="settingsUpstairsBoost" type="number" min="0" max="5" step="0.1" />
+            </label>
+        </div>
+    </article>
+
+    <article class="panel">
+        <div class="panel-label">Home Presence</div>
+        <label class="switch-row">
+            <input id="settingsPresenceRequired" type="checkbox" />
+            <span>Only prioritize upstairs when someone is home</span>
+        </label>
+        <label class="field">
+            <span>Presence entity IDs</span>
+            <input id="settingsPresenceEntities" type="text" placeholder="person.me, device_tracker.phone" />
+        </label>
+    </article>
 </section>
 
 <section class="panel schedule-panel" aria-label="Schedule">

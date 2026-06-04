@@ -37,6 +37,13 @@ function renderSettings(snapshot) {
   settingById("settingsFanSaverEnabled").checked = Boolean(settings.fanEnergySaverEnabled);
   settingById("settingsFanThreshold").value = settings.fanEnergySaverThresholdCelsius ?? 0.6;
   settingById("settingsFanMode").value = settings.fanEnergySaverMode || "auto";
+  settingById("settingsUpstairsEnabled").checked = settings.upstairsComfortEnabled !== false;
+  settingById("settingsUpstairsEntities").value = settings.upstairsTemperatureEntityIds || "";
+  settingById("settingsUpstairsMax").value = settings.upstairsMaxComfortCelsius ?? 24;
+  settingById("settingsUpstairsTarget").value = settings.upstairsComfortTargetCelsius ?? 22;
+  settingById("settingsUpstairsBoost").value = settings.upstairsComfortBoostCelsius ?? 1;
+  settingById("settingsPresenceRequired").checked = Boolean(settings.homePresenceRequired);
+  settingById("settingsPresenceEntities").value = settings.presenceEntityIds || "";
 
   if (!settingById("scheduleRows").dataset.dirty) {
     renderScheduleRows(snapshot.schedule || []);
@@ -111,6 +118,13 @@ async function saveSettings() {
     fanEnergySaverEnabled: settingById("settingsFanSaverEnabled").checked,
     fanEnergySaverThresholdCelsius: Number(settingById("settingsFanThreshold").value),
     fanEnergySaverMode: settingById("settingsFanMode").value,
+    upstairsComfortEnabled: settingById("settingsUpstairsEnabled").checked,
+    upstairsTemperatureEntityIds: settingById("settingsUpstairsEntities").value,
+    upstairsMaxComfortCelsius: Number(settingById("settingsUpstairsMax").value),
+    upstairsComfortTargetCelsius: Number(settingById("settingsUpstairsTarget").value),
+    upstairsComfortBoostCelsius: Number(settingById("settingsUpstairsBoost").value),
+    homePresenceRequired: settingById("settingsPresenceRequired").checked,
+    presenceEntityIds: settingById("settingsPresenceEntities").value,
     schedule: collectScheduleRows()
   };
 

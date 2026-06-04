@@ -10,6 +10,7 @@ Key capabilities:
 - Audit log with timestamp, old setpoint, new setpoint, room temperature, outdoor temperature, and weather condition.
 - Dynamic cooldown after manual changes.
 - Custom schedule with weather activation rules.
+- Upstairs comfort guard with optional home-presence awareness.
 - Optional fan energy saver near target temperature.
 
 No simulator or dummy thermostat is used. Every control acts on the configured Home Assistant climate entity or returns a real error.

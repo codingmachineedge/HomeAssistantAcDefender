@@ -43,16 +43,21 @@ public sealed class AcDefenderService
             }
 
             var rules = stateStore.ApplyScheduleAndWeatherRules(reading);
-            if (!rules.WeatherAllowsDefender)
+            var comfort = stateStore.ApplyComfortRules();
+            if (!rules.WeatherAllowsDefender && !comfort.Active)
             {
                 stateStore.SetNextAction($"Weather rule '{rules.WeatherActivationMode}' is not met; checking again.", nextCheck);
                 return;
             }
 
-            if (stateStore.TryGetCooldown(DateTimeOffset.UtcNow, out var cooldownUntil))
+            if (!comfort.BypassCooldown && stateStore.TryGetCooldown(DateTimeOffset.UtcNow, out var cooldownUntil))
             {
                 stateStore.SetNextAction($"Cooldown active after manual thermostat change; next correction after {cooldownUntil:yyyy-MM-dd HH:mm:ss}.", cooldownUntil);
                 return;
+            }
+            else if (comfort.BypassCooldown)
+            {
+                stateStore.SetNextAction("Severe upstairs heat detected; bypassing cooldown for comfort.", DateTimeOffset.UtcNow);
             }
 
             if (stateStore.ShouldUseFanSaver(reading))
@@ -126,6 +131,11 @@ public sealed class AcDefenderService
 
         var weather = await homeAssistantClient.GetWeatherAsync(cancellationToken);
         stateStore.RecordWeatherReading(weather);
+
+        var settings = stateStore.GetSettings();
+        var upstairsSensors = await homeAssistantClient.GetUpstairsTemperatureSensorsAsync(settings.UpstairsTemperatureEntityIds, cancellationToken);
+        var presence = await homeAssistantClient.GetPresenceAsync(settings.PresenceEntityIds, cancellationToken);
+        stateStore.RecordComfortReadings(upstairsSensors, presence);
 
         var reading = await homeAssistantClient.GetDiningRoomClimateAsync(cancellationToken);
         if (reading is null)

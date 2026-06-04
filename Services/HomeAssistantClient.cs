@@ -78,6 +78,68 @@ public sealed class HomeAssistantClient
         return await TryGetWeatherStateAsync(entityId, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<TemperatureSensorReading>> GetUpstairsTemperatureSensorsAsync(string configuredEntityIds, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return Array.Empty<TemperatureSensorReading>();
+        }
+
+        var configured = SplitEntityIds(configuredEntityIds).ToArray();
+        if (configured.Length > 0)
+        {
+            var readings = new List<TemperatureSensorReading>();
+            foreach (var entityId in configured)
+            {
+                var reading = await TryGetTemperatureSensorAsync(entityId, cancellationToken);
+                if (reading is not null)
+                {
+                    readings.Add(reading);
+                }
+            }
+
+            return readings;
+        }
+
+        return (await GetStatesAsync(cancellationToken))
+            .Where(IsLikelyUpstairsTemperatureSensor)
+            .Select(ParseTemperatureSensor)
+            .Where(reading => reading.TemperatureCelsius is not null)
+            .OrderByDescending(reading => reading.TemperatureCelsius)
+            .Take(8)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<PresenceReading>> GetPresenceAsync(string configuredEntityIds, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return Array.Empty<PresenceReading>();
+        }
+
+        var configured = SplitEntityIds(configuredEntityIds).ToArray();
+        if (configured.Length > 0)
+        {
+            var readings = new List<PresenceReading>();
+            foreach (var entityId in configured)
+            {
+                var reading = await TryGetPresenceAsync(entityId, cancellationToken);
+                if (reading is not null)
+                {
+                    readings.Add(reading);
+                }
+            }
+
+            return readings;
+        }
+
+        return (await GetStatesAsync(cancellationToken))
+            .Where(IsPresenceEntity)
+            .Select(ParsePresence)
+            .Take(12)
+            .ToArray();
+    }
+
     public async Task SetCoolingAsync(string entityId, double setPointCelsius, CancellationToken cancellationToken)
     {
         await CallServiceAsync("climate", "set_hvac_mode", new
@@ -100,6 +162,34 @@ public sealed class HomeAssistantClient
             entity_id = entityId,
             fan_mode = fanMode
         }, cancellationToken);
+    }
+
+    private async Task<TemperatureSensorReading?> TryGetTemperatureSensorAsync(string entityId, CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(HttpMethod.Get, $"api/states/{Uri.EscapeDataString(entityId)}", null, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return ParseTemperatureSensor(document.RootElement);
+    }
+
+    private async Task<PresenceReading?> TryGetPresenceAsync(string entityId, CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(HttpMethod.Get, $"api/states/{Uri.EscapeDataString(entityId)}", null, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return ParsePresence(document.RootElement);
     }
 
     private async Task<ThermostatReading?> TryGetClimateStateAsync(string entityId, CancellationToken cancellationToken)
@@ -291,6 +381,35 @@ public sealed class HomeAssistantClient
             condition);
     }
 
+    private static TemperatureSensorReading ParseTemperatureSensor(JsonElement root)
+    {
+        var entityId = GetEntityId(root);
+        var name = TryGetAttributeString(root, "friendly_name") ?? entityId;
+        var unit = TryGetAttributeString(root, "unit_of_measurement") ?? string.Empty;
+        var temperature = TryParseStateDouble(root);
+        if (temperature is not null && unit.Contains('F', StringComparison.OrdinalIgnoreCase))
+        {
+            temperature = (temperature.Value - 32.0) * 5.0 / 9.0;
+        }
+
+        return new TemperatureSensorReading(
+            entityId,
+            name,
+            temperature is null ? null : Math.Round(temperature.Value, 1),
+            TryGetState(root));
+    }
+
+    private static PresenceReading ParsePresence(JsonElement root)
+    {
+        var entityId = GetEntityId(root);
+        var state = TryGetState(root);
+        return new PresenceReading(
+            entityId,
+            TryGetAttributeString(root, "friendly_name") ?? entityId,
+            state,
+            string.Equals(state, "home", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string? TryGetAttributeString(JsonElement root, string name)
     {
         if (!root.TryGetProperty("attributes", out var attributes)
@@ -300,6 +419,56 @@ public sealed class HomeAssistantClient
         }
 
         return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
+    }
+
+    private static bool IsLikelyUpstairsTemperatureSensor(JsonElement root)
+    {
+        var entityId = GetEntityId(root);
+        if (!entityId.StartsWith("sensor.", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var deviceClass = TryGetAttributeString(root, "device_class") ?? string.Empty;
+        var unit = TryGetAttributeString(root, "unit_of_measurement") ?? string.Empty;
+        var name = $"{entityId} {TryGetAttributeString(root, "friendly_name")}";
+        var looksLikeTemperature = deviceClass.Equals("temperature", StringComparison.OrdinalIgnoreCase)
+            || unit.Contains('C', StringComparison.OrdinalIgnoreCase)
+            || unit.Contains('F', StringComparison.OrdinalIgnoreCase);
+        var looksUpstairs = name.Contains("upstairs", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("second", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("2nd", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("bedroom", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("master", StringComparison.OrdinalIgnoreCase);
+
+        return looksLikeTemperature && looksUpstairs && TryParseStateDouble(root) is not null;
+    }
+
+    private static bool IsPresenceEntity(JsonElement root)
+    {
+        var entityId = GetEntityId(root);
+        return entityId.StartsWith("person.", StringComparison.OrdinalIgnoreCase)
+            || entityId.StartsWith("device_tracker.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> SplitEntityIds(string entityIds)
+    {
+        return (entityIds ?? string.Empty)
+            .Split([',', '\n', '\r', ';'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    private static string GetEntityId(JsonElement root)
+    {
+        return root.TryGetProperty("entity_id", out var entityIdElement)
+            ? entityIdElement.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    private static string TryGetState(JsonElement root)
+    {
+        return root.TryGetProperty("state", out var stateElement)
+            ? stateElement.GetString() ?? "unknown"
+            : "unknown";
     }
 
     private static IReadOnlyList<string> TryGetAttributeStringArray(JsonElement root, string name)

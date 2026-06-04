@@ -79,9 +79,51 @@ function renderDashboard(snapshot) {
   text("realEntity", snapshot.homeAssistantEntityId || "--");
   text("touchCount", String((snapshot.thermostatChanges || []).length));
 
+  renderComfort(snapshot.comfort);
   renderFanSelect(ha);
   renderChangeLog(snapshot.thermostatChanges || []);
   renderEvents(snapshot.events || []);
+}
+
+function renderComfort(comfort) {
+  if (!comfort) {
+    return;
+  }
+
+  text("comfortStatus", comfort.status || "Waiting for upstairs readings.");
+  text("homePresence", comfort.isHome ? "Home" : "Away");
+  text("upstairsHottest", comfort.hottestUpstairsTemperatureCelsius !== null && comfort.hottestUpstairsTemperatureCelsius !== undefined
+    ? temp(Number(comfort.hottestUpstairsTemperatureCelsius))
+    : "--");
+  text("upstairsGuard", comfort.upstairsTooHot ? "Active" : comfort.upstairsComfortEnabled ? "Watching" : "Off");
+  text("presenceRequired", comfort.homePresenceRequired ? "Required" : "Optional");
+
+  const list = byId("upstairsSensors");
+  if (!list) {
+    return;
+  }
+
+  const sensors = comfort.upstairsSensors || [];
+  if (!sensors.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-log";
+    empty.textContent = "No upstairs sensors found or configured.";
+    list.replaceChildren(empty);
+    return;
+  }
+
+  list.replaceChildren(...sensors.map((sensor) => {
+    const item = document.createElement("div");
+    item.className = "sensor-item";
+    const name = document.createElement("strong");
+    name.textContent = sensor.name || sensor.entityId;
+    const value = document.createElement("span");
+    value.textContent = sensor.temperatureCelsius !== null && sensor.temperatureCelsius !== undefined
+      ? temp(Number(sensor.temperatureCelsius))
+      : sensor.state || "--";
+    item.append(name, value);
+    return item;
+  }));
 }
 
 function renderFanSelect(ha) {

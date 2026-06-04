@@ -15,6 +15,7 @@ public sealed record DefenderSnapshot(
     string NextAction,
     DateTimeOffset? NextActionAt,
     int CooldownSeconds,
+    ComfortSnapshot Comfort,
     DefenderSettings Settings,
     IReadOnlyList<ScheduleEntry> Schedule,
     IReadOnlyList<ThermostatChangeAudit> ThermostatChanges,
@@ -55,6 +56,29 @@ public sealed record WeatherReading(
     double? OutdoorTemperatureCelsius,
     string? Condition);
 
+public sealed record TemperatureSensorReading(
+    string EntityId,
+    string Name,
+    double? TemperatureCelsius,
+    string State);
+
+public sealed record PresenceReading(
+    string EntityId,
+    string Name,
+    string State,
+    bool IsHome);
+
+public sealed record ComfortSnapshot(
+    bool UpstairsComfortEnabled,
+    bool HomePresenceRequired,
+    bool IsHome,
+    bool UpstairsTooHot,
+    double? HottestUpstairsTemperatureCelsius,
+    string? HottestUpstairsEntityId,
+    string Status,
+    IReadOnlyList<TemperatureSensorReading> UpstairsSensors,
+    IReadOnlyList<PresenceReading> Presence);
+
 public sealed record ThermostatChangeAudit(
     DateTimeOffset Timestamp,
     string EntityId,
@@ -81,6 +105,20 @@ public sealed class DefenderSettings
     public double FanEnergySaverThresholdCelsius { get; set; } = 0.6;
 
     public string FanEnergySaverMode { get; set; } = "auto";
+
+    public bool UpstairsComfortEnabled { get; set; } = true;
+
+    public string UpstairsTemperatureEntityIds { get; set; } = "";
+
+    public double UpstairsMaxComfortCelsius { get; set; } = 24.0;
+
+    public double UpstairsComfortTargetCelsius { get; set; } = 22.0;
+
+    public double UpstairsComfortBoostCelsius { get; set; } = 1.0;
+
+    public bool HomePresenceRequired { get; set; }
+
+    public string PresenceEntityIds { get; set; } = "";
 
     public bool DefenderRunsContinuously { get; set; } = true;
 }
