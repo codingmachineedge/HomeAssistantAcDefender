@@ -17,9 +17,9 @@ Every cycle performs these steps:
 
 ## Cooling Behavior
 
-When room temperature is above target, the defender sets the thermostat below target to force cooling. If Home Assistant reports idle while the room is still above target, the defender lowers the setpoint one additional degree per cycle until the configured minimum cooling setpoint.
+When room temperature is above target, a new defender correction starts by setting the thermostat exactly 1 C below the website target to force cooling. If Home Assistant reports idle/off while the room is still above target, the defender lowers the setpoint one additional degree per cycle until the configured minimum cooling setpoint.
 
-When room temperature reaches target, the defender returns the thermostat setpoint to the exact target.
+When room temperature reaches target, the defender returns the thermostat setpoint to the exact website target.
 
 If the thermostat mode is changed to anything other than `cool`, the defender sends `climate.set_hvac_mode` with `hvac_mode: cool` before pause, schedule, weather, cooldown, or setpoint logic continues.
 

@@ -456,7 +456,7 @@
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);
-        _settingsStatus = $"Saved {DateTime.Now:h:mm:ss tt}";
+        _settingsStatus = $"Saved {DateTime.Now:HH:mm:ss}";
         Snackbar.Add("Settings saved.", Severity.Success);
     }
 

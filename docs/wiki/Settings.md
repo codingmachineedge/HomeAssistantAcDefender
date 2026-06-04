@@ -1,6 +1,6 @@
 # Settings
 
-The MudBlazor settings page controls defender behavior without editing configuration files. Each input, button, and action label includes short helper text below it.
+The MudBlazor settings page controls defender behavior without editing configuration files. Each input, button, and action label includes short helper text below it. Times are displayed with a 24-hour clock.
 
 ## Automation
 

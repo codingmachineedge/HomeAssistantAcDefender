@@ -19,7 +19,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Prioritizes upstairs comfort when upstairs temperature sensors report hot rooms.
 - Can use Home Assistant presence entities so upstairs priority applies only while someone is home.
 - Exposes fan mode and can optionally move the fan to an energy-saving mode when the room is near target.
-- Uses a MudBlazor front end with real-time dashboard polling, so the user does not need to refresh.
+- Uses a MudBlazor front end with real-time dashboard polling and 24-hour time display, so the user does not need to refresh.
 
 There is no simulator or dummy thermostat. If Home Assistant is unavailable, the app shows the real error and does not fake state.
 
@@ -62,7 +62,7 @@ Every cycle:
 10. Correct the thermostat setpoint when it does not match the defender decision.
 11. Update the real-time dashboard status.
 
-When the room is above the target, the app commands a setpoint below target to force cooling. If Home Assistant reports that cooling is idle while the room remains above target, it lowers the setpoint one additional degree per cycle, bounded by `Defender__MinimumCoolingSetPointCelsius`. When the room reaches target, the setpoint returns to the exact target.
+When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the website target to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle, bounded by `Defender__MinimumCoolingSetPointCelsius`. When the room reaches target, the setpoint returns to the exact website target.
 
 ## Dynamic Cooldown
 

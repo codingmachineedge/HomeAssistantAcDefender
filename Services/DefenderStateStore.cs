@@ -41,7 +41,7 @@ public sealed class DefenderStateStore
             var step = options.GeneratedTargetStepCelsius <= 0 ? 0.5 : options.GeneratedTargetStepCelsius;
             var steps = Math.Max(0, (int)Math.Round((max - min) / step));
             state.TargetTemperatureCelsius = Math.Round(min + random.Next(steps + 1) * step, 1);
-            state.BoostOffsetCelsius = 1.0;
+            state.BoostOffsetCelsius = 0.0;
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", $"Generated target {state.TargetTemperatureCelsius:0.0} C.");
             SaveState();
@@ -54,7 +54,7 @@ public sealed class DefenderStateStore
         lock (gate)
         {
             state.TargetTemperatureCelsius = Math.Round(temperatureCelsius, 1);
-            state.BoostOffsetCelsius = 1.0;
+            state.BoostOffsetCelsius = 0.0;
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", $"Target set to {state.TargetTemperatureCelsius:0.0} C.");
             SaveState();
@@ -252,7 +252,7 @@ public sealed class DefenderStateStore
                 if (Math.Abs(state.TargetTemperatureCelsius - activeSchedule.TargetTemperatureCelsius) > 0.05)
                 {
                     state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
-                    state.BoostOffsetCelsius = 1.0;
+                    state.BoostOffsetCelsius = 0.0;
                     AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C.");
                 }
             }
@@ -336,15 +336,15 @@ public sealed class DefenderStateStore
 
             var action = (hvacAction ?? string.Empty).Trim().ToLowerInvariant();
             var isCooling = action is "cooling" or "cool";
-            if (!isCooling)
-            {
-                state.BoostOffsetCelsius = Math.Min(
-                    Math.Max(1.0, state.BoostOffsetCelsius + 1.0),
-                    options.MaximumBoostOffsetCelsius);
-            }
-            else if (state.BoostOffsetCelsius < 1.0)
+            if (state.BoostOffsetCelsius < 1.0)
             {
                 state.BoostOffsetCelsius = 1.0;
+            }
+            else if (!isCooling)
+            {
+                state.BoostOffsetCelsius = Math.Min(
+                    state.BoostOffsetCelsius + 1.0,
+                    options.MaximumBoostOffsetCelsius);
             }
 
             return Math.Round(Math.Max(
@@ -397,6 +397,7 @@ public sealed class DefenderStateStore
 
         PruneTouchTimes(now);
         state.ExternalTouchTimes.Add(now);
+        state.BoostOffsetCelsius = 0.0;
         var cooldownSeconds = CalculateDynamicCooldownSeconds(now);
         if (cooldownSeconds > 0)
         {

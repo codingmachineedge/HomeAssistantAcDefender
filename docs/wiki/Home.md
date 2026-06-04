@@ -4,7 +4,7 @@ Home Assistant AC Defender is a Docker-hosted ASP.NET Core Blazor website and ba
 
 Key capabilities:
 
-- MudBlazor dashboard with automatic live updates.
+- MudBlazor dashboard with automatic live updates and 24-hour time display.
 - 24/7 Home Assistant thermostat checking.
 - External thermostat touch detection.
 - Audit log with timestamp, old setpoint, new setpoint, room temperature, outdoor temperature, and weather condition.
