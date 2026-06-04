@@ -1,0 +1,492 @@
+@page "/settings"
+@inject DefenderStateStore StateStore
+@inject ISnackbar Snackbar
+
+<PageTitle>Settings - Home Assistant AC Defender</PageTitle>
+
+<MudStack Spacing="3">
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudText Typo="Typo.overline">Automation</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">Rules for when the helper works.</MudText>
+
+                <MudSwitch T="bool"
+                           Value="_scheduleEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _scheduleEnabled = v))"
+                           Label="Use custom schedule"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Turns time rules on.</MudText>
+
+                <MudSelect T="string"
+                           Value="_weatherActivationMode"
+                           ValueChanged="@((string value) => SetDirty(value, v => _weatherActivationMode = v))"
+                           Label="Weather activation"
+                           HelperText="Weather can allow or block fixing."
+                           Variant="Variant.Outlined"
+                           Class="mt-3">
+                    @foreach (var option in WeatherOptions)
+                    {
+                        <MudSelectItem T="string" Value="@option.Value">@option.Label</MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_baseCooldownSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _baseCooldownSeconds = v))"
+                                         Label="Base cooldown seconds"
+                                         HelperText="First wait after a touch."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="3600" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_maxCooldownSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _maxCooldownSeconds = v))"
+                                         Label="Max cooldown seconds"
+                                         HelperText="Longest wait allowed."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="7200" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_touchFrequencyWindowMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _touchFrequencyWindowMinutes = v))"
+                                         Label="Touch window minutes"
+                                         HelperText="How long touches count."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="1440" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudText Typo="Typo.overline">Fan Energy Saver</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">Uses less fan when close enough.</MudText>
+
+                <MudSwitch T="bool"
+                           Value="_fanEnergySaverEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _fanEnergySaverEnabled = v))"
+                           Label="Adjust fan near target"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Lets the fan calm down.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_fanEnergySaverThresholdCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _fanEnergySaverThresholdCelsius = value))"
+                                         Label="Near-target threshold C"
+                                         HelperText="Close enough to relax."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField T="string"
+                                      Value="_fanEnergySaverMode"
+                                      ValueChanged="@((string value) => SetDirty(value, v => _fanEnergySaverMode = v))"
+                                      Label="Fan saver mode"
+                                      HelperText="Fan mode to switch to."
+                                      Variant="Variant.Outlined"
+                                      Placeholder="auto" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudText Typo="Typo.overline">Upstairs Comfort</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">Helps if upstairs gets too warm.</MudText>
+
+                <MudSwitch T="bool"
+                           Value="_upstairsComfortEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _upstairsComfortEnabled = v))"
+                           Label="Protect upstairs comfort"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Watches upstairs heat.</MudText>
+
+                <MudTextField T="string"
+                              Value="_upstairsTemperatureEntityIds"
+                              ValueChanged="@((string value) => SetDirty(value, v => _upstairsTemperatureEntityIds = value))"
+                              Label="Upstairs temperature entity IDs"
+                              HelperText="Names of upstairs sensors."
+                              Variant="Variant.Outlined"
+                              Placeholder="sensor.upstairs_temperature, sensor.primary_bedroom_temperature"
+                              Class="mt-3" />
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="double"
+                                         Value="_upstairsMaxComfortCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _upstairsMaxComfortCelsius = value))"
+                                         Label="Max upstairs comfort C"
+                                         HelperText="Too hot starts help."
+                                         Variant="Variant.Outlined"
+                                         Min="15"
+                                         Max="35"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="double"
+                                         Value="_upstairsComfortTargetCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _upstairsComfortTargetCelsius = value))"
+                                         Label="Comfort target C"
+                                         HelperText="Cooler goal for upstairs."
+                                         Variant="Variant.Outlined"
+                                         Min="10"
+                                         Max="30"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="double"
+                                         Value="_upstairsComfortBoostCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _upstairsComfortBoostCelsius = value))"
+                                         Label="Extra boost C"
+                                         HelperText="Extra push when hot."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudText Typo="Typo.overline">Home Presence</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">Checks if people are home.</MudText>
+
+                <MudSwitch T="bool"
+                           Value="_homePresenceRequired"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _homePresenceRequired = v))"
+                           Label="Only prioritize upstairs when someone is home"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Skip upstairs boost when away.</MudText>
+
+                <MudTextField T="string"
+                              Value="_presenceEntityIds"
+                              ValueChanged="@((string value) => SetDirty(value, v => _presenceEntityIds = value))"
+                              Label="Presence entity IDs"
+                              HelperText="Names that say home or away."
+                              Variant="Variant.Outlined"
+                              Placeholder="person.me, device_tracker.phone"
+                              Class="mt-3" />
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudPaper Class="panel-card">
+        <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
+            <div>
+                <MudText Typo="Typo.overline">Custom Schedule</MudText>
+                <MudText Typo="Typo.h5">Temperature rules</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">Times that set the target.</MudText>
+            </div>
+            <div class="action-with-help">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AddSchedule" StartIcon="@Icons.Material.Filled.Add">Add schedule</MudButton>
+                <MudText Typo="Typo.caption" Class="helper-text">Adds one time rule.</MudText>
+            </div>
+        </MudStack>
+
+        @if (_schedule.Count == 0)
+        {
+            <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">No schedule rules yet.</MudAlert>
+            <MudText Typo="Typo.caption" Class="helper-text">Add a rule when you want the defender to follow a clock.</MudText>
+        }
+        else
+        {
+            <MudStack Spacing="2" Class="mt-3">
+                @foreach (var entry in _schedule)
+                {
+                    <MudPaper Class="schedule-card" Outlined="true">
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" md="7">
+                                <MudTextField T="string"
+                                              Value="@entry.Name"
+                                              ValueChanged="@((string value) => UpdateSchedule(entry, item => item.Name = value))"
+                                              Label="Name"
+                                              HelperText="A short rule name."
+                                              Variant="Variant.Outlined" />
+                            </MudItem>
+                            <MudItem xs="12" sm="6" md="2">
+                                <MudSwitch T="bool"
+                                           Value="@entry.Enabled"
+                                           ValueChanged="@((bool value) => UpdateSchedule(entry, item => item.Enabled = value))"
+                                           Label="On"
+                                           Color="Color.Success" />
+                                <MudText Typo="Typo.caption" Class="helper-text">Lets this rule run.</MudText>
+                            </MudItem>
+                            <MudItem xs="12" sm="6" md="3">
+                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => RemoveSchedule(entry))" StartIcon="@Icons.Material.Filled.Delete">Remove</MudButton>
+                                <MudText Typo="Typo.caption" Class="helper-text">Deletes this rule.</MudText>
+                            </MudItem>
+                        </MudGrid>
+
+                        <MudText Typo="Typo.subtitle2" Class="mt-3">Days</MudText>
+                        <MudText Typo="Typo.caption" Class="helper-text">Green days are the days it runs.</MudText>
+                        <MudStack Row="true" Spacing="1" Class="day-button-row wrap-gap mt-1">
+                            @foreach (var day in Days)
+                            {
+                                <MudButton Variant="@DayVariant(entry, day)"
+                                           Color="@DayColor(entry, day)"
+                                           Size="Size.Small"
+                                           OnClick="@(() => ToggleDay(entry, day))">@day</MudButton>
+                            }
+                        </MudStack>
+
+                        <MudGrid Spacing="2" Class="mt-2">
+                            <MudItem xs="12" sm="6" md="3">
+                                <MudTextField T="string"
+                                              Value="@entry.StartTime"
+                                              ValueChanged="@((string value) => UpdateSchedule(entry, item => item.StartTime = value))"
+                                              Label="Start"
+                                              HelperText="When it begins."
+                                              Variant="Variant.Outlined"
+                                              InputType="InputType.Time" />
+                            </MudItem>
+                            <MudItem xs="12" sm="6" md="3">
+                                <MudTextField T="string"
+                                              Value="@entry.EndTime"
+                                              ValueChanged="@((string value) => UpdateSchedule(entry, item => item.EndTime = value))"
+                                              Label="End"
+                                              HelperText="When it stops."
+                                              Variant="Variant.Outlined"
+                                              InputType="InputType.Time" />
+                            </MudItem>
+                            <MudItem xs="12" sm="6" md="3">
+                                <MudNumericField T="double"
+                                                 Value="@entry.TargetTemperatureCelsius"
+                                                 ValueChanged="@((double value) => UpdateSchedule(entry, item => item.TargetTemperatureCelsius = value))"
+                                                 Label="Target C"
+                                                 HelperText="Temperature it wants."
+                                                 Variant="Variant.Outlined"
+                                                 Min="10"
+                                                 Max="35"
+                                                 Step="0.1" />
+                            </MudItem>
+                            <MudItem xs="12" sm="6" md="3">
+                                <MudSelect T="string"
+                                           Value="@entry.WeatherActivationMode"
+                                           ValueChanged="@((string value) => UpdateSchedule(entry, item => item.WeatherActivationMode = value))"
+                                           Label="Weather rule"
+                                           HelperText="Weather gate for this rule."
+                                           Variant="Variant.Outlined">
+                                    @foreach (var option in ScheduleWeatherOptions)
+                                    {
+                                        <MudSelectItem T="string" Value="@option.Value">@option.Label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudItem>
+                        </MudGrid>
+
+                        <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">@Summary(entry)</MudAlert>
+                        <MudText Typo="Typo.caption" Class="helper-text">Quick story of this rule.</MudText>
+                    </MudPaper>
+                }
+            </MudStack>
+        }
+
+        <MudDivider Class="my-4" />
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="wrap-gap">
+            <div class="action-with-help">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveSettings" StartIcon="@Icons.Material.Filled.Save">Save settings</MudButton>
+                <MudText Typo="Typo.caption" Class="helper-text">Stores these choices.</MudText>
+            </div>
+            <MudText Typo="Typo.subtitle2">@StatusText</MudText>
+            <MudText Typo="Typo.caption" Class="helper-text">This label says when settings were saved.</MudText>
+        </MudStack>
+    </MudPaper>
+</MudStack>
+
+@code {
+    private static readonly string[] Days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    private static readonly (string Value, string Label)[] WeatherOptions =
+    [
+        ("always", "Always active"),
+        ("room-above-outdoor", "Only when room is above outdoor temp"),
+        ("room-below-outdoor", "Only when room is below outdoor temp"),
+        ("outdoor-above-target", "Only when outdoor is above target"),
+        ("outdoor-below-target", "Only when outdoor is below target")
+    ];
+    private static readonly (string Value, string Label)[] ScheduleWeatherOptions =
+    [
+        ("always", "Always"),
+        ("room-above-outdoor", "Room above outdoor"),
+        ("room-below-outdoor", "Room below outdoor"),
+        ("outdoor-above-target", "Outdoor above target"),
+        ("outdoor-below-target", "Outdoor below target")
+    ];
+
+    private bool _scheduleEnabled;
+    private string _weatherActivationMode = "always";
+    private int _baseCooldownSeconds = 45;
+    private int _maxCooldownSeconds = 600;
+    private int _touchFrequencyWindowMinutes = 30;
+    private bool _fanEnergySaverEnabled;
+    private double _fanEnergySaverThresholdCelsius = 0.6;
+    private string _fanEnergySaverMode = "auto";
+    private bool _upstairsComfortEnabled = true;
+    private string _upstairsTemperatureEntityIds = "";
+    private double _upstairsMaxComfortCelsius = 24.0;
+    private double _upstairsComfortTargetCelsius = 22.0;
+    private double _upstairsComfortBoostCelsius = 1.0;
+    private bool _homePresenceRequired;
+    private string _presenceEntityIds = "";
+    private readonly List<ScheduleEntry> _schedule = [];
+    private bool _dirty;
+    private string _settingsStatus = "";
+
+    private string StatusText => _dirty
+        ? "Unsaved changes"
+        : string.IsNullOrWhiteSpace(_settingsStatus) ? "No changes saved yet" : _settingsStatus;
+
+    protected override void OnInitialized()
+    {
+        LoadFromSnapshot(StateStore.GetSnapshot());
+    }
+
+    private void LoadFromSnapshot(DefenderSnapshot snapshot)
+    {
+        var settings = snapshot.Settings;
+        _scheduleEnabled = settings.ScheduleEnabled;
+        _weatherActivationMode = settings.WeatherActivationMode;
+        _baseCooldownSeconds = settings.BaseCooldownSeconds;
+        _maxCooldownSeconds = settings.MaxCooldownSeconds;
+        _touchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes;
+        _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
+        _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
+        _fanEnergySaverMode = settings.FanEnergySaverMode;
+        _upstairsComfortEnabled = settings.UpstairsComfortEnabled;
+        _upstairsTemperatureEntityIds = settings.UpstairsTemperatureEntityIds;
+        _upstairsMaxComfortCelsius = settings.UpstairsMaxComfortCelsius;
+        _upstairsComfortTargetCelsius = settings.UpstairsComfortTargetCelsius;
+        _upstairsComfortBoostCelsius = settings.UpstairsComfortBoostCelsius;
+        _homePresenceRequired = settings.HomePresenceRequired;
+        _presenceEntityIds = settings.PresenceEntityIds;
+        _schedule.Clear();
+        _schedule.AddRange(snapshot.Schedule.Select(CloneScheduleEntry));
+        _dirty = false;
+    }
+
+    private void SetDirty<T>(T value, Action<T> assign)
+    {
+        assign(value);
+        _dirty = true;
+    }
+
+    private void UpdateSchedule(ScheduleEntry entry, Action<ScheduleEntry> update)
+    {
+        update(entry);
+        _dirty = true;
+    }
+
+    private void AddSchedule()
+    {
+        _schedule.Add(new ScheduleEntry
+        {
+            Name = "Comfort",
+            Days = string.Join(",", Days),
+            StartTime = "18:00",
+            EndTime = "23:00",
+            TargetTemperatureCelsius = 22,
+            WeatherActivationMode = "always",
+            Enabled = true
+        });
+        _dirty = true;
+    }
+
+    private void RemoveSchedule(ScheduleEntry entry)
+    {
+        _schedule.Remove(entry);
+        _dirty = true;
+    }
+
+    private void ToggleDay(ScheduleEntry entry, string day)
+    {
+        var days = DaySet(entry);
+        if (!days.Add(day))
+        {
+            days.Remove(day);
+        }
+
+        entry.Days = string.Join(",", Days.Where(days.Contains));
+        _dirty = true;
+    }
+
+    private Variant DayVariant(ScheduleEntry entry, string day)
+    {
+        return DaySet(entry).Contains(day) ? Variant.Filled : Variant.Outlined;
+    }
+
+    private Color DayColor(ScheduleEntry entry, string day)
+    {
+        return DaySet(entry).Contains(day) ? Color.Primary : Color.Default;
+    }
+
+    private void SaveSettings()
+    {
+        var request = new SettingsRequest(
+            _scheduleEnabled,
+            _weatherActivationMode,
+            _baseCooldownSeconds,
+            _maxCooldownSeconds,
+            _touchFrequencyWindowMinutes,
+            _fanEnergySaverEnabled,
+            _fanEnergySaverThresholdCelsius,
+            _fanEnergySaverMode,
+            _upstairsComfortEnabled,
+            _upstairsTemperatureEntityIds,
+            _upstairsMaxComfortCelsius,
+            _upstairsComfortTargetCelsius,
+            _upstairsComfortBoostCelsius,
+            _homePresenceRequired,
+            _presenceEntityIds,
+            _schedule.Select(CloneScheduleEntry).ToList());
+
+        var snapshot = StateStore.UpdateSettings(request);
+        LoadFromSnapshot(snapshot);
+        _settingsStatus = $"Saved {DateTime.Now:h:mm:ss tt}";
+        Snackbar.Add("Settings saved.", Severity.Success);
+    }
+
+    private static HashSet<string> DaySet(ScheduleEntry entry)
+    {
+        return entry.Days
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static ScheduleEntry CloneScheduleEntry(ScheduleEntry entry)
+    {
+        return new ScheduleEntry
+        {
+            Id = string.IsNullOrWhiteSpace(entry.Id) ? Guid.NewGuid().ToString("N") : entry.Id,
+            Enabled = entry.Enabled,
+            Name = entry.Name,
+            Days = entry.Days,
+            StartTime = entry.StartTime,
+            EndTime = entry.EndTime,
+            TargetTemperatureCelsius = entry.TargetTemperatureCelsius,
+            WeatherActivationMode = entry.WeatherActivationMode
+        };
+    }
+
+    private static string Summary(ScheduleEntry entry)
+    {
+        var days = DaySet(entry);
+        var dayText = days.Count == 7 ? "Every day" : days.Count == 0 ? "No days" : string.Join(", ", Days.Where(days.Contains));
+        var weather = ScheduleWeatherOptions.FirstOrDefault(option => option.Value == entry.WeatherActivationMode).Label ?? "Always";
+        return $"{(entry.Enabled ? "Active" : "Off")} / {dayText} / {entry.StartTime}-{entry.EndTime} / {entry.TargetTemperatureCelsius:0.0} C / {weather}";
+    }
+}

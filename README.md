@@ -1,6 +1,6 @@
 # Home Assistant AC Defender
 
-Home Assistant AC Defender is an ASP.NET Core website plus a hosted background worker that continuously watches a real Home Assistant climate entity and defends the dining room AC target.
+Home Assistant AC Defender is an ASP.NET Core Blazor website plus a hosted background worker that continuously watches a real Home Assistant climate entity and defends the dining room AC target.
 
 The app is designed for Docker hosting on Linux and is currently published by `docker-compose.yml` on host port `8888`.
 
@@ -19,7 +19,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Prioritizes upstairs comfort when upstairs temperature sensors report hot rooms.
 - Can use Home Assistant presence entities so upstairs priority applies only while someone is home.
 - Exposes fan mode and can optionally move the fan to an energy-saving mode when the room is near target.
-- Streams website state in real time with Server-Sent Events, so the user does not need to refresh.
+- Uses a MudBlazor front end with real-time dashboard polling, so the user does not need to refresh.
 
 There is no simulator or dummy thermostat. If Home Assistant is unavailable, the app shows the real error and does not fake state.
 
@@ -76,7 +76,7 @@ cooldown = min(maxCooldownSeconds, baseCooldownSeconds * recentTouchCount)
 
 ## Schedule And Weather Rules
 
-The settings page has a mobile-friendly schedule editor with card-style rules, day chips, clear start/end controls, and a live summary for each rule. Each rule supports:
+The settings page has a MudBlazor mobile-friendly schedule editor with card-style rules, day buttons, clear start/end controls, helper text under each control, and a live summary for each rule. Each rule supports:
 
 - Name
 - Enabled flag
@@ -133,15 +133,17 @@ person.me, device_tracker.phone
 
 If no presence entities are configured, the app auto-discovers `person.*` and `device_tracker.*`. When presence is required and no presence signal is found, the app assumes home for comfort rather than under-cooling.
 
-## Real-Time Website
+## Website
 
-The dashboard and settings page subscribe to:
+The front end is built with Blazor Server and MudBlazor. Dashboard data refreshes automatically from the in-process defender state, and controls call the same services used by the JSON API.
+
+The API also exposes a Server-Sent Events stream for external clients:
 
 ```text
 /api/status/stream
 ```
 
-This is a Server-Sent Events stream. Mutations still use JSON APIs, but the visible state updates from the live stream.
+This stream emits the full defender snapshot every second.
 
 ## API Summary
 

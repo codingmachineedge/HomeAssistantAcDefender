@@ -1,6 +1,6 @@
 # Settings
 
-The settings page controls defender behavior without editing configuration files.
+The MudBlazor settings page controls defender behavior without editing configuration files. Each input, button, and action label includes short helper text below it.
 
 ## Automation
 
@@ -45,4 +45,4 @@ If presence entity IDs are blank, the app discovers `person.*` and `device_track
 
 ## Schedule Rows
 
-Each schedule row contains name, enabled flag, days, start time, end time, target temperature, and weather activation rule.
+Each schedule card contains name, enabled flag, day buttons, start time, end time, target temperature, weather activation rule, and a live summary.

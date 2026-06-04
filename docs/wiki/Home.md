@@ -1,15 +1,16 @@
 # Home Assistant AC Defender Wiki
 
-Home Assistant AC Defender is a Docker-hosted ASP.NET Core website and background worker that watches a real Home Assistant climate entity and defends the dining room AC target.
+Home Assistant AC Defender is a Docker-hosted ASP.NET Core Blazor website and background worker that watches a real Home Assistant climate entity and defends the dining room AC target.
 
 Key capabilities:
 
-- Real-time dashboard through Server-Sent Events.
+- MudBlazor dashboard with automatic live updates.
 - 24/7 Home Assistant thermostat checking.
 - External thermostat touch detection.
 - Audit log with timestamp, old setpoint, new setpoint, room temperature, outdoor temperature, and weather condition.
 - Dynamic cooldown after manual changes.
 - Custom schedule with weather activation rules.
+- Helper descriptions under controls and action labels.
 - Upstairs comfort guard with optional home-presence awareness.
 - Optional fan energy saver near target temperature.
 

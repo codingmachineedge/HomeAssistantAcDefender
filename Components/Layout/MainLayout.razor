@@ -1,0 +1,96 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject DefenderStateStore StateStore
+
+<MudThemeProvider Theme="_theme" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Class="top-bar" Color="Color.Default" Elevation="1">
+        <MudText Typo="Typo.h6" Class="brand-text">AC Defender</MudText>
+        <MudSpacer />
+        <MudButton Href="/" Variant="Variant.Text" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.SpaceDashboard">Dashboard</MudButton>
+        <MudButton Href="/settings" Variant="Variant.Text" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.Tune">Settings</MudButton>
+        <MudChip T="string" Class="status-chip" Color="@HeaderColor" Variant="Variant.Filled">@HeaderStatus</MudChip>
+    </MudAppBar>
+
+    <MudMainContent Class="main-content">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="page-container">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private PeriodicTimer? timer;
+    private CancellationTokenSource? timerCancellation;
+    private DefenderSnapshot? snapshot;
+
+    private readonly MudTheme _theme = new()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary = "#0f7d67",
+            Secondary = "#166da8",
+            Tertiary = "#b94a2f",
+            AppbarBackground = "#ffffff",
+            AppbarText = "#17211c",
+            Background = "#f4f6f5",
+            Surface = "#ffffff",
+            TextPrimary = "#17211c",
+            TextSecondary = "#64716b"
+        },
+        LayoutProperties = new LayoutProperties
+        {
+            DefaultBorderRadius = "8px"
+        }
+    };
+
+    private string HeaderStatus => snapshot switch
+    {
+        null => "Starting",
+        { DefenderEnabled: false } => "Paused",
+        { ConnectionState: "home-assistant" } => "Defender active",
+        _ => "Home Assistant unavailable"
+    };
+
+    private Color HeaderColor => snapshot switch
+    {
+        null => Color.Default,
+        { DefenderEnabled: false } => Color.Warning,
+        { ConnectionState: "home-assistant" } => Color.Success,
+        _ => Color.Error
+    };
+
+    protected override void OnInitialized()
+    {
+        snapshot = StateStore.GetSnapshot();
+        timerCancellation = new CancellationTokenSource();
+        timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        _ = PollAsync(timerCancellation.Token);
+    }
+
+    private async Task PollAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (timer is not null && await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                snapshot = StateStore.GetSnapshot();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    public void Dispose()
+    {
+        timerCancellation?.Cancel();
+        timer?.Dispose();
+        timerCancellation?.Dispose();
+    }
+}

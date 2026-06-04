@@ -1,7 +1,9 @@
 using System.Text.Json;
 using HomeAssistantAcDefender.Models;
 using HomeAssistantAcDefender.Options;
+using HomeAssistantAcDefender.Components;
 using HomeAssistantAcDefender.Services;
+using MudBlazor.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,6 +13,9 @@ builder.Services.AddSingleton<DefenderStateStore>();
 builder.Services.AddSingleton<AcDefenderService>();
 builder.Services.AddHttpClient<HomeAssistantClient>();
 builder.Services.AddHostedService<AcDefenderWorker>();
+builder.Services.AddMudServices();
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents();
 builder.Services.AddRazorPages();
 
 var app = builder.Build();
@@ -22,8 +27,11 @@ if (!app.Environment.IsDevelopment())
 
 app.UseRouting();
 app.UseAuthorization();
+app.UseAntiforgery();
 
 app.MapStaticAssets();
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode();
 app.MapRazorPages()
    .WithStaticAssets();
 

@@ -1,0 +1,403 @@
+@page "/"
+@implements IDisposable
+@inject DefenderStateStore StateStore
+@inject AcDefenderService Defender
+@inject ISnackbar Snackbar
+
+<PageTitle>Dashboard - Home Assistant AC Defender</PageTitle>
+
+<MudStack Spacing="3">
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="4">
+            <MudPaper Class="panel-card target-card">
+                <MudText Typo="Typo.overline">Generated Target</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">This is the cool number the defender is trying to keep.</MudText>
+                <MudText Typo="Typo.h1" Class="target-readout">@TargetText</MudText>
+
+                <MudGrid Spacing="2" Class="mt-2">
+                    <MudItem xs="12">
+                        <MudNumericField T="double"
+                                         Value="_targetInput"
+                                         ValueChanged="OnTargetInputChanged"
+                                         Label="Set target"
+                                         HelperText="Type the temperature you want, like picking a number on a toy dial."
+                                         Variant="Variant.Outlined"
+                                         Min="10"
+                                         Max="35"
+                                         Step="0.1"
+                                         Adornment="Adornment.End"
+                                         AdornmentText="C" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyTarget" StartIcon="@Icons.Material.Filled.Check">Apply</MudButton>
+                        <MudText Typo="Typo.caption" Class="helper-text">Sends the number in the box to the defender.</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="GenerateTarget" StartIcon="@Icons.Material.Filled.AutoAwesome">Generate</MudButton>
+                        <MudText Typo="Typo.caption" Class="helper-text">Lets the website pick a comfy cool number.</MudText>
+                    </MudItem>
+                </MudGrid>
+
+                <MudSwitch T="bool"
+                           Value="@(Snapshot?.DefenderEnabled ?? false)"
+                           ValueChanged="SetDefenderEnabled"
+                           Label="Defender active"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">On means the helper keeps watching and fixes the AC.</MudText>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="8">
+            <MudPaper Class="panel-card">
+                <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
+                    <div>
+                        <MudText Typo="Typo.overline">Dining Room Climate</MudText>
+                        <MudText Typo="Typo.h5">@EntityText</MudText>
+                        <MudText Typo="Typo.body2" Class="helper-text">This card shows what the real Home Assistant thermostat says right now.</MudText>
+                    </div>
+                    <MudChip T="string" Color="@ConnectionColor" Variant="Variant.Filled">@ConnectionText</MudChip>
+                </MudStack>
+
+                <MudGrid Spacing="2" Class="mt-2">
+                    <MetricCard Label="Room" Value="@Temp(Snapshot?.HomeAssistantThermostat?.CurrentTemperatureCelsius)" Help="How warm the dining room is." />
+                    <MetricCard Label="Setpoint" Value="@Temp(Snapshot?.HomeAssistantThermostat?.SetPointCelsius)" Help="The number the thermostat is set to." />
+                    <MetricCard Label="Outdoor" Value="@Temp(Snapshot?.Weather?.OutdoorTemperatureCelsius)" Help="How warm it is outside." />
+                    <MetricCard Label="Weather" Value="@(Snapshot?.Weather?.Condition ?? "--")" Help="What the weather looks like now." />
+                    <MetricCard Label="Mode" Value="@(Snapshot?.HomeAssistantThermostat?.HvacMode ?? "--")" Help="The AC must stay on cool." />
+                    <MetricCard Label="Action" Value="@(Snapshot?.HomeAssistantThermostat?.HvacAction ?? "--")" Help="What the thermostat is doing." />
+                    <MetricCard Label="Fan" Value="@(Snapshot?.HomeAssistantThermostat?.FanMode ?? "--")" Help="How the fan is blowing air." />
+                    <MetricCard Label="Cooldown" Value="@CooldownText" Help="A short wait before fixing again." />
+                </MudGrid>
+
+                <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">@NextActionText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This tells what the defender plans to do next.</MudText>
+
+                <MudText Typo="Typo.subtitle2" Class="mt-3">@LastCommandText</MudText>
+                <MudText Typo="Typo.caption" Class="helper-text">This shows the last command the website sent to Home Assistant.</MudText>
+
+                @if (!string.IsNullOrWhiteSpace(Snapshot?.LastError))
+                {
+                    <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">@Snapshot.LastError</MudAlert>
+                }
+                <MudText Typo="Typo.caption" Class="helper-text">If something goes wrong, the problem shows here.</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
+                    <div>
+                        <MudText Typo="Typo.overline">Upstairs Comfort</MudText>
+                        <MudText Typo="Typo.h5">@(Snapshot?.Comfort.Status ?? "Waiting for upstairs readings")</MudText>
+                        <MudText Typo="Typo.body2" Class="helper-text">This helps stop upstairs from feeling too hot.</MudText>
+                    </div>
+                    <MudChip T="string" Color="@(Snapshot?.Comfort.IsHome == true ? Color.Success : Color.Warning)" Variant="Variant.Filled">@HomePresenceText</MudChip>
+                </MudStack>
+
+                <MudGrid Spacing="2" Class="mt-2">
+                    <MetricCard Label="Hottest upstairs" Value="@Temp(Snapshot?.Comfort.HottestUpstairsTemperatureCelsius)" Help="The warmest upstairs sensor." />
+                    <MetricCard Label="Guard" Value="@GuardText" Help="Shows if upstairs help is watching or cooling." />
+                    <MetricCard Label="Presence" Value="@PresenceRequiredText" Help="Says if someone must be home first." />
+                </MudGrid>
+
+                <MudStack Spacing="1" Class="mt-3">
+                    @if (Snapshot?.Comfort.UpstairsSensors?.Count > 0)
+                    {
+                        @foreach (var sensor in Snapshot.Comfort.UpstairsSensors)
+                        {
+                            <MudPaper Class="sensor-row" Outlined="true">
+                                <MudText Typo="Typo.subtitle2">@sensor.Name</MudText>
+                                <MudText Typo="Typo.body2">@SensorValue(sensor)</MudText>
+                            </MudPaper>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">No upstairs sensors found or configured.</MudText>
+                    }
+                </MudStack>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudText Typo="Typo.overline">Real Thermostat Controls</MudText>
+                <MudText Typo="Typo.h5">Dining room climate</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">These buttons talk to the real dining room thermostat.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-2">
+                    <MetricCard Label="Boost" Value="@Temp(Snapshot?.BoostOffsetCelsius)" Help="How much colder it may set the AC." />
+                    <MetricCard Label="Updated" Value="@ShortTime(Snapshot?.HomeAssistantThermostat?.UpdatedAt)" Help="When this thermostat data was seen." />
+                    <MetricCard Label="Entity" Value="@(Snapshot?.HomeAssistantEntityId ?? "--")" Help="The Home Assistant thermostat name." />
+                </MudGrid>
+
+                <MudGrid Spacing="2" Class="mt-3">
+                    <MudItem xs="12" sm="4">
+                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
+                        <MudText Typo="Typo.caption" Class="helper-text">Asks Home Assistant for the newest thermostat reading.</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ForceTarget" StartIcon="@Icons.Material.Filled.TrackChanges">Force target</MudButton>
+                        <MudText Typo="Typo.caption" Class="helper-text">Sets the thermostat to the exact target now.</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ForceBoost" StartIcon="@Icons.Material.Filled.AcUnit">Force cooling</MudButton>
+                        <MudText Typo="Typo.caption" Class="helper-text">Makes the AC cool harder right now.</MudText>
+                    </MudItem>
+                </MudGrid>
+
+                <MudGrid Spacing="2" Class="mt-3">
+                    <MudItem xs="12" sm="8">
+                        <MudSelect T="string" @bind-Value="_fanMode" Label="Fan mode" HelperText="Pick how the fan should blow air." Variant="Variant.Outlined">
+                            @foreach (var mode in FanModes)
+                            {
+                                <MudSelectItem T="string" Value="@mode">@mode</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyFanMode" StartIcon="@Icons.Material.Filled.Air">Set fan</MudButton>
+                        <MudText Typo="Typo.caption" Class="helper-text">Sends the fan choice to the thermostat.</MudText>
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="wrap-gap">
+                    <div>
+                        <MudText Typo="Typo.overline">Thermostat Touch Log</MudText>
+                        <MudText Typo="Typo.h5">External changes</MudText>
+                        <MudText Typo="Typo.body2" Class="helper-text">This list shows when someone changed the thermostat away from the website.</MudText>
+                    </div>
+                    <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined">@TouchCount</MudChip>
+                </MudStack>
+
+                <MudStack Spacing="1" Class="scroll-list mt-3">
+                    @if (Snapshot?.ThermostatChanges?.Count > 0)
+                    {
+                        @foreach (var change in Snapshot.ThermostatChanges)
+                        {
+                            <MudPaper Class="touch-row" Outlined="true">
+                                <MudText Typo="Typo.subtitle2">@($"{change.PreviousSetPointCelsius:0.0} C -> {change.NewSetPointCelsius:0.0} C")</MudText>
+                                <MudText Typo="Typo.caption">@DateTimeText(change.Timestamp)</MudText>
+                                <MudText Typo="Typo.caption">@($"{Temp(change.RoomTemperatureCelsius)} room / {Temp(change.OutdoorTemperatureCelsius)} outdoor / {change.WeatherCondition ?? "weather --"}")</MudText>
+                            </MudPaper>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">No external thermostat changes detected.</MudText>
+                    }
+                </MudStack>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudText Typo="Typo.overline">Activity</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">This is the story of what the defender has been doing.</MudText>
+
+                <MudStack Spacing="1" Class="scroll-list mt-3">
+                    @if (Snapshot?.Events?.Count > 0)
+                    {
+                        @foreach (var item in Snapshot.Events)
+                        {
+                            <MudAlert Severity="@EventSeverity(item.Level)" Variant="Variant.Outlined" Dense="true">
+                                <MudText Typo="Typo.caption">@DateTimeText(item.Timestamp)</MudText>
+                                <MudText Typo="Typo.body2">@item.Message</MudText>
+                            </MudAlert>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">No activity yet.</MudText>
+                    }
+                </MudStack>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+</MudStack>
+
+@code {
+    private PeriodicTimer? timer;
+    private CancellationTokenSource? timerCancellation;
+    private DefenderSnapshot? Snapshot { get; set; }
+    private double _targetInput = 22.0;
+    private bool _targetDirty;
+    private string? _fanMode;
+
+    private string TargetText => Snapshot is null ? "-- C" : $"{Snapshot.TargetTemperatureCelsius:0.0} C";
+    private string EntityText => Snapshot?.HomeAssistantEntityId ?? "No entity";
+    private string ConnectionText => Snapshot?.ConnectionState ?? "--";
+    private string CooldownText => Snapshot?.CooldownSeconds > 0 ? $"{Snapshot.CooldownSeconds}s" : "Ready";
+    private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
+    private string LastCommandText => Snapshot?.LastCommand ?? "No commands yet";
+    private string HomePresenceText => Snapshot?.Comfort.IsHome == true ? "Home" : "Away";
+    private string GuardText => Snapshot?.Comfort.UpstairsTooHot == true ? "Active" : Snapshot?.Comfort.UpstairsComfortEnabled == true ? "Watching" : "Off";
+    private string PresenceRequiredText => Snapshot?.Comfort.HomePresenceRequired == true ? "Required" : "Optional";
+    private string TouchCount => (Snapshot?.ThermostatChanges?.Count ?? 0).ToString();
+    private Color ConnectionColor => Snapshot?.ConnectionState == "home-assistant" ? Color.Success : Color.Error;
+
+    private IReadOnlyList<string> FanModes
+    {
+        get
+        {
+            var modes = Snapshot?.HomeAssistantThermostat?.AvailableFanModes;
+            if (modes is { Count: > 0 })
+            {
+                return modes;
+            }
+
+            return string.IsNullOrWhiteSpace(Snapshot?.HomeAssistantThermostat?.FanMode)
+                ? ["auto"]
+                : [Snapshot.HomeAssistantThermostat.FanMode!];
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        RefreshSnapshot(updateInputs: true);
+        timerCancellation = new CancellationTokenSource();
+        timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        _ = PollAsync(timerCancellation.Token);
+    }
+
+    private async Task PollAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (timer is not null && await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await InvokeAsync(() =>
+                {
+                    RefreshSnapshot(updateInputs: !_targetDirty);
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void RefreshSnapshot(bool updateInputs)
+    {
+        Snapshot = StateStore.GetSnapshot();
+        if (updateInputs)
+        {
+            _targetInput = Snapshot.TargetTemperatureCelsius;
+        }
+
+        var currentFan = Snapshot.HomeAssistantThermostat?.FanMode;
+        if (!string.IsNullOrWhiteSpace(currentFan) && string.IsNullOrWhiteSpace(_fanMode))
+        {
+            _fanMode = currentFan;
+        }
+        else if (string.IsNullOrWhiteSpace(_fanMode))
+        {
+            _fanMode = FanModes.FirstOrDefault();
+        }
+    }
+
+    private void OnTargetInputChanged(double value)
+    {
+        _targetInput = value;
+        _targetDirty = true;
+    }
+
+    private void GenerateTarget()
+    {
+        Snapshot = StateStore.GenerateTarget();
+        _targetInput = Snapshot.TargetTemperatureCelsius;
+        _targetDirty = false;
+        Snackbar.Add("Generated a new target.", Severity.Success);
+    }
+
+    private void ApplyTarget()
+    {
+        Snapshot = StateStore.SetTarget(_targetInput);
+        _targetInput = Snapshot.TargetTemperatureCelsius;
+        _targetDirty = false;
+        Snackbar.Add("Target saved.", Severity.Success);
+    }
+
+    private void SetDefenderEnabled(bool enabled)
+    {
+        Snapshot = StateStore.SetDefenderEnabled(enabled);
+        Snackbar.Add(enabled ? "Defender turned on." : "Defender paused.", Severity.Info);
+    }
+
+    private async Task RefreshReal() => await RunThermostatAction(
+        () => Defender.RefreshRealThermostatAsync(CancellationToken.None),
+        "Thermostat refreshed.");
+
+    private async Task ForceTarget() => await RunThermostatAction(
+        () => Defender.ForceTargetAsync(CancellationToken.None),
+        "Exact target sent.");
+
+    private async Task ForceBoost() => await RunThermostatAction(
+        () => Defender.ForceCoolingBoostAsync(CancellationToken.None),
+        "Cooling boost sent.");
+
+    private async Task ApplyFanMode()
+    {
+        if (string.IsNullOrWhiteSpace(_fanMode))
+        {
+            Snackbar.Add("Pick a fan mode first.", Severity.Warning);
+            return;
+        }
+
+        await RunThermostatAction(
+            () => Defender.ForceFanModeAsync(_fanMode, CancellationToken.None),
+            "Fan mode sent.");
+    }
+
+    private async Task RunThermostatAction(Func<Task> action, string successMessage)
+    {
+        try
+        {
+            await action();
+            RefreshSnapshot(updateInputs: !_targetDirty);
+            Snackbar.Add(successMessage, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snapshot = StateStore.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private static string Temp(double? value) => value is null ? "--" : $"{value.Value:0.0} C";
+
+    private static string ShortTime(DateTimeOffset? value) => value is null ? "--" : value.Value.ToLocalTime().ToString("h:mm:ss tt");
+
+    private static string DateTimeText(DateTimeOffset value) => value.ToLocalTime().ToString("yyyy-MM-dd h:mm:ss tt");
+
+    private static string SensorValue(TemperatureSensorReading sensor)
+    {
+        return sensor.TemperatureCelsius is null ? sensor.State : $"{sensor.TemperatureCelsius.Value:0.0} C";
+    }
+
+    private static Severity EventSeverity(string level)
+    {
+        return level.ToLowerInvariant() switch
+        {
+            "warning" => Severity.Warning,
+            "error" => Severity.Error,
+            _ => Severity.Info
+        };
+    }
+
+    public void Dispose()
+    {
+        timerCancellation?.Cancel();
+        timer?.Dispose();
+        timerCancellation?.Dispose();
+    }
+}
