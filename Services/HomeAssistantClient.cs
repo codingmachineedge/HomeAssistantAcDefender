@@ -142,16 +142,21 @@ public sealed class HomeAssistantClient
 
     public async Task SetCoolingAsync(string entityId, double setPointCelsius, CancellationToken cancellationToken)
     {
-        await CallServiceAsync("climate", "set_hvac_mode", new
-        {
-            entity_id = entityId,
-            hvac_mode = "cool"
-        }, cancellationToken);
+        await SetHvacModeAsync(entityId, "cool", cancellationToken);
 
         await CallServiceAsync("climate", "set_temperature", new
         {
             entity_id = entityId,
             temperature = setPointCelsius
+        }, cancellationToken);
+    }
+
+    public async Task SetHvacModeAsync(string entityId, string hvacMode, CancellationToken cancellationToken)
+    {
+        await CallServiceAsync("climate", "set_hvac_mode", new
+        {
+            entity_id = entityId,
+            hvac_mode = hvacMode
         }, cancellationToken);
     }
 

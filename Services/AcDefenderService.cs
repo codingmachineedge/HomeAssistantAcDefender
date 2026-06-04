@@ -36,6 +36,14 @@ public sealed class AcDefenderService
                 return;
             }
 
+            if (!string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+            {
+                stateStore.SetNextAction("Thermostat mode changed away from cool; restoring cool mode.", DateTimeOffset.UtcNow);
+                await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "cool", cancellationToken);
+                stateStore.RecordCommand($"Home Assistant {reading.EntityId} mode restored to cool.");
+                return;
+            }
+
             if (!snapshot.DefenderEnabled)
             {
                 stateStore.SetNextAction("Defender paused; still checking thermostat 24/7.", nextCheck);
@@ -68,8 +76,7 @@ public sealed class AcDefenderService
             }
 
             var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, reading.HvacAction);
-            var changed = Math.Abs(reading.SetPointCelsius - expectedSetPoint) > 0.05
-                || !string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase);
+            var changed = Math.Abs(reading.SetPointCelsius - expectedSetPoint) > 0.05;
 
             if (changed)
             {

@@ -9,6 +9,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Shows the real dining room thermostat state from Home Assistant.
 - Generates or accepts a target temperature from the website.
 - Checks the thermostat 24/7 on a short polling interval.
+- Restores the thermostat to `cool` if anyone changes HVAC mode away from cooling, even while temperature corrections are paused.
 - Detects when someone changes the thermostat outside the website.
 - Logs external thermostat touches with date, time, previous setpoint, new setpoint, room temperature, outdoor temperature, and weather condition when Home Assistant exposes those values.
 - Uses a dynamic cooldown after manual thermostat touches so corrections do not happen instantly every time.
@@ -51,14 +52,15 @@ Every cycle:
 
 1. Pull weather/outdoor temperature.
 2. Pull the real dining room climate entity.
-3. Detect external setpoint changes by comparing the latest Home Assistant setpoint to the previously observed setpoint.
-4. Ignore setpoint changes that match commands recently sent by the app.
-5. Apply active schedule target if schedule is enabled.
-6. Evaluate the weather activation rule.
-7. Respect dynamic cooldown after manual thermostat changes.
-8. Optionally set fan saver mode when near target.
-9. Correct the thermostat if the setpoint or HVAC mode does not match the defender decision.
-10. Update the real-time dashboard status.
+3. Restore HVAC mode to `cool` immediately if another mode is selected, even when the temperature defender is paused.
+4. Detect external setpoint changes by comparing the latest Home Assistant setpoint to the previously observed setpoint.
+5. Ignore setpoint changes that match commands recently sent by the app.
+6. Apply active schedule target if schedule is enabled.
+7. Evaluate the weather activation rule.
+8. Respect dynamic cooldown after manual thermostat changes.
+9. Optionally set fan saver mode when near target.
+10. Correct the thermostat setpoint when it does not match the defender decision.
+11. Update the real-time dashboard status.
 
 When the room is above the target, the app commands a setpoint below target to force cooling. If Home Assistant reports that cooling is idle while the room remains above target, it lowers the setpoint one additional degree per cycle, bounded by `Defender__MinimumCoolingSetPointCelsius`. When the room reaches target, the setpoint returns to the exact target.
 
@@ -74,7 +76,7 @@ cooldown = min(maxCooldownSeconds, baseCooldownSeconds * recentTouchCount)
 
 ## Schedule And Weather Rules
 
-The settings page supports multiple schedule rows with:
+The settings page has a mobile-friendly schedule editor with card-style rules, day chips, clear start/end controls, and a live summary for each rule. Each rule supports:
 
 - Name
 - Enabled flag

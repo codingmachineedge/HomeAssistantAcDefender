@@ -4,21 +4,24 @@ Every cycle performs these steps:
 
 1. Read weather and outdoor temperature from Home Assistant.
 2. Read the real dining room climate entity.
-3. Detect whether the thermostat setpoint changed outside the website.
-4. Read upstairs temperature sensors and presence entities.
-5. Apply the active schedule target when scheduling is enabled.
-6. Evaluate the weather activation rule.
-7. Apply upstairs comfort rules.
-8. Respect dynamic cooldown after external changes unless severe upstairs heat bypasses it.
-9. Apply fan energy saver when enabled and near target.
-10. Correct the real thermostat when needed.
-11. Update the next-action status label.
+3. Restore HVAC mode to `cool` immediately if Home Assistant reports another mode, even when temperature corrections are paused.
+4. Detect whether the thermostat setpoint changed outside the website.
+5. Read upstairs temperature sensors and presence entities.
+6. Apply the active schedule target when scheduling is enabled.
+7. Evaluate the weather activation rule.
+8. Apply upstairs comfort rules.
+9. Respect dynamic cooldown after external changes unless severe upstairs heat bypasses it.
+10. Apply fan energy saver when enabled and near target.
+11. Correct the real thermostat setpoint when needed.
+12. Update the next-action status label.
 
 ## Cooling Behavior
 
 When room temperature is above target, the defender sets the thermostat below target to force cooling. If Home Assistant reports idle while the room is still above target, the defender lowers the setpoint one additional degree per cycle until the configured minimum cooling setpoint.
 
 When room temperature reaches target, the defender returns the thermostat setpoint to the exact target.
+
+If the thermostat mode is changed to anything other than `cool`, the defender sends `climate.set_hvac_mode` with `hvac_mode: cool` before pause, schedule, weather, cooldown, or setpoint logic continues.
 
 ## Cooldown
 
