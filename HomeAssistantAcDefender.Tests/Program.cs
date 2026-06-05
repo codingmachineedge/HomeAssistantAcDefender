@@ -13,6 +13,7 @@ tests.ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom();
 tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
+tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
 tests.CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches();
 tests.WeatherDriftWaitsOnlyForSafeStableOutdoorConditions();
 tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
@@ -278,6 +279,79 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.RepeatCommand.Holding)
         {
             throw new InvalidOperationException("Repeat Quiet should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void WallSettlingWaitsWhileWallThermostatIsStillBeingTouched()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        var reading = new ThermostatReading(
+            "climate.dining_room",
+            22.5,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(reading);
+        store.RecordHomeAssistantReading(reading with { SetPointCelsius = 25.0 });
+        store.RecordHomeAssistantReading(reading with { SetPointCelsius = 26.0 });
+
+        var now = DateTimeOffset.UtcNow;
+        var waited = store.TryRespectWallSettlingGuard(
+            reading with { SetPointCelsius = 26.0 },
+            bypassForComfort: false,
+            now,
+            out var waitUntil,
+            out _);
+
+        if (!waited || waitUntil <= now)
+        {
+            throw new InvalidOperationException("Wall Settling should wait after repeated recent wall touches.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.WallSettling.Holding || snapshot.WallSettling.RecentTouchCount < 2)
+        {
+            throw new InvalidOperationException("Wall Settling snapshot should show an active hold and recent touch count.");
+        }
+
+        var hotRoom = store.TryRespectWallSettlingGuard(
+            reading with { CurrentTemperatureCelsius = 23.5, SetPointCelsius = 26.0 },
+            bypassForComfort: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Wall Settling must step aside when the room moves above its safety band.");
+        }
+
+        snapshot = store.GetSnapshot();
+        if (snapshot.WallSettling.Holding)
+        {
+            throw new InvalidOperationException("Wall Settling should clear its hold after comfort safety takes over.");
+        }
+
+        using var singleTouchFixture = DefenderStoreFixture.Create();
+        var singleTouchStore = singleTouchFixture.Store;
+        singleTouchStore.SetTarget(22.0);
+        singleTouchStore.RecordHomeAssistantReading(reading);
+        singleTouchStore.RecordHomeAssistantReading(reading with { SetPointCelsius = 25.0 });
+        var singleTouchWaited = singleTouchStore.TryRespectWallSettlingGuard(
+            reading with { SetPointCelsius = 25.0 },
+            bypassForComfort: false,
+            DateTimeOffset.UtcNow,
+            out _,
+            out _);
+
+        if (singleTouchWaited)
+        {
+            throw new InvalidOperationException("Wall Settling should keep watching until the configured touch threshold is reached.");
         }
     }
 

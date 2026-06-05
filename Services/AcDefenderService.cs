@@ -71,6 +71,17 @@ public sealed class AcDefenderService
             var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass;
 
             if (!bypassQuietTiming
+                && stateStore.TryRespectWallSettlingGuard(reading, false, quietBypassNow, out var settlingUntil, out var settlingMessage))
+            {
+                stateStore.SetNextAction(settlingMessage, settlingUntil);
+                return;
+            }
+            else if (bypassQuietTiming)
+            {
+                stateStore.TryRespectWallSettlingGuard(reading, true, quietBypassNow, out _, out _);
+            }
+
+            if (!bypassQuietTiming
                 && stateStore.TryRespectConflictQuietMode(reading, false, quietBypassNow, out var conflictUntil, out var conflictMessage))
             {
                 stateStore.SetNextAction(conflictMessage, conflictUntil);

@@ -26,6 +26,7 @@ public sealed record DefenderSnapshot(
     ComfortCompromiseSnapshot ComfortCompromise,
     ComfortMemorySnapshot ComfortMemory,
     ConflictQuietSnapshot ConflictQuiet,
+    WallSettlingSnapshot WallSettling,
     ManualComfortGraceSnapshot ManualComfortGrace,
     TouchIntentSnapshot TouchIntent,
     CoolerIntentSnapshot CoolerIntent,
@@ -186,6 +187,15 @@ public sealed record ConflictQuietSnapshot(
     string Status,
     DateTimeOffset? Until);
 
+public sealed record WallSettlingSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    int RecentTouchCount,
+    int SettleSeconds,
+    string Status,
+    DateTimeOffset? Until);
+
 public sealed record ManualComfortGraceSnapshot(
     bool Enabled,
     bool Active,
@@ -321,6 +331,18 @@ public sealed class DefenderSettings
     public int ConflictQuietMinutes { get; set; } = 35;
 
     public double ConflictQuietComfortBandCelsius { get; set; } = 1.2;
+
+    public bool WallSettlingGuardEnabled { get; set; } = true;
+
+    public int WallSettlingMinimumTouches { get; set; } = 2;
+
+    public int WallSettlingWindowMinutes { get; set; } = 10;
+
+    public int WallSettlingBaseSeconds { get; set; } = 45;
+
+    public int WallSettlingPressureExtraSeconds { get; set; } = 120;
+
+    public double WallSettlingSafetyBandCelsius { get; set; } = 1.0;
 
     public bool NaturalRecoveryEnabled { get; set; } = true;
 

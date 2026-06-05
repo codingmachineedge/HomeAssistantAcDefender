@@ -466,6 +466,66 @@
             <MudPaper Class="panel-card">
                 <MudText Typo="Typo.overline">Wall Touch Behavior</MudText>
                 <MudText Typo="Typo.body2" Class="helper-text">Settings that react when someone changes the real wall thermostat.</MudText>
+                <MudSwitch T="bool"
+                           Value="_wallSettlingGuardEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _wallSettlingGuardEnabled = v))"
+                           Label="Wall settling guard"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Waits when the wall thermostat is still being tapped, so the helper does not fight back instantly.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_wallSettlingMinimumTouches"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _wallSettlingMinimumTouches = value))"
+                                         Label="Settle touches"
+                                         HelperText="How many wall touches mean someone is still adjusting."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_wallSettlingWindowMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _wallSettlingWindowMinutes = value))"
+                                         Label="Settle window minutes"
+                                         HelperText="How long wall touches count as recent."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="1440" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_wallSettlingBaseSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _wallSettlingBaseSeconds = value))"
+                                         Label="Base settle seconds"
+                                         HelperText="Shortest pause after enough wall touches."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="1800" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_wallSettlingPressureExtraSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _wallSettlingPressureExtraSeconds = value))"
+                                         Label="Pressure extra seconds"
+                                         HelperText="Extra pause when wall touches keep piling up."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="3600" />
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudNumericField T="double"
+                                         Value="_wallSettlingSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _wallSettlingSafetyBandCelsius = value))"
+                                         Label="Settle safe band C"
+                                         HelperText="Stop waiting if the room gets this warm above target."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
                            Value="_touchSignatureEnabled"
@@ -1604,7 +1664,7 @@
     [
         new("Automation", "Schedule and weather", "Time rules, weather activation, cooldown, cool restore, conflict quiet, and weather drift."),
         new("Recovery", "Quiet recovery", "Adaptive waits, nudge size, command gaps, safe bands, walkback, and hold chance."),
-        new("Wall Touch", "Touch behavior", "Touch signature, visibility guard, routine timing, budget, cadence, compromise, memory, manual grace, and intent."),
+        new("Wall Touch", "Touch behavior", "Wall settling, touch signature, visibility guard, routine timing, budget, cadence, compromise, memory, manual grace, and intent."),
         new("Sensor Timing", "Sensor timing", "Setpoint echo, repeat command, Home Assistant sensor rhythm, cooling runway, room trend, and thermal momentum."),
         new("Comfort", "Fan saver", "Fan mode and near-target energy saver."),
         new("Comfort", "Upstairs comfort", "Upstairs temperature sensors, too-hot threshold, comfort target, boost, and presence rules."),
@@ -1625,6 +1685,12 @@
     private int _conflictQuietTouchThreshold = 4;
     private int _conflictQuietMinutes = 35;
     private double _conflictQuietComfortBandCelsius = 1.2;
+    private bool _wallSettlingGuardEnabled = true;
+    private int _wallSettlingMinimumTouches = 2;
+    private int _wallSettlingWindowMinutes = 10;
+    private int _wallSettlingBaseSeconds = 45;
+    private int _wallSettlingPressureExtraSeconds = 120;
+    private double _wallSettlingSafetyBandCelsius = 1.0;
     private bool _naturalRecoveryEnabled = true;
     private bool _adaptiveQuietnessEnabled = true;
     private int _adaptiveQuietTouchThreshold = 2;
@@ -1786,6 +1852,12 @@
         _conflictQuietTouchThreshold = settings.ConflictQuietTouchThreshold;
         _conflictQuietMinutes = settings.ConflictQuietMinutes;
         _conflictQuietComfortBandCelsius = settings.ConflictQuietComfortBandCelsius;
+        _wallSettlingGuardEnabled = settings.WallSettlingGuardEnabled;
+        _wallSettlingMinimumTouches = settings.WallSettlingMinimumTouches;
+        _wallSettlingWindowMinutes = settings.WallSettlingWindowMinutes;
+        _wallSettlingBaseSeconds = settings.WallSettlingBaseSeconds;
+        _wallSettlingPressureExtraSeconds = settings.WallSettlingPressureExtraSeconds;
+        _wallSettlingSafetyBandCelsius = settings.WallSettlingSafetyBandCelsius;
         _naturalRecoveryEnabled = settings.NaturalRecoveryEnabled;
         _adaptiveQuietnessEnabled = settings.AdaptiveQuietnessEnabled;
         _adaptiveQuietTouchThreshold = settings.AdaptiveQuietTouchThreshold;
@@ -1975,6 +2047,12 @@
             _conflictQuietTouchThreshold,
             _conflictQuietMinutes,
             _conflictQuietComfortBandCelsius,
+            _wallSettlingGuardEnabled,
+            _wallSettlingMinimumTouches,
+            _wallSettlingWindowMinutes,
+            _wallSettlingBaseSeconds,
+            _wallSettlingPressureExtraSeconds,
+            _wallSettlingSafetyBandCelsius,
             _naturalRecoveryEnabled,
             _adaptiveQuietnessEnabled,
             _adaptiveQuietTouchThreshold,

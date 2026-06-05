@@ -453,8 +453,8 @@
     [
         "Touch count", "Touch pressure", "Walk step", "Touch step", "Touch samples", "Visibility wait", "Visibility pressure",
         "Routine wait", "Routine rhythm", "Budget wait", "Budget used", "Cadence wait", "Cadence pressure", "Blend target",
-        "Blend wait", "Memory bias", "Memory target", "Stand-down", "Wall grace", "Touch intent", "Intent grace",
-        "Cooler fast lane", "Cooler net"
+        "Blend wait", "Memory bias", "Memory target", "Stand-down", "Wall settle", "Settle touches", "Wall grace",
+        "Touch intent", "Intent grace", "Cooler fast lane", "Cooler net"
     ];
 
     private static readonly string[] SensorDefenseMetricLabels =
@@ -471,7 +471,7 @@
     private static readonly string[] WallTouchDefenseStatusNames =
     [
         "Natural walkback", "Touch signature", "Visibility guard", "Routine timing", "Comfort budget", "Natural cadence",
-        "Comfort compromise", "Comfort memory", "Conflict quiet", "Manual grace", "Touch intent", "Cooler intent"
+        "Comfort compromise", "Comfort memory", "Conflict quiet", "Wall settling", "Manual grace", "Touch intent", "Cooler intent"
     ];
 
     private static readonly string[] SensorDefenseStatusNames =
@@ -519,6 +519,9 @@
     private string CommandGapText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveCommandGapSeconds}s" : "Off";
     private string ConflictQuietText => Snapshot?.ConflictQuiet.Status ?? "Conflict quiet is watching.";
     private string ConflictQuietWaitText => Snapshot?.ConflictQuiet.Active == true ? $"{Snapshot.ConflictQuiet.SecondsRemaining}s" : "Ready";
+    private string WallSettlingText => Snapshot?.WallSettling.Status ?? "Wall settling is watching.";
+    private string WallSettlingWaitText => Snapshot?.WallSettling.Holding == true ? $"{Snapshot.WallSettling.SecondsRemaining}s" : Snapshot?.WallSettling.Enabled == true ? "Ready" : "Off";
+    private string WallSettlingTouchText => Snapshot?.WallSettling.Enabled == true ? $"{Snapshot.WallSettling.RecentTouchCount}" : "Off";
     private string ManualGraceText => Snapshot?.ManualComfortGrace.Status ?? "No wall-change grace active.";
     private string ManualGraceWaitText => Snapshot?.ManualComfortGrace.Active == true ? $"{Snapshot.ManualComfortGrace.SecondsRemaining}s" : "Ready";
     private string TouchIntentText => Snapshot?.TouchIntent.Status ?? "Touch intent is watching.";
@@ -602,6 +605,9 @@
     private Severity ConflictQuietSeverity => Snapshot?.ConflictQuiet.Active == true
         ? Severity.Warning
         : Snapshot?.ConflictQuiet.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity WallSettlingSeverity => Snapshot?.WallSettling.Holding == true
+        ? Severity.Warning
+        : Snapshot?.WallSettling.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity ManualGraceSeverity => Snapshot?.ManualComfortGrace.Active == true
         ? Severity.Warning
         : Snapshot?.ManualComfortGrace.Enabled == true ? Severity.Info : Severity.Normal;
@@ -714,6 +720,8 @@
         new("Hold chance", HoldChanceText, "Chance it waits one more beat."),
         new("Command gap", CommandGapText, "Space between automatic nudges."),
         new("Stand-down", ConflictQuietWaitText, "How long conflict quiet is standing down."),
+        new("Wall settle", WallSettlingWaitText, "How long the wall thermostat gets to stop changing."),
+        new("Settle touches", WallSettlingTouchText, "Recent wall touches inside the settling window."),
         new("Wall grace", ManualGraceWaitText, "How long a wall change can rest."),
         new("Touch intent", TouchIntentDirectionText, "Recent wall choices: warmer, cooler, mixed, or learning."),
         new("Intent grace", TouchIntentGraceText, "Extra safe grace available for clear warmer intent."),
@@ -787,6 +795,7 @@
         new("Comfort memory", ComfortMemoryText, "This says if this time of day has a small learned comfort preference.", ComfortMemorySeverity),
         new("Cool mode restore", CoolModeRestoreText, "This says if cool mode is waiting before it comes back.", CoolModeRestoreSeverity),
         new("Conflict quiet", ConflictQuietText, "This says if repeated wall touches made the helper stand down.", ConflictQuietSeverity),
+        new("Wall settling", WallSettlingText, "This says if someone is still tapping the wall thermostat and the helper is waiting for it to settle.", WallSettlingSeverity),
         new("Manual grace", ManualGraceText, "This says if a wall thermostat change is being left alone while the room still feels okay.", ManualGraceSeverity),
         new("Touch intent", TouchIntentText, "This says if recent wall changes look warmer, cooler, or mixed.", TouchIntentSeverity),
         new("Cooler intent", CoolerIntentText, "This says if repeated cooler wall changes are letting comfort skip quiet waits.", CoolerIntentSeverity),

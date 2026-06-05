@@ -96,6 +96,16 @@ public sealed class DefenderStateStore
             state.Settings.ConflictQuietTouchThreshold = Math.Clamp(request.ConflictQuietTouchThreshold, 2, 20);
             state.Settings.ConflictQuietMinutes = Math.Clamp(request.ConflictQuietMinutes, 1, 240);
             state.Settings.ConflictQuietComfortBandCelsius = Math.Round(Math.Clamp(request.ConflictQuietComfortBandCelsius, 0.1, 5.0), 1);
+            state.Settings.WallSettlingGuardEnabled = request.WallSettlingGuardEnabled;
+            state.Settings.WallSettlingMinimumTouches = Math.Clamp(request.WallSettlingMinimumTouches, 1, 20);
+            state.Settings.WallSettlingWindowMinutes = Math.Clamp(request.WallSettlingWindowMinutes, 1, 1440);
+            state.Settings.WallSettlingBaseSeconds = Math.Clamp(request.WallSettlingBaseSeconds, 0, 1800);
+            state.Settings.WallSettlingPressureExtraSeconds = Math.Clamp(request.WallSettlingPressureExtraSeconds, 0, 3600);
+            state.Settings.WallSettlingSafetyBandCelsius = Math.Round(Math.Clamp(request.WallSettlingSafetyBandCelsius, 0.1, 5.0), 1);
+            if (!state.Settings.WallSettlingGuardEnabled)
+            {
+                ClearWallSettling("Wall settling guard is off.");
+            }
             state.Settings.NaturalRecoveryEnabled = request.NaturalRecoveryEnabled;
             state.Settings.AdaptiveQuietnessEnabled = request.AdaptiveQuietnessEnabled;
             state.Settings.AdaptiveQuietTouchThreshold = Math.Clamp(request.AdaptiveQuietTouchThreshold, 1, 20);
@@ -548,6 +558,76 @@ public sealed class DefenderStateStore
             message = $"Repeated wall touches noticed; standing down until {holdUntil.ToLocalTime():HH:mm:ss} unless room rises above {allowedRoomTemperature:0.0} C.";
             state.ConflictQuietStatus = message;
             AddEvent("warning", $"Conflict quiet activated after {recentTouches} wall touches.");
+            SaveState();
+            return true;
+        }
+    }
+
+    public bool TryRespectWallSettlingGuard(
+        ThermostatReading reading,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.WallSettlingGuardEnabled)
+            {
+                ClearWallSettling("Wall settling guard is off.");
+                SaveState();
+                return false;
+            }
+
+            var recentTouches = GetRecentWallSettlingTouches(now);
+            var recentTouchCount = recentTouches.Count;
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearWallSettling("Room comfort needs help now, so wall settling is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.WallSettlingSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearWallSettling($"Room rose above {allowedRoomTemperature:0.0} C, so wall settling ended.");
+                SaveState();
+                return false;
+            }
+
+            var minimumTouches = Math.Max(1, state.Settings.WallSettlingMinimumTouches);
+            if (recentTouchCount < minimumTouches)
+            {
+                ClearWallSettling($"Wall settling is watching for active wall adjustments ({recentTouchCount}/{minimumTouches}).");
+                SaveState();
+                return false;
+            }
+
+            var settleSeconds = CalculateWallSettlingSeconds(recentTouchCount);
+            if (settleSeconds <= 0)
+            {
+                ClearWallSettling("Wall settling has 0 seconds configured, so it is only watching.");
+                SaveState();
+                return false;
+            }
+
+            var latestTouch = recentTouches.Max();
+            var settleUntil = latestTouch.AddSeconds(settleSeconds);
+            if (settleUntil <= now)
+            {
+                ClearWallSettling($"Wall thermostat settled after {recentTouchCount} recent touches; the helper can continue.");
+                SaveState();
+                return false;
+            }
+
+            state.WallSettlingUntil = settleUntil;
+            waitUntil = settleUntil;
+            message = $"Wall thermostat is still settling after {recentTouchCount} touches; waiting until {settleUntil.ToLocalTime():HH:mm:ss} before correcting unless room rises above {allowedRoomTemperature:0.0} C.";
+            state.WallSettlingStatus = message;
             SaveState();
             return true;
         }
@@ -1861,6 +1941,7 @@ public sealed class DefenderStateStore
                 && state.SensorRhythmDueAt is null
                 && state.CoolingRunwayHoldUntil is null
                 && state.ConflictQuietUntil is null
+                && state.WallSettlingUntil is null
                 && state.CoolerIntentUntil is null
                 && state.RoomTrendHoldUntil is null
                 && state.ThermalMomentumHoldUntil is null
@@ -1876,6 +1957,9 @@ public sealed class DefenderStateStore
             state.ConflictQuietStatus = state.Settings.ConflictQuietModeEnabled
                 ? "Conflict quiet is lined up; no stand-down needed."
                 : "Conflict quiet is off.";
+            ClearWallSettling(state.Settings.WallSettlingGuardEnabled
+                ? "Wall settling is lined up; no active wall adjustments."
+                : "Wall settling guard is off.");
             ClearCoolerIntent(state.Settings.CoolerIntentFastLaneEnabled
                 ? "Cooler intent fast lane is lined up; no fast lane needed."
                 : "Cooler intent fast lane is off.");
@@ -2246,6 +2330,10 @@ public sealed class DefenderStateStore
         state.VisibilityGuardStatus = state.Settings.VisibilityGuardEnabled
             ? $"Visibility guard has {state.VisibilityNoticeTimes.Count} noticed correction signal(s)."
             : "Visibility guard is off.";
+        var wallSettlingTouches = GetRecentWallSettlingTouches(now).Count;
+        state.WallSettlingStatus = state.Settings.WallSettlingGuardEnabled
+            ? $"Wall settling logged {wallSettlingTouches} recent wall touch(es); waiting for the thermostat to stop moving before any safe correction."
+            : "Wall settling guard is off.";
 
         var audit = new ThermostatChangeAudit(
             now,
@@ -2363,6 +2451,7 @@ public sealed class DefenderStateStore
         state.NaturalHoldCount = 0;
         state.ConflictQuietUntil = null;
         state.ConflictQuietStatus = "Cooler intent fast lane is active, so conflict quiet is stepping aside.";
+        ClearWallSettling("Cooler intent fast lane is active, so wall settling is stepping aside.");
         ClearManualComfortGrace();
         ClearRoutineTiming("Cooler intent fast lane is active, so routine timing is stepping aside.");
         ClearComfortBudget("Cooler intent fast lane is active, so comfort budget is stepping aside.");
@@ -3367,6 +3456,11 @@ public sealed class DefenderStateStore
         saved.Settings.ConflictQuietTouchThreshold = Math.Clamp(saved.Settings.ConflictQuietTouchThreshold, 2, 20);
         saved.Settings.ConflictQuietMinutes = Math.Clamp(saved.Settings.ConflictQuietMinutes, 1, 240);
         saved.Settings.ConflictQuietComfortBandCelsius = Math.Round(Math.Clamp(saved.Settings.ConflictQuietComfortBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.WallSettlingMinimumTouches = Math.Clamp(saved.Settings.WallSettlingMinimumTouches, 1, 20);
+        saved.Settings.WallSettlingWindowMinutes = Math.Clamp(saved.Settings.WallSettlingWindowMinutes, 1, 1440);
+        saved.Settings.WallSettlingBaseSeconds = Math.Clamp(saved.Settings.WallSettlingBaseSeconds, 0, 1800);
+        saved.Settings.WallSettlingPressureExtraSeconds = Math.Clamp(saved.Settings.WallSettlingPressureExtraSeconds, 0, 3600);
+        saved.Settings.WallSettlingSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.WallSettlingSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ManualComfortGraceMinutes = Math.Clamp(saved.Settings.ManualComfortGraceMinutes, 0, 240);
         saved.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(saved.Settings.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
         saved.Settings.TouchIntentMinimumTouches = Math.Clamp(saved.Settings.TouchIntentMinimumTouches, 1, 20);
@@ -3454,6 +3548,19 @@ public sealed class DefenderStateStore
         saved.ConflictQuietStatus = string.IsNullOrWhiteSpace(saved.ConflictQuietStatus)
             ? "Conflict quiet is watching."
             : saved.ConflictQuietStatus;
+        saved.WallSettlingStatus = string.IsNullOrWhiteSpace(saved.WallSettlingStatus)
+            ? "Wall settling is watching."
+            : saved.WallSettlingStatus;
+        if (!saved.Settings.WallSettlingGuardEnabled)
+        {
+            saved.WallSettlingUntil = null;
+            saved.WallSettlingStatus = "Wall settling guard is off.";
+        }
+        else if (saved.WallSettlingUntil is { } wallSettlingUntil && wallSettlingUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.WallSettlingUntil = null;
+            saved.WallSettlingStatus = "Wall settling is watching.";
+        }
         saved.ManualComfortGraceStatus = string.IsNullOrWhiteSpace(saved.ManualComfortGraceStatus)
             ? "No wall-change grace active."
             : saved.ManualComfortGraceStatus;
@@ -3547,6 +3654,13 @@ public sealed class DefenderStateStore
         var conflictQuietSeconds = state.ConflictQuietUntil is { } conflictUntil && conflictUntil > now
             ? (int)Math.Ceiling((conflictUntil - now).TotalSeconds)
             : 0;
+        var wallSettlingSeconds = state.WallSettlingUntil is { } settlingUntil && settlingUntil > now
+            ? (int)Math.Ceiling((settlingUntil - now).TotalSeconds)
+            : 0;
+        if (wallSettlingSeconds == 0 && state.WallSettlingUntil is not null)
+        {
+            ClearWallSettling("Wall thermostat settled; the helper can continue.");
+        }
         var manualGraceSeconds = state.ManualComfortGraceUntil is { } graceUntil && graceUntil > now
             ? (int)Math.Ceiling((graceUntil - now).TotalSeconds)
             : 0;
@@ -3620,6 +3734,8 @@ public sealed class DefenderStateStore
         var weatherDrift = BuildWeatherDrift(now);
         var touchIntent = BuildTouchIntentAnalysis(now);
         var coolerIntent = BuildCoolerIntentAnalysis(now);
+        var wallSettlingTouchCount = GetRecentWallSettlingTouches(now).Count;
+        var wallSettlingSettleSeconds = CalculateWallSettlingSeconds(wallSettlingTouchCount);
         var sensorRhythm = BuildSensorRhythmAnalysis(now);
         PruneComfortMemory(now);
         var memorySlot = FindComfortMemorySlot(now);
@@ -3747,6 +3863,16 @@ public sealed class DefenderStateStore
                     ? "Conflict quiet is watching."
                     : state.ConflictQuietStatus,
                 conflictQuietSeconds > 0 ? state.ConflictQuietUntil : null),
+            new WallSettlingSnapshot(
+                state.Settings.WallSettlingGuardEnabled,
+                wallSettlingSeconds > 0,
+                wallSettlingSeconds,
+                wallSettlingTouchCount,
+                wallSettlingSettleSeconds,
+                string.IsNullOrWhiteSpace(state.WallSettlingStatus)
+                    ? "Wall settling is watching."
+                    : state.WallSettlingStatus,
+                wallSettlingSeconds > 0 ? state.WallSettlingUntil : null),
             new ManualComfortGraceSnapshot(
                 state.Settings.ManualComfortGraceEnabled,
                 manualGraceSeconds > 0,
@@ -3902,6 +4028,7 @@ public sealed class DefenderStateStore
         state.CoolModeRestoreStatus = "Cool mode restore is watching.";
         state.ConflictQuietUntil = null;
         state.ConflictQuietStatus = "Conflict quiet is watching.";
+        ClearWallSettling("Wall settling is watching.");
         ClearManualComfortGrace();
         state.TouchIntentStatus = "Touch intent is watching.";
         ClearCoolerIntent("Cooler intent fast lane is watching for repeated cooler wall touches.");
@@ -3924,6 +4051,12 @@ public sealed class DefenderStateStore
     {
         state.CoolerIntentUntil = null;
         state.CoolerIntentStatus = status;
+    }
+
+    private void ClearWallSettling(string status)
+    {
+        state.WallSettlingUntil = null;
+        state.WallSettlingStatus = status;
     }
 
     private void ClearRoutineTiming(string status)
@@ -3979,6 +4112,26 @@ public sealed class DefenderStateStore
     {
         state.WeatherDriftHoldUntil = null;
         state.WeatherDriftStatus = status;
+    }
+
+    private List<DateTimeOffset> GetRecentWallSettlingTouches(DateTimeOffset now)
+    {
+        var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.WallSettlingWindowMinutes));
+        return state.ExternalTouchTimes
+            .Where(item => item <= now && now - item <= window)
+            .ToList();
+    }
+
+    private int CalculateWallSettlingSeconds(int recentTouchCount)
+    {
+        var baseSeconds = Math.Max(0, state.Settings.WallSettlingBaseSeconds);
+        var extraSeconds = Math.Max(0, state.Settings.WallSettlingPressureExtraSeconds);
+        var minimumTouches = Math.Max(1, state.Settings.WallSettlingMinimumTouches);
+        var pressure = recentTouchCount <= minimumTouches
+            ? 0.0
+            : Math.Clamp((recentTouchCount - minimumTouches) / (double)Math.Max(1, minimumTouches), 0.0, 1.0);
+
+        return Math.Clamp(baseSeconds + (int)Math.Round(extraSeconds * pressure), 0, 3600);
     }
 
     private void ResetCoolingDefenderStep()
@@ -4101,6 +4254,12 @@ public sealed class DefenderStateStore
             ConflictQuietTouchThreshold = settings.ConflictQuietTouchThreshold,
             ConflictQuietMinutes = settings.ConflictQuietMinutes,
             ConflictQuietComfortBandCelsius = settings.ConflictQuietComfortBandCelsius,
+            WallSettlingGuardEnabled = settings.WallSettlingGuardEnabled,
+            WallSettlingMinimumTouches = settings.WallSettlingMinimumTouches,
+            WallSettlingWindowMinutes = settings.WallSettlingWindowMinutes,
+            WallSettlingBaseSeconds = settings.WallSettlingBaseSeconds,
+            WallSettlingPressureExtraSeconds = settings.WallSettlingPressureExtraSeconds,
+            WallSettlingSafetyBandCelsius = settings.WallSettlingSafetyBandCelsius,
             NaturalRecoveryEnabled = settings.NaturalRecoveryEnabled,
             AdaptiveQuietnessEnabled = settings.AdaptiveQuietnessEnabled,
             AdaptiveQuietTouchThreshold = settings.AdaptiveQuietTouchThreshold,
@@ -4359,6 +4518,10 @@ public sealed class DefenderStateStore
         public DateTimeOffset? ConflictQuietUntil { get; set; }
 
         public string ConflictQuietStatus { get; set; } = "Conflict quiet is watching.";
+
+        public DateTimeOffset? WallSettlingUntil { get; set; }
+
+        public string WallSettlingStatus { get; set; } = "Wall settling is watching.";
 
         public DateTimeOffset? ManualComfortGraceUntil { get; set; }
 
