@@ -9,8 +9,9 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Treat `climate.dining_room` as a real device. Any command endpoint should act on Home Assistant or return a real error.
 - Keep the background worker checking 24/7. Paused or weather-blocked defender states should still refresh Home Assistant state.
 - Cool-mode restore delay must still restore HVAC mode to `cool`; delay is allowed only while room comfort remains inside the configured safety band.
-- Natural Walkback may soften only safe-band recovery moves after repeated wall touches. Warm-room defender commands must still start one degree below current room temperature and continue toward the website target.
+- Natural Walkback may soften only safe-band recovery moves after repeated wall touches. Warm-room defender commands must still start one degree below current room temperature, not one degree below the wall setpoint, and continue toward the website target.
 - Comfort Compromise may adjust only the temporary effective target while room comfort is inside the configured safety band. Website target changes, schedule target changes, and upstairs comfort changes must clear it.
+- Comfort Memory may apply only small, expiring time-of-day offsets learned from real wall touches while room comfort is inside the configured safety band. It must skip warmer offsets when upstairs is hot.
 - Comfort Sync / quiet recovery may delay or step real commands, but it must not create fake thermostat state or simulator-only behavior.
 - Conflict Quiet may stand down after repeated wall touches only while real room temperature remains inside the configured safety band.
 - Thermal momentum and room-trend decisions must use real Home Assistant room-temperature samples, not fake timing or simulated cooling.

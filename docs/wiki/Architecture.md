@@ -27,6 +27,8 @@ Natural Walkback is part of that same state-store command selection path. It cal
 
 Comfort Compromise is evaluated inside `CalculateExpectedSetPoint`. It can temporarily adjust the effective target from repeated wall choices, but only while the real room temperature remains inside its safety band. Target changes from the website, schedule, or upstairs comfort clear the compromise.
 
+Comfort Memory is also evaluated inside `CalculateExpectedSetPoint`, before temporary compromise. It stores small local-hour offsets learned from repeated safe wall choices, prunes them by retention time, and skips warmer memory when upstairs is hot.
+
 Adaptive quietness is also calculated in `DefenderStateStore`. It turns recent external thermostat touches into a quiet level and effective delay, hold chance, command gap, and nudge size. The dashboard displays those effective values so the UI matches the worker decision.
 
 Cool Mode Restore is stored in `DefenderStateStore` and evaluated by `AcDefenderService` before pause, schedule, weather, cooldown, or setpoint logic. It can delay the real `climate.set_hvac_mode` restore command while room temperature is inside the safe band, and it skips the delay when comfort safety requires cooling now.

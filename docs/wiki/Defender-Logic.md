@@ -17,14 +17,15 @@ Every cycle performs these steps:
 13. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
 14. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
 15. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
-16. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-17. Apply fan energy saver when enabled and near target.
-18. Correct the real thermostat setpoint when needed.
-19. Update the next-action status label.
+16. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+17. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+18. Apply fan energy saver when enabled and near target.
+19. Correct the real thermostat setpoint when needed.
+20. Update the next-action status label.
 
 ## Cooling Behavior
 
-When room temperature is above target, a new defender correction starts by setting the thermostat exactly 1 C below the current room temperature to force cooling. If Home Assistant reports idle/off while the room is still above target, the defender lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target.
+When room temperature is above target, a new defender correction starts by setting the thermostat exactly 1 C below the current room temperature to force cooling. It does not start one degree below the wall setpoint someone chose. If Home Assistant reports idle/off while the room is still above target, the defender lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target.
 
 When room temperature reaches target, the defender returns the thermostat setpoint to the exact website target.
 
@@ -76,6 +77,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Sends warm-room corrections to the room-temperature defender target instead of walking down from the wall setpoint.
 - Automatically changes quiet level when repeated wall touches happen, shrinking nudge size and increasing wait/hold/command spacing.
 - Uses Natural Walkback for small safe-band setpoint steps when repeated wall touches make a direct correction too obvious.
+- Uses Comfort Memory to remember a tiny expiring time-of-day preference after repeated safe wall choices.
 - Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
@@ -112,6 +114,18 @@ targetTemperature + comfortCompromiseSafetyBandCelsius
 The preferred wall setpoint is capped by `comfortCompromiseMaxOffsetCelsius`, held for the configured hold minutes, and then faded back toward the website target across the decay window.
 
 If the room rises above the safety band, the compromise is cleared immediately. Schedule changes, website target changes, and upstairs comfort target changes also clear it.
+
+## Comfort Memory
+
+Comfort Memory learns a small offset for the current local hour after repeated wall choices while the room is safe:
+
+```text
+currentRoomTemperature <= targetTemperature + comfortMemorySafetyBandCelsius
+```
+
+The learned offset is capped by `comfortMemoryMaxOffsetCelsius` and expires after `comfortMemoryRetentionHours`. The next time the same hour is active, the offset can adjust the effective target before temporary compromise is applied.
+
+Comfort Memory does not apply if the room crosses the safety band or normal safety override. If upstairs is hot, warmer learned offsets are skipped so upstairs comfort keeps priority.
 
 ## Manual Comfort Grace
 

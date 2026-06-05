@@ -45,6 +45,11 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Fade-back minutes: how long the blend takes to return to the website target.
 - Max compromise C: maximum temporary difference from the website target.
 - Compromise safe band C: extra warmth allowed before the compromise clears.
+- Comfort memory: learns a small time-of-day preference from repeated safe wall choices.
+- Memory touches: recent wall touches needed before memory learns.
+- Memory hours: how long a learned preference remains valid.
+- Max memory C: biggest learned target adjustment.
+- Memory safe band C: extra warmth allowed before memory stops applying.
 - Respect wall changes: leaves a wall thermostat change alone while the room is still okay.
 - Grace minutes: maximum time that wall change can rest.
 - Grace room band C: extra warmth allowed above target before the defender resumes.

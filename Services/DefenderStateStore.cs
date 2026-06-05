@@ -139,6 +139,11 @@ public sealed class DefenderStateStore
             state.Settings.ComfortCompromiseDecayMinutes = Math.Clamp(request.ComfortCompromiseDecayMinutes, 1, 240);
             state.Settings.ComfortCompromiseMaxOffsetCelsius = Math.Round(Math.Clamp(request.ComfortCompromiseMaxOffsetCelsius, 0.1, 5.0), 1);
             state.Settings.ComfortCompromiseSafetyBandCelsius = Math.Round(Math.Clamp(request.ComfortCompromiseSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.ComfortMemoryEnabled = request.ComfortMemoryEnabled;
+            state.Settings.ComfortMemoryLearningTouches = Math.Clamp(request.ComfortMemoryLearningTouches, 1, 20);
+            state.Settings.ComfortMemoryRetentionHours = Math.Clamp(request.ComfortMemoryRetentionHours, 1, 168);
+            state.Settings.ComfortMemoryMaxOffsetCelsius = Math.Round(Math.Clamp(request.ComfortMemoryMaxOffsetCelsius, 0.1, 3.0), 1);
+            state.Settings.ComfortMemorySafetyBandCelsius = Math.Round(Math.Clamp(request.ComfortMemorySafetyBandCelsius, 0.1, 3.0), 1);
             state.Settings.ManualComfortGraceEnabled = request.ManualComfortGraceEnabled;
             state.Settings.ManualComfortGraceMinutes = Math.Clamp(request.ManualComfortGraceMinutes, 0, 240);
             state.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(request.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
@@ -994,7 +999,8 @@ public sealed class DefenderStateStore
         lock (gate)
         {
             var now = DateTimeOffset.UtcNow;
-            var target = CalculateComfortCompromiseTarget(currentTemperatureCelsius, now);
+            var target = CalculateComfortMemoryTarget(currentTemperatureCelsius, now);
+            target = CalculateComfortCompromiseTarget(target, currentTemperatureCelsius, now);
             if (currentTemperatureCelsius <= target + options.TemperatureToleranceCelsius)
             {
                 state.BoostOffsetCelsius = 0.0;
@@ -1042,9 +1048,50 @@ public sealed class DefenderStateStore
         }
     }
 
-    private double CalculateComfortCompromiseTarget(double currentTemperatureCelsius, DateTimeOffset now)
+    private double CalculateComfortMemoryTarget(double currentTemperatureCelsius, DateTimeOffset now)
     {
         var target = state.TargetTemperatureCelsius;
+        if (!state.Settings.ComfortMemoryEnabled)
+        {
+            state.ComfortMemoryEffectiveTargetCelsius = null;
+            state.ComfortMemoryStatus = "Comfort memory is off.";
+            return target;
+        }
+
+        PruneComfortMemory(now);
+        var allowedRoomTemperature = target + state.Settings.ComfortMemorySafetyBandCelsius;
+        if (currentTemperatureCelsius > allowedRoomTemperature || currentTemperatureCelsius >= target + state.Settings.NaturalSafetyOverrideCelsius)
+        {
+            state.ComfortMemoryEffectiveTargetCelsius = null;
+            state.ComfortMemoryStatus = $"Room is above {allowedRoomTemperature:0.0} C, so comfort memory is only watching.";
+            return target;
+        }
+
+        var slot = FindComfortMemorySlot(now);
+        if (slot is null)
+        {
+            state.ComfortMemoryEffectiveTargetCelsius = null;
+            state.ComfortMemoryStatus = $"Comfort memory is watching this time window.";
+            return target;
+        }
+
+        var maxOffset = Math.Max(0.1, state.Settings.ComfortMemoryMaxOffsetCelsius);
+        var offset = Math.Round(Math.Clamp(slot.OffsetCelsius, -maxOffset, maxOffset), 1);
+        if (offset > 0 && state.UpstairsTooHot)
+        {
+            state.ComfortMemoryEffectiveTargetCelsius = null;
+            state.ComfortMemoryStatus = "Upstairs is warm, so comfort memory will not relax cooling.";
+            return target;
+        }
+
+        var effectiveTarget = Math.Round(target + offset, 1);
+        state.ComfortMemoryEffectiveTargetCelsius = effectiveTarget;
+        state.ComfortMemoryStatus = $"Comfort memory learned {offset:+0.0;-0.0;0.0} C for this time window; effective target is {effectiveTarget:0.0} C.";
+        return effectiveTarget;
+    }
+
+    private double CalculateComfortCompromiseTarget(double target, double currentTemperatureCelsius, DateTimeOffset now)
+    {
         if (!state.Settings.ComfortCompromiseEnabled)
         {
             ClearComfortCompromise("Comfort compromise is off.");
@@ -1065,8 +1112,9 @@ public sealed class DefenderStateStore
             return target;
         }
 
-        var allowedRoomTemperature = target + state.Settings.ComfortCompromiseSafetyBandCelsius;
-        if (currentTemperatureCelsius > allowedRoomTemperature || currentTemperatureCelsius >= target + state.Settings.NaturalSafetyOverrideCelsius)
+        var baseTarget = state.TargetTemperatureCelsius;
+        var allowedRoomTemperature = baseTarget + state.Settings.ComfortCompromiseSafetyBandCelsius;
+        if (currentTemperatureCelsius > allowedRoomTemperature || currentTemperatureCelsius >= baseTarget + state.Settings.NaturalSafetyOverrideCelsius)
         {
             ClearComfortCompromise($"Room rose above {allowedRoomTemperature:0.0} C, so comfort compromise stepped aside.");
             return target;
@@ -1143,6 +1191,7 @@ public sealed class DefenderStateStore
         state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
             ? $"Manual touch score is {touchScore}/100; natural walkback will use small safe-band nudges if correction is needed."
             : "Natural walkback is off.";
+        TryUpdateComfortMemory(reading, now);
         TryStartComfortCompromise(reading, now);
 
         var audit = new ThermostatChangeAudit(
@@ -1205,6 +1254,65 @@ public sealed class DefenderStateStore
             target - maxOffset,
             target + maxOffset), 1);
         state.ComfortCompromiseStatus = $"Comfort compromise accepted {reading.SetPointCelsius:0.0} C temporarily and will fade back by {state.ComfortCompromiseUntil.Value.ToLocalTime():HH:mm:ss}.";
+    }
+
+    private void TryUpdateComfortMemory(ThermostatReading reading, DateTimeOffset now)
+    {
+        if (!state.Settings.ComfortMemoryEnabled)
+        {
+            state.ComfortMemoryStatus = "Comfort memory is off.";
+            return;
+        }
+
+        PruneTouchTimes(now);
+        var triggerTouches = Math.Max(1, state.Settings.ComfortMemoryLearningTouches);
+        if (state.ExternalTouchTimes.Count < triggerTouches)
+        {
+            state.ComfortMemoryStatus = $"Comfort memory is watching wall choices ({state.ExternalTouchTimes.Count}/{triggerTouches}).";
+            return;
+        }
+
+        var target = state.TargetTemperatureCelsius;
+        var allowedRoomTemperature = target + state.Settings.ComfortMemorySafetyBandCelsius;
+        if (reading.CurrentTemperatureCelsius > allowedRoomTemperature || ShouldBypassNaturalRecovery(reading))
+        {
+            state.ComfortMemoryStatus = $"Room is above {allowedRoomTemperature:0.0} C, so comfort memory will not learn this touch.";
+            return;
+        }
+
+        var maxOffset = Math.Max(0.1, state.Settings.ComfortMemoryMaxOffsetCelsius);
+        var offset = Math.Round(Math.Clamp(reading.SetPointCelsius - target, -maxOffset, maxOffset), 1);
+        if (Math.Abs(offset) <= 0.05)
+        {
+            state.ComfortMemoryStatus = "Wall choice already matches the website target, so comfort memory did not change.";
+            return;
+        }
+
+        if (offset > 0 && state.UpstairsTooHot)
+        {
+            state.ComfortMemoryStatus = "Upstairs is warm, so comfort memory will not learn a warmer preference.";
+            return;
+        }
+
+        PruneComfortMemory(now);
+        var slot = FindComfortMemorySlot(now);
+        if (slot is null)
+        {
+            slot = new ComfortMemorySlot
+            {
+                HourOfDay = now.ToLocalTime().Hour,
+                OffsetCelsius = offset,
+                Samples = 0,
+                UpdatedAt = now
+            };
+            state.ComfortMemorySlots.Add(slot);
+        }
+
+        var samples = Math.Clamp(slot.Samples, 0, 12);
+        slot.OffsetCelsius = Math.Round(((slot.OffsetCelsius * samples) + offset) / (samples + 1), 1);
+        slot.Samples = Math.Min(24, slot.Samples + 1);
+        slot.UpdatedAt = now;
+        state.ComfortMemoryStatus = $"Comfort memory learned {slot.OffsetCelsius:+0.0;-0.0;0.0} C for this time window from {slot.Samples} wall choices.";
     }
 
     private int CalculateDynamicCooldownSeconds(DateTimeOffset now)
@@ -1445,6 +1553,28 @@ public sealed class DefenderStateStore
         return Math.Clamp(touchScore + recencyScore + conflictScore, 0, 100);
     }
 
+    private ComfortMemorySlot? FindComfortMemorySlot(DateTimeOffset now)
+    {
+        var hour = now.ToLocalTime().Hour;
+        return state.ComfortMemorySlots
+            .Where(item => item.HourOfDay == hour)
+            .OrderByDescending(item => item.UpdatedAt)
+            .FirstOrDefault();
+    }
+
+    private void PruneComfortMemory(DateTimeOffset now)
+    {
+        var retention = TimeSpan.FromHours(Math.Max(1, state.Settings.ComfortMemoryRetentionHours));
+        state.ComfortMemorySlots.RemoveAll(item => now - item.UpdatedAt > retention);
+        if (state.ComfortMemorySlots.Count > 24)
+        {
+            state.ComfortMemorySlots = state.ComfortMemorySlots
+                .OrderByDescending(item => item.UpdatedAt)
+                .Take(24)
+                .ToList();
+        }
+    }
+
     private void PruneTouchTimes(DateTimeOffset now)
     {
         var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.TouchFrequencyWindowMinutes));
@@ -1517,6 +1647,10 @@ public sealed class DefenderStateStore
         saved.Settings.ComfortCompromiseDecayMinutes = Math.Clamp(saved.Settings.ComfortCompromiseDecayMinutes, 1, 240);
         saved.Settings.ComfortCompromiseMaxOffsetCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortCompromiseMaxOffsetCelsius, 0.1, 5.0), 1);
         saved.Settings.ComfortCompromiseSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortCompromiseSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.ComfortMemoryLearningTouches = Math.Clamp(saved.Settings.ComfortMemoryLearningTouches, 1, 20);
+        saved.Settings.ComfortMemoryRetentionHours = Math.Clamp(saved.Settings.ComfortMemoryRetentionHours, 1, 168);
+        saved.Settings.ComfortMemoryMaxOffsetCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortMemoryMaxOffsetCelsius, 0.1, 3.0), 1);
+        saved.Settings.ComfortMemorySafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortMemorySafetyBandCelsius, 0.1, 3.0), 1);
         saved.Settings.CoolModeRestoreMinimumDelaySeconds = Math.Clamp(saved.Settings.CoolModeRestoreMinimumDelaySeconds, 0, 3600);
         saved.Settings.CoolModeRestoreMaximumDelaySeconds = Math.Clamp(
             saved.Settings.CoolModeRestoreMaximumDelaySeconds,
@@ -1542,6 +1676,7 @@ public sealed class DefenderStateStore
         saved.UpstairsSensors ??= [];
         saved.Presence ??= [];
         saved.RoomTemperatureSamples ??= [];
+        saved.ComfortMemorySlots ??= [];
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
@@ -1551,6 +1686,9 @@ public sealed class DefenderStateStore
         saved.ComfortCompromiseStatus = string.IsNullOrWhiteSpace(saved.ComfortCompromiseStatus)
             ? "Comfort compromise is watching for repeated wall changes."
             : saved.ComfortCompromiseStatus;
+        saved.ComfortMemoryStatus = string.IsNullOrWhiteSpace(saved.ComfortMemoryStatus)
+            ? "Comfort memory is watching wall choices."
+            : saved.ComfortMemoryStatus;
         saved.CoolModeRestoreStatus = string.IsNullOrWhiteSpace(saved.CoolModeRestoreStatus)
             ? "Cool mode restore is watching."
             : saved.CoolModeRestoreStatus;
@@ -1621,6 +1759,11 @@ public sealed class DefenderStateStore
                 thermostat.AvailableFanModes));
         var roomTrend = BuildRoomTrend(now);
         var thermalMomentum = BuildThermalMomentum(now, state.HomeAssistantThermostat?.CurrentTemperatureCelsius);
+        PruneComfortMemory(now);
+        var memorySlot = FindComfortMemorySlot(now);
+        var memoryActive = state.Settings.ComfortMemoryEnabled
+            && state.ComfortMemoryEffectiveTargetCelsius is not null
+            && memorySlot is not null;
         return new DefenderSnapshot(
             state.TargetTemperatureCelsius,
             state.DefenderEnabled,
@@ -1676,6 +1819,15 @@ public sealed class DefenderStateStore
                     ? "Comfort compromise is watching for repeated wall changes."
                     : state.ComfortCompromiseStatus,
                 comfortCompromiseSeconds > 0 ? state.ComfortCompromiseUntil : null),
+            new ComfortMemorySnapshot(
+                state.Settings.ComfortMemoryEnabled,
+                memoryActive,
+                memorySlot?.Samples ?? 0,
+                memorySlot?.OffsetCelsius,
+                state.ComfortMemoryEffectiveTargetCelsius,
+                string.IsNullOrWhiteSpace(state.ComfortMemoryStatus)
+                    ? "Comfort memory is watching wall choices."
+                    : state.ComfortMemoryStatus),
             new ConflictQuietSnapshot(
                 state.Settings.ConflictQuietModeEnabled,
                 conflictQuietSeconds > 0,
@@ -1756,6 +1908,8 @@ public sealed class DefenderStateStore
         state.NaturalRecoveryStatus = status;
         state.NaturalWalkbackStatus = "Natural walkback is watching.";
         ClearComfortCompromise("Comfort compromise reset after website target change.");
+        state.ComfortMemoryEffectiveTargetCelsius = null;
+        state.ComfortMemoryStatus = "Comfort memory is watching wall choices.";
         state.CoolModeRestoreDueAt = null;
         state.CoolModeRestoreCommandedAt = null;
         state.CoolModeRestoreStatus = "Cool mode restore is watching.";
@@ -1913,6 +2067,11 @@ public sealed class DefenderStateStore
             ComfortCompromiseDecayMinutes = settings.ComfortCompromiseDecayMinutes,
             ComfortCompromiseMaxOffsetCelsius = settings.ComfortCompromiseMaxOffsetCelsius,
             ComfortCompromiseSafetyBandCelsius = settings.ComfortCompromiseSafetyBandCelsius,
+            ComfortMemoryEnabled = settings.ComfortMemoryEnabled,
+            ComfortMemoryLearningTouches = settings.ComfortMemoryLearningTouches,
+            ComfortMemoryRetentionHours = settings.ComfortMemoryRetentionHours,
+            ComfortMemoryMaxOffsetCelsius = settings.ComfortMemoryMaxOffsetCelsius,
+            ComfortMemorySafetyBandCelsius = settings.ComfortMemorySafetyBandCelsius,
             ManualComfortGraceEnabled = settings.ManualComfortGraceEnabled,
             ManualComfortGraceMinutes = settings.ManualComfortGraceMinutes,
             ManualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius,
@@ -2036,6 +2195,12 @@ public sealed class DefenderStateStore
 
         public string ComfortCompromiseStatus { get; set; } = "Comfort compromise is watching for repeated wall changes.";
 
+        public List<ComfortMemorySlot> ComfortMemorySlots { get; set; } = [];
+
+        public double? ComfortMemoryEffectiveTargetCelsius { get; set; }
+
+        public string ComfortMemoryStatus { get; set; } = "Comfort memory is watching wall choices.";
+
         public DateTimeOffset? CoolModeRestoreDueAt { get; set; }
 
         public DateTimeOffset? CoolModeRestoreCommandedAt { get; set; }
@@ -2113,6 +2278,17 @@ public sealed class DefenderStateStore
         double? CoolingRateCelsiusPerHour,
         double? EstimatedMinutesToTarget,
         int SampleCount);
+
+    private sealed class ComfortMemorySlot
+    {
+        public int HourOfDay { get; set; }
+
+        public double OffsetCelsius { get; set; }
+
+        public int Samples { get; set; }
+
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
 
     private sealed class ThermostatRuntimeState
     {

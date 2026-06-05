@@ -81,6 +81,9 @@
                 <MudAlert Class="mt-2" Severity="@ComfortCompromiseSeverity" Variant="Variant.Outlined">@ComfortCompromiseText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if a wall choice is being blended back gently while the room is safe.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@ComfortMemorySeverity" Variant="Variant.Outlined">@ComfortMemoryText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if this time of day has a small learned comfort preference.</MudText>
+
                 <MudAlert Class="mt-2" Severity="@CoolModeRestoreSeverity" Variant="Variant.Outlined">@CoolModeRestoreText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if cool mode is waiting before it comes back.</MudText>
 
@@ -161,6 +164,8 @@
                     <MetricCard Label="Walk step" Value="@NaturalWalkbackStepText" Help="Safe-band nudge size after repeated touches." />
                     <MetricCard Label="Blend target" Value="@ComfortCompromiseTargetText" Help="Temporary target while a wall choice fades back." />
                     <MetricCard Label="Blend wait" Value="@ComfortCompromiseWaitText" Help="How long the temporary blend remains." />
+                    <MetricCard Label="Memory bias" Value="@ComfortMemoryOffsetText" Help="Small learned time-of-day adjustment." />
+                    <MetricCard Label="Memory target" Value="@ComfortMemoryTargetText" Help="Target after comfort memory is applied." />
                     <MetricCard Label="Nudge size" Value="@NaturalStepText" Help="The biggest gentle thermostat move right now." />
                     <MetricCard Label="Hold chance" Value="@HoldChanceText" Help="Chance it waits one more beat." />
                     <MetricCard Label="Command gap" Value="@CommandGapText" Help="Space between automatic nudges." />
@@ -285,6 +290,9 @@
     private string ComfortCompromiseText => Snapshot?.ComfortCompromise.Status ?? "Comfort compromise is watching.";
     private string ComfortCompromiseTargetText => Snapshot?.ComfortCompromise.EffectiveTargetCelsius is { } target ? $"{target:0.0} C" : "Ready";
     private string ComfortCompromiseWaitText => Snapshot?.ComfortCompromise.Active == true ? $"{Snapshot.ComfortCompromise.SecondsRemaining}s" : "Ready";
+    private string ComfortMemoryText => Snapshot?.ComfortMemory.Status ?? "Comfort memory is watching.";
+    private string ComfortMemoryOffsetText => Snapshot?.ComfortMemory.LearnedOffsetCelsius is { } offset ? $"{offset:+0.0;-0.0;0.0} C" : "Ready";
+    private string ComfortMemoryTargetText => Snapshot?.ComfortMemory.EffectiveTargetCelsius is { } target ? $"{target:0.0} C" : "Ready";
     private string CoolModeRestoreText => Snapshot?.CoolModeRestore.Status ?? "Cool mode restore is watching.";
     private string CoolModeRestoreWaitText => Snapshot?.CoolModeRestore.Waiting == true ? $"{Snapshot.CoolModeRestore.SecondsRemaining}s" : "Ready";
     private string QuietLevelText => Snapshot?.NaturalRecovery.Enabled == true ? Snapshot.NaturalRecovery.QuietLevel : "Off";
@@ -326,6 +334,9 @@
     private Severity ComfortCompromiseSeverity => Snapshot?.ComfortCompromise.Active == true
         ? Severity.Warning
         : Snapshot?.ComfortCompromise.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity ComfortMemorySeverity => Snapshot?.ComfortMemory.Active == true
+        ? Severity.Warning
+        : Snapshot?.ComfortMemory.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity CoolModeRestoreSeverity => Snapshot?.CoolModeRestore.Waiting == true
         ? Severity.Warning
         : Snapshot?.CoolModeRestore.Enabled == true ? Severity.Info : Severity.Normal;

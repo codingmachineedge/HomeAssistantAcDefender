@@ -19,6 +19,7 @@ public sealed record DefenderSnapshot(
     NaturalRecoverySnapshot NaturalRecovery,
     NaturalWalkbackSnapshot NaturalWalkback,
     ComfortCompromiseSnapshot ComfortCompromise,
+    ComfortMemorySnapshot ComfortMemory,
     ConflictQuietSnapshot ConflictQuiet,
     ManualComfortGraceSnapshot ManualComfortGrace,
     RoomTrendSnapshot RoomTrend,
@@ -111,6 +112,14 @@ public sealed record ComfortCompromiseSnapshot(
     double? EffectiveTargetCelsius,
     string Status,
     DateTimeOffset? Until);
+
+public sealed record ComfortMemorySnapshot(
+    bool Enabled,
+    bool Active,
+    int SampleCount,
+    double? LearnedOffsetCelsius,
+    double? EffectiveTargetCelsius,
+    string Status);
 
 public sealed record ConflictQuietSnapshot(
     bool Enabled,
@@ -243,6 +252,16 @@ public sealed class DefenderSettings
     public double ComfortCompromiseMaxOffsetCelsius { get; set; } = 1.0;
 
     public double ComfortCompromiseSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool ComfortMemoryEnabled { get; set; } = true;
+
+    public int ComfortMemoryLearningTouches { get; set; } = 2;
+
+    public int ComfortMemoryRetentionHours { get; set; } = 24;
+
+    public double ComfortMemoryMaxOffsetCelsius { get; set; } = 0.6;
+
+    public double ComfortMemorySafetyBandCelsius { get; set; } = 0.8;
 
     public bool ManualComfortGraceEnabled { get; set; } = true;
 

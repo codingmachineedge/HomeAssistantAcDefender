@@ -414,6 +414,59 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_comfortMemoryEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _comfortMemoryEnabled = v))"
+                           Label="Comfort memory"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Learns a tiny time-of-day preference from repeated safe wall choices.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_comfortMemoryLearningTouches"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortMemoryLearningTouches = value))"
+                                         Label="Memory touches"
+                                         HelperText="How many touches teach a time window."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_comfortMemoryRetentionHours"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortMemoryRetentionHours = value))"
+                                         Label="Memory hours"
+                                         HelperText="How long a learned preference lasts."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="168" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_comfortMemoryMaxOffsetCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortMemoryMaxOffsetCelsius = value))"
+                                         Label="Max memory C"
+                                         HelperText="Biggest learned target adjustment."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="3"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_comfortMemorySafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortMemorySafetyBandCelsius = value))"
+                                         Label="Memory safe band C"
+                                         HelperText="Stop memory if room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="3"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_manualComfortGraceEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _manualComfortGraceEnabled = v))"
                            Label="Respect wall changes"
@@ -830,6 +883,11 @@
     private int _comfortCompromiseDecayMinutes = 30;
     private double _comfortCompromiseMaxOffsetCelsius = 1.0;
     private double _comfortCompromiseSafetyBandCelsius = 1.0;
+    private bool _comfortMemoryEnabled = true;
+    private int _comfortMemoryLearningTouches = 2;
+    private int _comfortMemoryRetentionHours = 24;
+    private double _comfortMemoryMaxOffsetCelsius = 0.6;
+    private double _comfortMemorySafetyBandCelsius = 0.8;
     private bool _manualComfortGraceEnabled = true;
     private int _manualComfortGraceMinutes = 20;
     private double _manualComfortGraceBandCelsius = 0.8;
@@ -905,6 +963,11 @@
         _comfortCompromiseDecayMinutes = settings.ComfortCompromiseDecayMinutes;
         _comfortCompromiseMaxOffsetCelsius = settings.ComfortCompromiseMaxOffsetCelsius;
         _comfortCompromiseSafetyBandCelsius = settings.ComfortCompromiseSafetyBandCelsius;
+        _comfortMemoryEnabled = settings.ComfortMemoryEnabled;
+        _comfortMemoryLearningTouches = settings.ComfortMemoryLearningTouches;
+        _comfortMemoryRetentionHours = settings.ComfortMemoryRetentionHours;
+        _comfortMemoryMaxOffsetCelsius = settings.ComfortMemoryMaxOffsetCelsius;
+        _comfortMemorySafetyBandCelsius = settings.ComfortMemorySafetyBandCelsius;
         _manualComfortGraceEnabled = settings.ManualComfortGraceEnabled;
         _manualComfortGraceMinutes = settings.ManualComfortGraceMinutes;
         _manualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius;
@@ -1027,6 +1090,11 @@
             _comfortCompromiseDecayMinutes,
             _comfortCompromiseMaxOffsetCelsius,
             _comfortCompromiseSafetyBandCelsius,
+            _comfortMemoryEnabled,
+            _comfortMemoryLearningTouches,
+            _comfortMemoryRetentionHours,
+            _comfortMemoryMaxOffsetCelsius,
+            _comfortMemorySafetyBandCelsius,
             _manualComfortGraceEnabled,
             _manualComfortGraceMinutes,
             _manualComfortGraceBandCelsius,
