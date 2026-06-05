@@ -36,6 +36,13 @@ public sealed class AcDefenderService
                 return;
             }
 
+            var emergencyNow = DateTimeOffset.UtcNow;
+            if (stateStore.TryRespectEmergencyQuiet(emergencyNow, out var emergencyUntil, out var emergencyMessage))
+            {
+                stateStore.SetNextAction(emergencyMessage, emergencyUntil);
+                return;
+            }
+
             if (!snapshot.DefenderEnabled)
             {
                 stateStore.SetNextAction("Defender paused; still reading the real thermostat 24/7.", nextCheck);
@@ -253,6 +260,38 @@ public sealed class AcDefenderService
         await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
         stateStore.RecordCommand($"Home Assistant {reading.EntityId} thermostat turned off while defender is paused.");
         stateStore.SetNextAction("Thermostat off command sent; defender is paused and will keep reading status.", DateTimeOffset.UtcNow.AddSeconds(options.CurrentValue.PollIntervalSeconds));
+    }
+
+    public async Task ApplyEmergencyProtocolAsync(string protocol, CancellationToken cancellationToken)
+    {
+        var normalized = (protocol ?? string.Empty).Trim().ToLowerInvariant();
+        switch (normalized)
+        {
+            case "too-cold":
+                stateStore.ActivateEmergencyQuiet(
+                    "Too cold",
+                    TimeSpan.FromMinutes(30),
+                    "Too cold emergency active; defender is paused and the real thermostat is being turned off.",
+                    pauseDefender: true);
+                await TurnThermostatOffAsync(cancellationToken);
+                break;
+            case "someone-upset":
+                stateStore.ActivateEmergencyQuiet(
+                    "Someone upset",
+                    TimeSpan.FromMinutes(45),
+                    "Someone-upset quiet mode active; defender is observing only and will not fight wall changes.",
+                    pauseDefender: false);
+                break;
+            case "suspicion":
+                stateStore.ActivateEmergencyQuiet(
+                    "Suspicion quiet",
+                    TimeSpan.FromMinutes(90),
+                    "Suspicion quiet mode active; defender is standing down corrections and only reading the real thermostat.",
+                    pauseDefender: false);
+                break;
+            default:
+                throw new InvalidOperationException("Pick an emergency protocol first.");
+        }
     }
 
     public async Task RefreshRealThermostatAsync(CancellationToken cancellationToken)

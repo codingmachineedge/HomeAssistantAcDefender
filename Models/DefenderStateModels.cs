@@ -15,6 +15,8 @@ public sealed record DefenderSnapshot(
     string NextAction,
     DateTimeOffset? NextActionAt,
     int CooldownSeconds,
+    WebsiteCommandDebounceSnapshot WebsiteCommandDebounce,
+    EmergencySnapshot Emergency,
     CoolModeRestoreSnapshot CoolModeRestore,
     NaturalRecoverySnapshot NaturalRecovery,
     NaturalWalkbackSnapshot NaturalWalkback,
@@ -37,6 +39,7 @@ public sealed record DefenderSnapshot(
     RoomTrendSnapshot RoomTrend,
     ThermalMomentumSnapshot ThermalMomentum,
     WeatherDriftSnapshot WeatherDrift,
+    CoolingFailureSnapshot CoolingFailure,
     ComfortSnapshot Comfort,
     DefenderSettings Settings,
     IReadOnlyList<ScheduleEntry> Schedule,
@@ -63,6 +66,26 @@ public sealed record DefenderEvent(
     DateTimeOffset Timestamp,
     string Level,
     string Message);
+
+public sealed record WebsiteCommandDebounceSnapshot(
+    bool Active,
+    int SecondsRemaining,
+    int DebounceSeconds,
+    string Status,
+    string? LastCommand,
+    DateTimeOffset? Until);
+
+public sealed record WebsiteCommandGateResult(
+    bool Accepted,
+    string Message,
+    DefenderSnapshot Snapshot);
+
+public sealed record EmergencySnapshot(
+    bool Active,
+    int SecondsRemaining,
+    string Protocol,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record ThermostatReading(
     string EntityId,
@@ -283,6 +306,15 @@ public sealed record WeatherDriftSnapshot(
     int SampleCount,
     string Status,
     DateTimeOffset? Until);
+
+public sealed record CoolingFailureSnapshot(
+    bool Enabled,
+    bool Alerting,
+    int SecondsActive,
+    int AlertCount,
+    string Status,
+    DateTimeOffset? SuspectedAt,
+    DateTimeOffset? NextAlertAt);
 
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,

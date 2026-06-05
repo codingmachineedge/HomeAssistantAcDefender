@@ -20,6 +20,12 @@ public sealed class HomeAssistantOptions
 
     public string UsageCostEntityId { get; set; } = "sensor.alectra_hui_cost_today";
 
+    public string UsageCurrentBillEntityId { get; set; } = "sensor.alectra_hui_current_bill";
+
+    public string UsageCurrentBillDueEntityId { get; set; } = "sensor.alectra_hui_current_bill_due";
+
+    public string UsageCurrentBillStatusEntityId { get; set; } = "sensor.alectra_hui_current_bill_status";
+
     public string? Username { get; set; }
 
     public string? Password { get; set; }

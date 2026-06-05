@@ -144,15 +144,18 @@ public sealed class HomeAssistantClient
     {
         if (!IsConfigured)
         {
-            return new UsageLiveSnapshot(null, null, null, false, DateTimeOffset.UtcNow);
+            return new UsageLiveSnapshot(null, null, null, null, null, null, false, DateTimeOffset.UtcNow);
         }
 
         var current = options.CurrentValue;
         var power = await TryGetUsageEntityAsync(current.UsagePowerEntityId, cancellationToken);
         var energy = await TryGetUsageEntityAsync(current.UsageEnergyEntityId, cancellationToken);
         var cost = await TryGetUsageEntityAsync(current.UsageCostEntityId, cancellationToken);
+        var currentBill = await TryGetUsageEntityAsync(current.UsageCurrentBillEntityId, cancellationToken);
+        var currentBillDue = await TryGetUsageEntityAsync(current.UsageCurrentBillDueEntityId, cancellationToken);
+        var currentBillStatus = await TryGetUsageEntityAsync(current.UsageCurrentBillStatusEntityId, cancellationToken);
 
-        return new UsageLiveSnapshot(power, energy, cost, true, DateTimeOffset.UtcNow);
+        return new UsageLiveSnapshot(power, energy, cost, currentBill, currentBillDue, currentBillStatus, true, DateTimeOffset.UtcNow);
     }
 
     public async Task<UsageHistorySnapshot> GetUsageHistoryAsync(

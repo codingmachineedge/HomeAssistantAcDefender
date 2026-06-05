@@ -15,6 +15,8 @@ GET /api/status/stream
 The status snapshot includes:
 
 - `cooldownSeconds`: remaining dynamic/manual-touch cooldown.
+- `websiteCommandDebounce`: two-minute website command gate, remaining seconds, last accepted command, status, and expiry time.
+- `emergency`: active emergency quiet protocol, remaining seconds, status, and expiry time.
 - `coolModeRestore`: cool-mode restore delay status, remaining seconds, and due time.
 - `naturalRecovery`: quiet recovery status, quiet level, wait seconds, recent touch count, base/effective nudge size, base/effective hold chance, and effective command gap.
 - `naturalWalkback`: safe-band walkback status, active flag, touch score, and current walkback step.
@@ -34,6 +36,7 @@ The status snapshot includes:
 - `coolingRunway`: fresh-cooling hold status, wait seconds, pressure, cooling start time, and expiry time.
 - `roomTrend`: real room trend direction, delta, sample count, hold status, and remaining hold seconds.
 - `thermalMomentum`: real cooling rate, estimated minutes to target, hold status, and remaining hold seconds.
+- `coolingFailure`: mega-alert status, active seconds, alert count, suspected time, next repeat alert time, and status message.
 - `thermostatChanges`: external thermostat touch audit log.
 - `comfort`: upstairs comfort and presence status.
 
@@ -45,7 +48,7 @@ GET /api/usage/history?hours=24
 GET /api/usage/history?entityId=sensor.alectra_hui_energy_today&from=2026-06-05T00:00:00Z&to=2026-06-05T23:59:59Z
 ```
 
-`/api/usage/live` returns the configured Home Assistant usage sensors for current power, daily energy, and daily cost.
+`/api/usage/live` returns the configured Home Assistant usage sensors for current power, daily energy, daily cost, current bill, bill due date, and bill fetch status.
 
 `/api/usage/history` reads Home Assistant recorder history for the configured energy entity by default. Pass `entityId` to inspect another sensor, `hours` for a window ending now, or explicit `from` and `to` timestamps.
 
@@ -67,9 +70,19 @@ POST /api/thermostat/refresh
 POST /api/thermostat/force-target
 POST /api/thermostat/force-boost
 POST /api/thermostat/fan
+POST /api/thermostat/off
+POST /api/emergency
 ```
 
 All thermostat command endpoints act on the real configured Home Assistant climate entity.
+
+`POST /api/emergency` accepts:
+
+```json
+{ "protocol": "too-cold" }
+```
+
+Supported protocols are `too-cold`, `someone-upset`, and `suspicion`. Normal website command endpoints are protected by a two-minute debounce and return `429` with the current snapshot when another command is attempted too quickly. Emergency commands bypass an active debounce, then start a fresh debounce window.
 
 ## CLI Usage
 

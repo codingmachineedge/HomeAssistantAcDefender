@@ -149,6 +149,34 @@ body {
   border-left: 5px solid #b94a2f;
 }
 
+.clickable-row {
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.clickable-row:hover {
+  border-color: #166da8;
+  box-shadow: 0 10px 24px rgba(22, 109, 168, 0.14);
+  transform: translateY(-1px);
+}
+
+.log-detail-panel {
+  overflow: hidden;
+}
+
+.json-detail {
+  max-height: 320px;
+  overflow: auto;
+  margin: 12px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: #0f1720;
+  color: #e7f6ef;
+  font-size: 0.86rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .scroll-list {
   max-height: 360px;
   overflow: auto;
@@ -172,6 +200,33 @@ body {
   display: grid;
   gap: 4px;
   justify-items: start;
+}
+
+.app-dark .top-bar {
+  border-bottom-color: #31443d;
+}
+
+.app-dark .main-content {
+  background: #111815;
+}
+
+.app-dark .panel-card,
+.app-dark .sensor-row,
+.app-dark .touch-row,
+.app-dark .schedule-card {
+  border-color: #31443d;
+  background: #17211c;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+
+.app-dark .reading-tile,
+.app-dark .metric-card {
+  border-color: #31443d;
+  background: #1d2a24;
+}
+
+.app-dark .helper-text {
+  color: #a8b8b0;
 }
 
 .day-button-row {

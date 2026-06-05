@@ -90,12 +90,24 @@ app.MapGet("/api/status/stream", async (HttpContext context, DefenderStateStore 
 
 app.MapPost("/api/target/generate", (DefenderStateStore store) =>
 {
+    var gate = store.TryBeginWebsiteCommand("generate target");
+    if (!gate.Accepted)
+    {
+        return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
     var snapshot = store.GenerateTarget();
     return Results.Ok(snapshot);
 });
 
 app.MapPost("/api/target", (TargetTemperatureRequest request, DefenderStateStore store) =>
 {
+    var gate = store.TryBeginWebsiteCommand("set target");
+    if (!gate.Accepted)
+    {
+        return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
     var snapshot = store.SetTarget(request.TemperatureCelsius);
     return Results.Ok(snapshot);
 });
@@ -116,6 +128,12 @@ app.MapPost("/api/thermostat/refresh", async (AcDefenderService defender, Defend
 {
     try
     {
+        var gate = store.TryBeginWebsiteCommand("refresh thermostat");
+        if (!gate.Accepted)
+        {
+            return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
         await defender.RefreshRealThermostatAsync(cancellationToken);
         return Results.Ok(store.GetSnapshot());
     }
@@ -130,6 +148,12 @@ app.MapPost("/api/thermostat/force-target", async (AcDefenderService defender, D
 {
     try
     {
+        var gate = store.TryBeginWebsiteCommand("force exact target");
+        if (!gate.Accepted)
+        {
+            return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
         await defender.ForceTargetAsync(cancellationToken);
         return Results.Ok(store.GetSnapshot());
     }
@@ -144,6 +168,12 @@ app.MapPost("/api/thermostat/force-boost", async (AcDefenderService defender, De
 {
     try
     {
+        var gate = store.TryBeginWebsiteCommand("force cooling");
+        if (!gate.Accepted)
+        {
+            return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
         await defender.ForceCoolingBoostAsync(cancellationToken);
         return Results.Ok(store.GetSnapshot());
     }
@@ -158,6 +188,12 @@ app.MapPost("/api/thermostat/fan", async (FanModeRequest request, AcDefenderServ
 {
     try
     {
+        var gate = store.TryBeginWebsiteCommand($"set fan to {request.FanMode}");
+        if (!gate.Accepted)
+        {
+            return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
         await defender.ForceFanModeAsync(request.FanMode, cancellationToken);
         return Results.Ok(store.GetSnapshot());
     }
@@ -172,7 +208,33 @@ app.MapPost("/api/thermostat/off", async (AcDefenderService defender, DefenderSt
 {
     try
     {
+        var gate = store.TryBeginWebsiteCommand("turn thermostat off");
+        if (!gate.Accepted)
+        {
+            return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
         await defender.TurnThermostatOffAsync(cancellationToken);
+        return Results.Ok(store.GetSnapshot());
+    }
+    catch (Exception ex)
+    {
+        store.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
+    }
+});
+
+app.MapPost("/api/emergency", async (EmergencyProtocolRequest request, AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var gate = store.TryBeginWebsiteCommand($"emergency {request.Protocol}", bypassDebounce: true);
+        if (!gate.Accepted)
+        {
+            return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
+        await defender.ApplyEmergencyProtocolAsync(request.Protocol, cancellationToken);
         return Results.Ok(store.GetSnapshot());
     }
     catch (Exception ex)

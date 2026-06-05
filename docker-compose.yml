@@ -9,6 +9,7 @@ services:
       - .env
     environment:
       ASPNETCORE_URLS: http://+:8080
+      TZ: America/Toronto
       Defender__StateFilePath: /data/defender-state.json
       Defender__PollIntervalSeconds: 5
     volumes:

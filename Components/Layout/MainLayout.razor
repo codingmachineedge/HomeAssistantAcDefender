@@ -1,18 +1,22 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject DefenderStateStore StateStore
+@inject IJSRuntime JS
 
-<MudThemeProvider Theme="_theme" />
+<MudThemeProvider Theme="_theme" IsDarkMode="_isDarkMode" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
 
-<MudLayout>
+<MudLayout Class="@(_isDarkMode ? "app-dark" : "app-light")">
     <MudAppBar Class="top-bar" Color="Color.Default" Elevation="1" Fixed="false">
         <MudText Typo="Typo.h6" Class="brand-text">AC Defender</MudText>
         <MudSpacer />
         <MudButton Href="/" Variant="Variant.Text" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.SpaceDashboard">Dashboard</MudButton>
         <MudButton Href="/settings" Variant="Variant.Text" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.Tune">Settings</MudButton>
+        <MudTooltip Text="@ThemeTooltip">
+            <MudIconButton Color="Color.Inherit" Icon="@ThemeIcon" OnClick="ToggleTheme" aria-label="@ThemeTooltip" />
+        </MudTooltip>
         <MudChip T="string" Class="status-chip" Color="@HeaderColor" Variant="Variant.Filled">@HeaderStatus</MudChip>
     </MudAppBar>
 
@@ -27,6 +31,7 @@
     private PeriodicTimer? timer;
     private CancellationTokenSource? timerCancellation;
     private DefenderSnapshot? snapshot;
+    private bool _isDarkMode;
 
     private readonly MudTheme _theme = new()
     {
@@ -42,11 +47,28 @@
             TextPrimary = "#17211c",
             TextSecondary = "#64716b"
         },
+        PaletteDark = new PaletteDark
+        {
+            Primary = "#46c1a7",
+            Secondary = "#6fb7e9",
+            Tertiary = "#e07a5f",
+            AppbarBackground = "#17211c",
+            AppbarText = "#e7f6ef",
+            Background = "#111815",
+            Surface = "#17211c",
+            TextPrimary = "#e7f6ef",
+            TextSecondary = "#a8b8b0",
+            DrawerBackground = "#17211c"
+        },
         LayoutProperties = new LayoutProperties
         {
             DefaultBorderRadius = "8px"
         }
     };
+
+    private string ThemeIcon => _isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode;
+
+    private string ThemeTooltip => _isDarkMode ? "Switch to light theme" : "Switch to dark theme";
 
     private string HeaderStatus => snapshot switch
     {
@@ -70,6 +92,36 @@
         timerCancellation = new CancellationTokenSource();
         timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
         _ = PollAsync(timerCancellation.Token);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        try
+        {
+            var savedTheme = await JS.InvokeAsync<string?>("localStorage.getItem", "ac-defender-theme");
+            _isDarkMode = string.Equals(savedTheme, "dark", StringComparison.OrdinalIgnoreCase);
+            StateHasChanged();
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task ToggleTheme()
+    {
+        _isDarkMode = !_isDarkMode;
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", "ac-defender-theme", _isDarkMode ? "dark" : "light");
+        }
+        catch
+        {
+        }
     }
 
     private async Task PollAsync(CancellationToken cancellationToken)

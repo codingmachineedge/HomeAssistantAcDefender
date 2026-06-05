@@ -1,5 +1,6 @@
 @page "/"
 @implements IDisposable
+@using System.Text.Json
 @inject DefenderStateStore StateStore
 @inject AcDefenderService Defender
 @inject HomeAssistantClient HomeAssistant
@@ -40,8 +41,19 @@
             }
         </MudGrid>
 
+        @if (Snapshot?.CoolingFailure.Alerting == true)
+        {
+            <MudAlert Class="mt-2" Severity="Severity.Error" Variant="Variant.Filled" Dense="false">@Snapshot.CoolingFailure.Status</MudAlert>
+            <MudText Typo="Typo.caption" Class="helper-text">This repeats because cool mode is asking for cooling but the real thermostat readings do not look right.</MudText>
+        }
+
         <MudAlert Class="mt-2" Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">@NextActionText</MudAlert>
         <MudText Typo="Typo.caption" Class="helper-text">This tells what the defender plans to do next.</MudText>
+        @if (Snapshot?.WebsiteCommandDebounce.Active == true)
+        {
+            <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot.WebsiteCommandDebounce.Status</MudAlert>
+            <MudText Typo="Typo.caption" Class="helper-text">The website waits two minutes after a button press so fast tapping does not spam Home Assistant.</MudText>
+        }
 
     </MudPaper>
 
@@ -306,7 +318,7 @@
                             {
                                 @foreach (var change in FilteredThermostatChanges)
                                 {
-                                    <MudPaper Class="touch-row" Outlined="true">
+                                    <MudPaper Class="touch-row clickable-row" Outlined="true" @onclick="@(() => SelectTouchLog(change))">
                                         <MudText Typo="Typo.subtitle2">@($"{change.PreviousSetPointCelsius:0.0} C -> {change.NewSetPointCelsius:0.0} C")</MudText>
                                         <MudText Typo="Typo.caption">@DateTimeText(change.Timestamp)</MudText>
                                         <MudText Typo="Typo.caption">@($"{Temp(change.RoomTemperatureCelsius)} room / {Temp(change.OutdoorTemperatureCelsius)} outdoor / {change.WeatherCondition ?? "weather --"}")</MudText>
@@ -340,7 +352,7 @@
                             {
                                 @foreach (var item in FilteredEvents)
                                 {
-                                    <MudAlert Severity="@EventSeverity(item.Level)" Variant="Variant.Outlined" Dense="true">
+                                    <MudAlert Class="clickable-row" Severity="@EventSeverity(item.Level)" Variant="Variant.Outlined" Dense="true" @onclick="@(() => SelectEventLog(item))">
                                         <MudText Typo="Typo.caption">@DateTimeText(item.Timestamp)</MudText>
                                         <MudText Typo="Typo.body2">@item.Message</MudText>
                                     </MudAlert>
@@ -354,6 +366,20 @@
                     </MudPaper>
                 </MudTabPanel>
             </MudTabs>
+            @if (!string.IsNullOrWhiteSpace(_selectedLogJson))
+            {
+                <MudPaper Class="panel-card log-detail-panel mt-2" Outlined="true">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="wrap-gap">
+                        <div>
+                            <MudText Typo="Typo.overline">Selected Log Detail</MudText>
+                            <MudText Typo="Typo.subtitle2">@_selectedLogTitle</MudText>
+                        </div>
+                        <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="ClearSelectedLog" StartIcon="@Icons.Material.Filled.Close">Clear</MudButton>
+                    </MudStack>
+                    <pre class="json-detail">@_selectedLogJson</pre>
+                    <MudText Typo="Typo.caption" Class="helper-text">This is the log item plus the latest thermostat and weather JSON the website has.</MudText>
+                </MudPaper>
+            }
         </MudTabPanel>
 
         <MudTabPanel Text="Controls">
@@ -420,6 +446,32 @@
                             </MudItem>
                         </MudGrid>
                     </MudTabPanel>
+                    <MudTabPanel Text="Emergency">
+                        <MudGrid Spacing="2" Class="mt-2">
+                            <MudItem xs="12" md="7">
+                                <MudSelect T="string"
+                                           @bind-Value="_emergencyProtocol"
+                                           Label="Emergency protocol"
+                                           HelperText="Pick what kind of urgent quiet action is needed."
+                                           Variant="Variant.Outlined">
+                                    @foreach (var option in EmergencyProtocols)
+                                    {
+                                        <MudSelectItem T="string" Value="@option.Value">@option.Label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudText Typo="Typo.caption" Class="helper-text">@EmergencyProtocolHelp</MudText>
+                            </MudItem>
+                            <MudItem xs="12" md="5">
+                                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Error" OnClick="RunEmergencyProtocol" StartIcon="@Icons.Material.Filled.ReportProblem">Emergency</MudButton>
+                                <MudText Typo="Typo.caption" Class="helper-text">Runs the selected real emergency action now.</MudText>
+                            </MudItem>
+                        </MudGrid>
+                        @if (Snapshot?.Emergency.Active == true)
+                        {
+                            <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined">@Snapshot.Emergency.Status</MudAlert>
+                            <MudText Typo="Typo.caption" Class="helper-text">The defender is still reading the real thermostat while this emergency window is active.</MudText>
+                        }
+                    </MudTabPanel>
                 </MudTabs>
             </MudPaper>
         </MudTabPanel>
@@ -443,6 +495,19 @@
     private string _defenseSearch = "";
     private string _touchSearch = "";
     private string _eventSearch = "";
+    private string _emergencyProtocol = "suspicion";
+    private string _selectedLogTitle = "";
+    private string _selectedLogJson = "";
+    private DateTimeOffset? _lastCoolingFailureSnackbarAt;
+
+    private static readonly JsonSerializerOptions LogJsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly TimeZoneInfo TorontoTimeZone = ResolveTorontoTimeZone();
+    private static readonly (string Value, string Label, string Help)[] EmergencyProtocols =
+    [
+        ("too-cold", "Too cold", "Pauses the defender and turns the real thermostat off."),
+        ("someone-upset", "Someone upset", "Starts quiet observe-only mode so wall changes are not fought."),
+        ("suspicion", "Suspicion quiet", "Starts a longer quiet window where corrections stand down but readings continue.")
+    ];
 
     private static readonly string[] CoreDefenseMetricLabels =
     [
@@ -483,7 +548,13 @@
     private string EntityText => Snapshot?.HomeAssistantEntityId ?? "No entity";
     private string ConnectionText => Snapshot?.ConnectionState ?? "--";
     private string CooldownText => Snapshot?.CooldownSeconds > 0 ? $"{Snapshot.CooldownSeconds}s" : "Ready";
+    private string WebsiteCommandDebounceText => Snapshot?.WebsiteCommandDebounce.Active == true ? $"{Snapshot.WebsiteCommandDebounce.SecondsRemaining}s" : "Ready";
     private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
+    private string EmergencyText => Snapshot?.Emergency.Status ?? "No emergency quiet mode active.";
+    private string EmergencyWaitText => Snapshot?.Emergency.Active == true ? $"{Snapshot.Emergency.SecondsRemaining}s" : "Ready";
+    private string CoolingFailureText => Snapshot?.CoolingFailure.Status ?? "Cooling failure watch is ready.";
+    private string CoolingFailureWaitText => Snapshot?.CoolingFailure.Alerting == true ? $"{Snapshot.CoolingFailure.SecondsActive}s" : "Ready";
+    private string EmergencyProtocolHelp => EmergencyProtocols.FirstOrDefault(option => option.Value == _emergencyProtocol).Help ?? "Pick an emergency action.";
     private string NaturalRecoveryText => Snapshot?.NaturalRecovery.Status ?? "Comfort sync is waiting for status.";
     private string NaturalWalkbackText => Snapshot?.NaturalWalkback.Status ?? "Natural walkback is watching.";
     private string NaturalWalkbackScoreText => Snapshot?.NaturalWalkback.Enabled == true ? $"{Snapshot.NaturalWalkback.SuspicionScore}/100" : "Off";
@@ -572,6 +643,8 @@
         ? "Home Assistant recorder history for the configured energy sensor."
         : $"{UsageHistory.Name} / {UsageHistory.EntityId}";
     private Color ConnectionColor => Snapshot?.ConnectionState == "home-assistant" ? Color.Success : Color.Error;
+    private Severity EmergencySeverity => Snapshot?.Emergency.Active == true ? Severity.Warning : Severity.Info;
+    private Severity CoolingFailureSeverity => Snapshot?.CoolingFailure.Alerting == true ? Severity.Error : Severity.Info;
     private Severity NaturalSeverity => Snapshot?.NaturalRecovery.Waiting == true
         ? Severity.Warning
         : Snapshot?.NaturalRecovery.Enabled == true ? Severity.Info : Severity.Normal;
@@ -682,7 +755,10 @@
         new("Mode", Snapshot?.HomeAssistantThermostat?.HvacMode ?? "--", "The AC must stay on cool while the defender is active."),
         new("Action", Snapshot?.HomeAssistantThermostat?.HvacAction ?? "--", "What the thermostat is doing."),
         new("Fan", Snapshot?.HomeAssistantThermostat?.FanMode ?? "--", "How the fan is blowing air."),
-        new("Cooldown", CooldownText, "A short wait before fixing again.")
+        new("Cooldown", CooldownText, "A short wait before fixing again."),
+        new("Website lock", WebsiteCommandDebounceText, "A two-minute wait that stops repeated website button taps."),
+        new("Emergency", EmergencyWaitText, "Shows if emergency quiet mode is active."),
+        new("Breaker watch", CoolingFailureWaitText, "Shows if cooling failure detection is alerting.")
     ];
 
     private IReadOnlyList<MetricItem> SummaryMetrics =>
@@ -766,6 +842,9 @@
         new("Power now", UsageValue(Usage?.Power), UsageHelp(Usage?.Power)),
         new("Energy today", UsageValue(Usage?.Energy), UsageHelp(Usage?.Energy)),
         new("Cost today", UsageValue(Usage?.Cost), UsageHelp(Usage?.Cost)),
+        new("Current bill", UsageValue(Usage?.CurrentBill), UsageHelp(Usage?.CurrentBill) ?? UsageValue(Usage?.CurrentBillStatus)),
+        new("Bill due", UsageValue(Usage?.CurrentBillDue), UsageHelp(Usage?.CurrentBillDue)),
+        new("Bill status", UsageValue(Usage?.CurrentBillStatus), UsageHelp(Usage?.CurrentBillStatus)),
         new("Usage updated", ShortTime(Usage?.UpdatedAt), "When AC Defender last read usage sensors."),
         new("24h delta", UsageHistoryValue(UsageHistory?.Delta, UsageHistory?.Unit), UsageHistoryHelp),
         new("24h max", UsageHistoryValue(UsageHistory?.Max, UsageHistory?.Unit), UsageHistoryHelp),
@@ -776,6 +855,8 @@
     private IReadOnlyList<StatusItem> PriorityStatuses =>
     [
         new("Next action", NextActionText, "This is the next thing the defender expects to do.", Severity.Info),
+        new("Mega alert", CoolingFailureText, "This warns if cool mode is demanded but cooling does not look real.", CoolingFailureSeverity),
+        new("Emergency", EmergencyText, "This says if an emergency quiet protocol is standing down corrections.", EmergencySeverity),
         new("Natural recovery", NaturalRecoveryText, "This says if comfort sync is waiting, nudging, or skipping quiet waits because it is too warm.", NaturalSeverity),
         new("Cool mode restore", CoolModeRestoreText, "This says if cool mode is waiting before it comes back.", CoolModeRestoreSeverity),
         new("Upstairs comfort", Snapshot?.Comfort.Status ?? "Waiting for upstairs readings", "This says if upstairs is making the defender help sooner.", Snapshot?.Comfort.UpstairsTooHot == true ? Severity.Error : Severity.Info),
@@ -868,6 +949,7 @@
                     RefreshSnapshot(updateInputs: !_targetDirty);
                     await RefreshUsageIfDueAsync();
                     await RefreshUsageHistoryIfDueAsync();
+                    ShowCoolingFailureSnackbarIfDue();
                     StateHasChanged();
                 });
             }
@@ -875,6 +957,28 @@
         catch (OperationCanceledException)
         {
         }
+    }
+
+    private void ShowCoolingFailureSnackbarIfDue()
+    {
+        if (Snapshot?.CoolingFailure.Alerting != true)
+        {
+            _lastCoolingFailureSnackbarAt = null;
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (_lastCoolingFailureSnackbarAt is { } last && now - last < TimeSpan.FromSeconds(60))
+        {
+            return;
+        }
+
+        _lastCoolingFailureSnackbarAt = now;
+        Snackbar.Add(Snapshot.CoolingFailure.Status, Severity.Error, options =>
+        {
+            options.RequireInteraction = true;
+            options.VisibleStateDuration = 15000;
+        });
     }
 
     private void RefreshSnapshot(bool updateInputs)
@@ -963,6 +1067,11 @@
 
     private void GenerateTarget()
     {
+        if (!TryBeginWebsiteCommand("generate target"))
+        {
+            return;
+        }
+
         Snapshot = StateStore.GenerateTarget();
         _targetInput = Snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
@@ -971,6 +1080,11 @@
 
     private void ApplyTarget()
     {
+        if (!TryBeginWebsiteCommand("set target"))
+        {
+            return;
+        }
+
         Snapshot = StateStore.SetTarget(_targetInput);
         _targetInput = Snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
@@ -995,25 +1109,36 @@
 
         if (turnOffThermostat == true)
         {
-            await TurnThermostatOff();
+            await TurnThermostatOff(bypassDebounce: true);
         }
     }
 
     private async Task RefreshReal() => await RunThermostatAction(
         () => Defender.RefreshRealThermostatAsync(CancellationToken.None),
-        "Thermostat refreshed.");
+        "Thermostat refreshed.",
+        "refresh thermostat");
 
     private async Task ForceTarget() => await RunThermostatAction(
         () => Defender.ForceTargetAsync(CancellationToken.None),
-        "Exact target sent.");
+        "Exact target sent.",
+        "force exact target");
 
     private async Task ForceBoost() => await RunThermostatAction(
         () => Defender.ForceCoolingBoostAsync(CancellationToken.None),
-        "Cooling boost sent.");
+        "Cooling boost sent.",
+        "force cooling");
 
-    private async Task TurnThermostatOff() => await RunThermostatAction(
+    private async Task RunEmergencyProtocol() => await RunThermostatAction(
+        () => Defender.ApplyEmergencyProtocolAsync(_emergencyProtocol, CancellationToken.None),
+        "Emergency protocol started.",
+        $"emergency {_emergencyProtocol}",
+        bypassDebounce: true);
+
+    private async Task TurnThermostatOff(bool bypassDebounce = false) => await RunThermostatAction(
         () => Defender.TurnThermostatOffAsync(CancellationToken.None),
-        "Thermostat turned off.");
+        "Thermostat turned off.",
+        "turn thermostat off",
+        bypassDebounce);
 
     private async Task ApplyFanMode()
     {
@@ -1025,11 +1150,30 @@
 
         await RunThermostatAction(
             () => Defender.ForceFanModeAsync(_fanMode, CancellationToken.None),
-            "Fan mode sent.");
+            "Fan mode sent.",
+            $"set fan to {_fanMode}");
     }
 
-    private async Task RunThermostatAction(Func<Task> action, string successMessage)
+    private bool TryBeginWebsiteCommand(string actionName, bool bypassDebounce = false)
     {
+        var gate = StateStore.TryBeginWebsiteCommand(actionName, bypassDebounce);
+        Snapshot = gate.Snapshot;
+        if (gate.Accepted)
+        {
+            return true;
+        }
+
+        Snackbar.Add(gate.Message, Severity.Warning);
+        return false;
+    }
+
+    private async Task RunThermostatAction(Func<Task> action, string successMessage, string actionName, bool bypassDebounce = false)
+    {
+        if (!TryBeginWebsiteCommand(actionName, bypassDebounce))
+        {
+            return;
+        }
+
         try
         {
             await action();
@@ -1043,13 +1187,60 @@
         }
     }
 
+    private void SelectTouchLog(ThermostatChangeAudit change)
+    {
+        _selectedLogTitle = $"Wall touch {DateTimeText(change.Timestamp)}";
+        _selectedLogJson = JsonSerializer.Serialize(new
+        {
+            Type = "thermostat-change",
+            Change = change,
+            Latest = BuildLogContext()
+        }, LogJsonOptions);
+    }
+
+    private void SelectEventLog(DefenderEvent item)
+    {
+        _selectedLogTitle = $"Activity {DateTimeText(item.Timestamp)}";
+        _selectedLogJson = JsonSerializer.Serialize(new
+        {
+            Type = "activity",
+            Event = item,
+            Latest = BuildLogContext()
+        }, LogJsonOptions);
+    }
+
+    private void ClearSelectedLog()
+    {
+        _selectedLogTitle = "";
+        _selectedLogJson = "";
+    }
+
+    private object BuildLogContext()
+    {
+        return new
+        {
+            Snapshot?.HomeAssistantEntityId,
+            Snapshot?.HomeAssistantThermostat,
+            Snapshot?.Weather,
+            Snapshot?.NextAction,
+            Snapshot?.LastCommand,
+            Snapshot?.Emergency,
+            Snapshot?.CoolingFailure
+        };
+    }
+
     private static string Temp(double? value) => value is null ? "--" : $"{value.Value:0.0} C";
 
     private static string UsageValue(UsageEntityReading? reading)
     {
-        if (reading?.Value is null)
+        if (reading is null)
         {
             return "--";
+        }
+
+        if (reading.Value is null)
+        {
+            return string.IsNullOrWhiteSpace(reading.State) ? "--" : reading.State;
         }
 
         return string.IsNullOrWhiteSpace(reading.Unit)
@@ -1071,9 +1262,26 @@
             : string.IsNullOrWhiteSpace(unit) ? $"{value.Value:0.###}" : $"{value.Value:0.###} {unit}";
     }
 
-    private static string ShortTime(DateTimeOffset? value) => value is null ? "--" : value.Value.ToLocalTime().ToString("HH:mm:ss");
+    private static string ShortTime(DateTimeOffset? value) => value is null ? "--" : ToTorontoTime(value.Value).ToString("HH:mm:ss");
 
-    private static string DateTimeText(DateTimeOffset value) => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    private static string DateTimeText(DateTimeOffset value) => ToTorontoTime(value).ToString("yyyy-MM-dd HH:mm:ss");
+
+    private static DateTimeOffset ToTorontoTime(DateTimeOffset value)
+    {
+        return TimeZoneInfo.ConvertTime(value, TorontoTimeZone);
+    }
+
+    private static TimeZoneInfo ResolveTorontoTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("America/Toronto");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        }
+    }
 
     private static string SensorValue(TemperatureSensorReading sensor)
     {

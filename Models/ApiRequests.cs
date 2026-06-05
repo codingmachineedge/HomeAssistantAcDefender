@@ -6,6 +6,8 @@ public sealed record DefenderEnabledRequest(bool Enabled);
 
 public sealed record FanModeRequest(string FanMode);
 
+public sealed record EmergencyProtocolRequest(string Protocol);
+
 public sealed record SettingsRequest(
     bool ScheduleEnabled,
     string WeatherActivationMode,

@@ -29,7 +29,12 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Comfort Memory so repeated safe wall choices can teach a small time-of-day bias that expires automatically.
 - Adds Touch Intent so clear warmer wall-choice patterns can get extra safe grace instead of an obvious immediate fight-back.
 - Adds Cooler Intent Fast Lane so repeated cooler wall choices can skip quiet waits and cool sooner without changing the website target.
+- Adds a two-minute website command debounce so fast button tapping does not spam Home Assistant.
+- Adds emergency protocols for too-cold, someone-upset, and suspicion quiet situations.
+- Adds a repeated mega alert when cool mode is demanded but the thermostat stays idle or cooling does not lower room temperature.
 - Shows the next defender action in a live status label.
+- Shows clickable log details with JSON context for wall touches and defender events.
+- Supports persisted light/dark theme selection and Toronto 24-hour timestamps.
 - Supports a custom schedule for target temperatures.
 - Supports weather-based activation rules.
 - Prioritizes upstairs comfort when upstairs temperature sensors report hot rooms.
@@ -61,15 +66,18 @@ HomeAssistant__OutdoorTemperatureEntityId=sensor.outdoor_temperature
 HomeAssistant__UsagePowerEntityId=sensor.alectra_hui_current_power
 HomeAssistant__UsageEnergyEntityId=sensor.alectra_hui_energy_today
 HomeAssistant__UsageCostEntityId=sensor.alectra_hui_cost_today
+HomeAssistant__UsageCurrentBillEntityId=sensor.alectra_hui_current_bill
+HomeAssistant__UsageCurrentBillDueEntityId=sensor.alectra_hui_current_bill_due
+HomeAssistant__UsageCurrentBillStatusEntityId=sensor.alectra_hui_current_bill_status
 HomeAssistant__Username=optional-bookkeeping-only
 HomeAssistant__Password=optional-bookkeeping-only
 ```
 
 If `HomeAssistant__WeatherEntityId` is blank, the app discovers the first `weather.*` entity. If no weather entity exists, `HomeAssistant__OutdoorTemperatureEntityId` can provide only outdoor temperature.
 
-The usage entities are optional Home Assistant sensor IDs. `UsagePowerEntityId` is shown as current live power, `UsageEnergyEntityId` is used for daily energy and default history, and `UsageCostEntityId` is shown as current daily cost when available. Historical usage uses Home Assistant recorder history from `api/history/period`, so the entity must be recorded by Home Assistant.
+The usage entities are optional Home Assistant sensor IDs. `UsagePowerEntityId` is shown as current live power, `UsageEnergyEntityId` is used for daily energy and default history, `UsageCostEntityId` is shown as current daily cost, and the bill entity IDs show the current bill amount, due date, and bill fetch status when available. Historical usage uses Home Assistant recorder history from `api/history/period`, so the entity must be recorded by Home Assistant.
 
-For Alectra readings, install the Alectra Hui Home Assistant integration first. It creates `sensor.alectra_hui_current_power`, `sensor.alectra_hui_energy_today`, and `sensor.alectra_hui_cost_today`; AC Defender only reads those entities after Home Assistant has created them.
+For Alectra readings, install the Alectra Hui Home Assistant integration or run the Windows publisher first. It creates `sensor.alectra_hui_current_power`, `sensor.alectra_hui_energy_today`, `sensor.alectra_hui_cost_today`, and the `sensor.alectra_hui_current_bill*` bill entities; AC Defender only reads those entities after Home Assistant has created them.
 
 ## Defender Logic
 
@@ -104,6 +112,12 @@ Every cycle:
 27. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
+
+Website command debounce is a separate two-minute guard around manual website actions such as target changes, force cooling, fan changes, refresh, and emergency controls. The first click is accepted, later clicks show the remaining wait instead of sending repeated Home Assistant calls. Emergency protocols bypass any active debounce so urgent action can still run, then start a fresh debounce window.
+
+Cooling failure watch reads only real Home Assistant data. It raises a repeated mega alert when the climate entity is in `cool`, room temperature is clearly above the setpoint, and `hvac_action` stays idle for several minutes. It also watches for the fallback case where `hvac_action` says cooling but the room does not drop over the retained sample window.
+
+Emergency protocols are real controls on the dashboard. `Too cold` pauses the defender and turns the thermostat off through Home Assistant. `Someone upset` and `Suspicion quiet` start observe-only windows where the worker keeps reading the thermostat 24/7 but does not send corrective thermostat commands until the quiet window ends.
 
 ## Cool Mode Restore
 

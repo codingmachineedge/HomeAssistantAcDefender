@@ -69,6 +69,9 @@ public static class CliCommands
             await TryGetUsageEntityAsync(httpClient, options.PowerEntityId),
             await TryGetUsageEntityAsync(httpClient, options.EnergyEntityId),
             await TryGetUsageEntityAsync(httpClient, options.CostEntityId),
+            await TryGetUsageEntityAsync(httpClient, options.CurrentBillEntityId),
+            await TryGetUsageEntityAsync(httpClient, options.CurrentBillDueEntityId),
+            await TryGetUsageEntityAsync(httpClient, options.CurrentBillStatusEntityId),
             true,
             DateTimeOffset.UtcNow);
 
@@ -82,6 +85,9 @@ public static class CliCommands
         PrintReading("Power", snapshot.Power);
         PrintReading("Energy", snapshot.Energy);
         PrintReading("Cost", snapshot.Cost);
+        PrintReading("Current bill", snapshot.CurrentBill);
+        PrintReading("Bill due", snapshot.CurrentBillDue);
+        PrintReading("Bill status", snapshot.CurrentBillStatus);
     }
 
     private static async Task PrintUsageHistoryAsync(HttpClient httpClient, CliUsageOptions options)
@@ -328,6 +334,9 @@ Options:
   --power ENTITY     Overrides HomeAssistant__UsagePowerEntityId for usage-live.
   --energy ENTITY    Overrides HomeAssistant__UsageEnergyEntityId.
   --cost ENTITY      Overrides HomeAssistant__UsageCostEntityId for usage-live.
+  --bill ENTITY      Overrides HomeAssistant__UsageCurrentBillEntityId for usage-live.
+  --bill-due ENTITY  Overrides HomeAssistant__UsageCurrentBillDueEntityId.
+  --bill-status ENTITY Overrides HomeAssistant__UsageCurrentBillStatusEntityId.
   --entity ENTITY    Entity used by usage-history. Defaults to UsageEnergyEntityId.
   --hours NUMBER     History window ending now. Defaults to 24.
 """);
@@ -339,6 +348,9 @@ Options:
         string PowerEntityId,
         string EnergyEntityId,
         string CostEntityId,
+        string CurrentBillEntityId,
+        string CurrentBillDueEntityId,
+        string CurrentBillStatusEntityId,
         string? HistoryEntityId,
         DateTimeOffset From,
         DateTimeOffset To,
@@ -356,6 +368,9 @@ Options:
                 TryGetValue(args, "--power") ?? configuration["HomeAssistant:UsagePowerEntityId"] ?? "sensor.alectra_hui_current_power",
                 TryGetValue(args, "--energy") ?? configuration["HomeAssistant:UsageEnergyEntityId"] ?? "sensor.alectra_hui_energy_today",
                 TryGetValue(args, "--cost") ?? configuration["HomeAssistant:UsageCostEntityId"] ?? "sensor.alectra_hui_cost_today",
+                TryGetValue(args, "--bill") ?? configuration["HomeAssistant:UsageCurrentBillEntityId"] ?? "sensor.alectra_hui_current_bill",
+                TryGetValue(args, "--bill-due") ?? configuration["HomeAssistant:UsageCurrentBillDueEntityId"] ?? "sensor.alectra_hui_current_bill_due",
+                TryGetValue(args, "--bill-status") ?? configuration["HomeAssistant:UsageCurrentBillStatusEntityId"] ?? "sensor.alectra_hui_current_bill_status",
                 TryGetValue(args, "--entity"),
                 from,
                 to,

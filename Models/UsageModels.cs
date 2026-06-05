@@ -12,6 +12,9 @@ public sealed record UsageLiveSnapshot(
     UsageEntityReading? Power,
     UsageEntityReading? Energy,
     UsageEntityReading? Cost,
+    UsageEntityReading? CurrentBill,
+    UsageEntityReading? CurrentBillDue,
+    UsageEntityReading? CurrentBillStatus,
     bool HomeAssistantConfigured,
     DateTimeOffset UpdatedAt);
 

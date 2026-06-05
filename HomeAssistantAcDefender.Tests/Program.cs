@@ -13,6 +13,9 @@ tests.ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom();
 tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
+tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
+tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
+tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
 tests.CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches();
 tests.WeatherDriftWaitsOnlyForSafeStableOutdoorConditions();
@@ -279,6 +282,95 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.RepeatCommand.Holding)
         {
             throw new InvalidOperationException("Repeat Quiet should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+
+        var first = store.TryBeginWebsiteCommand("force cooling");
+        if (!first.Accepted)
+        {
+            throw new InvalidOperationException("First website command should be accepted.");
+        }
+
+        if (!first.Snapshot.WebsiteCommandDebounce.Active
+            || first.Snapshot.WebsiteCommandDebounce.SecondsRemaining < 110
+            || first.Snapshot.WebsiteCommandDebounce.DebounceSeconds != 120)
+        {
+            throw new InvalidOperationException("First website command should start a two-minute debounce countdown.");
+        }
+
+        var second = store.TryBeginWebsiteCommand("force exact target");
+        if (second.Accepted)
+        {
+            throw new InvalidOperationException("Second rapid website command should be blocked.");
+        }
+
+        if (!second.Snapshot.WebsiteCommandDebounce.Active
+            || !second.Message.Contains("wait", StringComparison.OrdinalIgnoreCase)
+            || second.Snapshot.WebsiteCommandDebounce.LastCommand != "force cooling")
+        {
+            throw new InvalidOperationException("Blocked website command should report the active debounce and previous command.");
+        }
+
+        SetRuntimeProperty(store, "WebsiteCommandDebounceUntil", DateTimeOffset.UtcNow.AddSeconds(-1));
+        var afterExpiry = store.TryBeginWebsiteCommand("refresh thermostat");
+        if (!afterExpiry.Accepted)
+        {
+            throw new InvalidOperationException("Website debounce should reopen after its expiry time.");
+        }
+    }
+
+    public void CoolingFailureAlertsWhenCoolingDemandStaysIdle()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        var reading = new ThermostatReading(
+            "climate.dining_room",
+            24.0,
+            22.0,
+            "cool",
+            "idle",
+            null,
+            []);
+
+        store.RecordHomeAssistantReading(reading);
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-7));
+        var snapshot = store.RecordHomeAssistantReading(reading);
+        if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Cooling failure should mega-alert when cooling demand stays idle.");
+        }
+
+        snapshot = store.RecordHomeAssistantReading(reading with { HvacAction = "cooling", CurrentTemperatureCelsius = 23.6 });
+        if (snapshot.CoolingFailure.Alerting)
+        {
+            throw new InvalidOperationException("Cooling failure should clear after Home Assistant reports cooling and room temperature improves.");
+        }
+    }
+
+    public void EmergencyQuietPausesCorrectionsButKeepsStatus()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        var snapshot = store.ActivateEmergencyQuiet(
+            "Suspicion quiet",
+            TimeSpan.FromMinutes(15),
+            "Suspicion quiet mode active; observing only.",
+            pauseDefender: false);
+
+        if (!snapshot.Emergency.Active || snapshot.Emergency.SecondsRemaining <= 0)
+        {
+            throw new InvalidOperationException("Emergency quiet should be visible in the snapshot.");
+        }
+
+        var respected = store.TryRespectEmergencyQuiet(DateTimeOffset.UtcNow, out var waitUntil, out var message);
+        if (!respected || waitUntil <= DateTimeOffset.UtcNow || !message.Contains("Suspicion", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Emergency quiet should ask the worker to stand down while it is active.");
         }
     }
 
@@ -555,10 +647,15 @@ internal sealed class DefenderSetPointRegressionTests
 
     private static void SeedPendingCommandAt(DefenderStateStore store, DateTimeOffset pendingAt)
     {
+        SetRuntimeProperty(store, "PendingCommandAt", pendingAt);
+    }
+
+    private static void SetRuntimeProperty(DefenderStateStore store, string propertyName, object? value)
+    {
         var state = GetRuntimeState(store);
-        var pendingAtProperty = state.GetType().GetProperty("PendingCommandAt")
-            ?? throw new InvalidOperationException("Could not find PendingCommandAt state property.");
-        pendingAtProperty.SetValue(state, pendingAt);
+        var property = state.GetType().GetProperty(propertyName)
+            ?? throw new InvalidOperationException($"Could not find {propertyName} state property.");
+        property.SetValue(state, value);
     }
 
     private static object GetRuntimeState(DefenderStateStore store)

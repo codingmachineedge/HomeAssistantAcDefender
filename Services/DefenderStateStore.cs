@@ -8,6 +8,13 @@ namespace HomeAssistantAcDefender.Services;
 
 public sealed class DefenderStateStore
 {
+    private const int WebsiteCommandDebounceSeconds = 120;
+    private const int CoolingFailureIdleSeconds = 360;
+    private const int CoolingFailureNoDropSeconds = 1200;
+    private const int CoolingFailureRepeatAlertSeconds = 60;
+    private const double CoolingFailureDemandBandCelsius = 0.6;
+    private const double CoolingFailureMinimumDropCelsius = 0.2;
+
     private readonly object gate = new();
     private readonly DefenderOptions options;
     private readonly ILogger<DefenderStateStore> logger;
@@ -336,6 +343,7 @@ public sealed class DefenderStateStore
                 UpdatedAt = now
             };
             TrackCoolingRunway(reading, previousHvacAction, now);
+            UpdateCoolingFailureDetection(reading, now);
             state.LastObservedSetPointCelsius = reading.SetPointCelsius;
             if (string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
             {
@@ -417,6 +425,95 @@ public sealed class DefenderStateStore
         {
             cooldownUntil = state.CooldownUntil ?? DateTimeOffset.MinValue;
             return state.CooldownUntil is { } until && until > now;
+        }
+    }
+
+    public WebsiteCommandGateResult TryBeginWebsiteCommand(string commandName, bool bypassDebounce = false)
+    {
+        lock (gate)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var cleanName = string.IsNullOrWhiteSpace(commandName)
+                ? "website command"
+                : commandName.Trim();
+
+            if (!bypassDebounce
+                && state.WebsiteCommandDebounceUntil is { } activeUntil
+                && activeUntil > now)
+            {
+                var waitSeconds = (int)Math.Ceiling((activeUntil - now).TotalSeconds);
+                var previousCommand = string.IsNullOrWhiteSpace(state.LastWebsiteCommandName)
+                    ? "the last website command"
+                    : state.LastWebsiteCommandName;
+                var blockedMessage = $"Website debounce is active after {previousCommand}; wait {waitSeconds}s before {cleanName}.";
+                state.WebsiteCommandDebounceStatus = blockedMessage;
+                state.UpdatedAt = now;
+                SaveState();
+                return new WebsiteCommandGateResult(false, blockedMessage, CreateSnapshot());
+            }
+
+            var debounceUntil = now.AddSeconds(WebsiteCommandDebounceSeconds);
+            state.LastWebsiteCommandName = cleanName;
+            state.LastWebsiteCommandAt = now;
+            state.WebsiteCommandDebounceUntil = debounceUntil;
+            state.WebsiteCommandDebounceStatus = $"Website accepted {cleanName}; controls rest until {debounceUntil.ToLocalTime():HH:mm:ss}.";
+            state.UpdatedAt = now;
+            AddEvent("info", $"Website command accepted: {cleanName}. Debounce active for {WebsiteCommandDebounceSeconds} seconds.");
+            SaveState();
+            return new WebsiteCommandGateResult(true, state.WebsiteCommandDebounceStatus, CreateSnapshot());
+        }
+    }
+
+    public DefenderSnapshot ActivateEmergencyQuiet(string protocol, TimeSpan duration, string status, bool pauseDefender)
+    {
+        lock (gate)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var cleanProtocol = string.IsNullOrWhiteSpace(protocol) ? "Emergency quiet" : protocol.Trim();
+            state.EmergencyProtocol = cleanProtocol;
+            state.EmergencyQuietUntil = now.Add(duration <= TimeSpan.Zero ? TimeSpan.FromMinutes(30) : duration);
+            state.EmergencyStatus = status;
+            if (pauseDefender)
+            {
+                state.DefenderEnabled = false;
+            }
+
+            state.NextAction = status;
+            state.NextActionAt = state.EmergencyQuietUntil;
+            state.UpdatedAt = now;
+            AddEvent("warning", $"{cleanProtocol}: {status}");
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    public bool TryRespectEmergencyQuiet(DateTimeOffset now, out DateTimeOffset waitUntil, out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (state.EmergencyQuietUntil is not { } until)
+            {
+                state.EmergencyStatus = "No emergency quiet mode active.";
+                return false;
+            }
+
+            if (until <= now)
+            {
+                ClearEmergencyQuiet("Emergency quiet ended; normal defender rules can resume.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = until;
+            message = string.IsNullOrWhiteSpace(state.EmergencyStatus)
+                ? $"Emergency quiet is active until {until.ToLocalTime():HH:mm:ss}; still reading the real thermostat."
+                : state.EmergencyStatus;
+            state.EmergencyStatus = message;
+            SaveState();
+            return true;
         }
     }
 
@@ -2763,6 +2860,69 @@ public sealed class DefenderStateStore
         state.CoolingRunwayStartedAt ??= now;
     }
 
+    private void UpdateCoolingFailureDetection(ThermostatReading reading, DateTimeOffset now)
+    {
+        if (!CoolingIsDemanded(reading))
+        {
+            ClearCoolingFailure("Cooling failure watch is ready.");
+            return;
+        }
+
+        state.CoolingDemandStartedAt ??= now;
+        if (!IsCoolingAction(reading.HvacAction))
+        {
+            state.CoolingFailureSuspectedAt ??= now;
+            var seconds = (int)Math.Ceiling((now - state.CoolingFailureSuspectedAt.Value).TotalSeconds);
+            if (seconds >= CoolingFailureIdleSeconds)
+            {
+                RaiseCoolingFailure(
+                    now,
+                    $"MEGA ALERT: Cooling is demanded but Home Assistant still reports '{reading.HvacAction}' after {seconds}s. Breaker or equipment failure may be possible.");
+                return;
+            }
+
+            state.CoolingFailureStatus = $"Cooling demand is active but action is '{reading.HvacAction}'; mega alert arms in {CoolingFailureIdleSeconds - seconds}s if it stays idle.";
+            return;
+        }
+
+        var oldSample = state.RoomTemperatureSamples
+            .Where(sample => now - sample.Timestamp >= TimeSpan.FromSeconds(CoolingFailureNoDropSeconds))
+            .OrderByDescending(sample => sample.Timestamp)
+            .FirstOrDefault();
+        if (oldSample is not null)
+        {
+            var drop = oldSample.TemperatureCelsius - reading.CurrentTemperatureCelsius;
+            if (drop < CoolingFailureMinimumDropCelsius)
+            {
+                RaiseCoolingFailure(
+                    now,
+                    $"MEGA ALERT: Thermostat says cooling, but room temperature only changed {drop:0.0} C in {CoolingFailureNoDropSeconds / 60} minutes. Breaker, compressor, or airflow failure may be possible.");
+                return;
+            }
+        }
+
+        ClearCoolingFailure("Cooling is demanded and Home Assistant reports cooling; watching for room temperature drop.");
+    }
+
+    private bool CoolingIsDemanded(ThermostatReading reading)
+    {
+        return string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase)
+            && reading.CurrentTemperatureCelsius >= reading.SetPointCelsius + CoolingFailureDemandBandCelsius;
+    }
+
+    private void RaiseCoolingFailure(DateTimeOffset now, string message)
+    {
+        var firstAlert = state.CoolingFailureSuspectedAt is null;
+        state.CoolingFailureSuspectedAt ??= now;
+        state.CoolingFailureStatus = message;
+        if (firstAlert || state.CoolingFailureNextAlertAt is null || state.CoolingFailureNextAlertAt <= now)
+        {
+            state.CoolingFailureAlertCount++;
+            state.CoolingFailureNextAlertAt = now.AddSeconds(CoolingFailureRepeatAlertSeconds);
+            AddEvent("error", message);
+        }
+    }
+
     private static bool IsCoolingAction(string? hvacAction)
     {
         return (hvacAction ?? string.Empty).Trim().ToLowerInvariant() is "cooling" or "cool";
@@ -2911,7 +3071,9 @@ public sealed class DefenderStateStore
 
     private void PruneRoomTemperatureSamples(DateTimeOffset now)
     {
-        var window = TimeSpan.FromMinutes(Math.Max(2, state.Settings.RoomTrendWindowMinutes));
+        var window = TimeSpan.FromSeconds(Math.Max(
+            CoolingFailureNoDropSeconds + 60,
+            Math.Max(2, state.Settings.RoomTrendWindowMinutes) * 60));
         state.RoomTemperatureSamples.RemoveAll(item => now - item.Timestamp > window);
         if (state.RoomTemperatureSamples.Count > 300)
         {
@@ -3627,6 +3789,29 @@ public sealed class DefenderStateStore
             saved.WeatherDriftHoldUntil = null;
             saved.WeatherDriftStatus = "Weather drift guard is watching.";
         }
+        saved.EmergencyProtocol = string.IsNullOrWhiteSpace(saved.EmergencyProtocol)
+            ? "None"
+            : saved.EmergencyProtocol;
+        saved.EmergencyStatus = string.IsNullOrWhiteSpace(saved.EmergencyStatus)
+            ? "No emergency quiet mode active."
+            : saved.EmergencyStatus;
+        if (saved.EmergencyQuietUntil is { } emergencyUntil && emergencyUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.EmergencyQuietUntil = null;
+            saved.EmergencyProtocol = "None";
+            saved.EmergencyStatus = "Emergency quiet ended; normal defender rules can resume.";
+        }
+        saved.CoolingFailureStatus = string.IsNullOrWhiteSpace(saved.CoolingFailureStatus)
+            ? "Cooling failure watch is ready."
+            : saved.CoolingFailureStatus;
+        saved.WebsiteCommandDebounceStatus = string.IsNullOrWhiteSpace(saved.WebsiteCommandDebounceStatus)
+            ? "Website controls are ready."
+            : saved.WebsiteCommandDebounceStatus;
+        if (saved.WebsiteCommandDebounceUntil is { } websiteCommandUntil && websiteCommandUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.WebsiteCommandDebounceUntil = null;
+            saved.WebsiteCommandDebounceStatus = "Website controls are ready.";
+        }
         saved.ComfortStatus = string.IsNullOrWhiteSpace(saved.ComfortStatus)
             ? "Waiting for upstairs comfort readings."
             : saved.ComfortStatus;
@@ -3641,6 +3826,21 @@ public sealed class DefenderStateStore
         var cooldownSeconds = state.CooldownUntil is { } cooldownUntil && cooldownUntil > now
             ? (int)Math.Ceiling((cooldownUntil - now).TotalSeconds)
             : 0;
+        var websiteCommandDebounceSeconds = state.WebsiteCommandDebounceUntil is { } websiteCommandUntil && websiteCommandUntil > now
+            ? (int)Math.Ceiling((websiteCommandUntil - now).TotalSeconds)
+            : 0;
+        if (websiteCommandDebounceSeconds == 0 && state.WebsiteCommandDebounceUntil is not null)
+        {
+            state.WebsiteCommandDebounceUntil = null;
+            state.WebsiteCommandDebounceStatus = "Website controls are ready.";
+        }
+        var emergencySeconds = state.EmergencyQuietUntil is { } emergencyUntil && emergencyUntil > now
+            ? (int)Math.Ceiling((emergencyUntil - now).TotalSeconds)
+            : 0;
+        if (emergencySeconds == 0 && state.EmergencyQuietUntil is not null)
+        {
+            ClearEmergencyQuiet("Emergency quiet ended; normal defender rules can resume.");
+        }
         var holdSeconds = state.NaturalHoldUntil is { } holdUntil && holdUntil > now
             ? (int)Math.Ceiling((holdUntil - now).TotalSeconds)
             : 0;
@@ -3675,6 +3875,11 @@ public sealed class DefenderStateStore
             : 0;
         var weatherDriftSeconds = state.WeatherDriftHoldUntil is { } weatherDriftUntil && weatherDriftUntil > now
             ? (int)Math.Ceiling((weatherDriftUntil - now).TotalSeconds)
+            : 0;
+        var coolingFailureAlerting = state.CoolingFailureSuspectedAt is not null
+            && state.CoolingFailureStatus.StartsWith("MEGA ALERT", StringComparison.OrdinalIgnoreCase);
+        var coolingFailureSeconds = coolingFailureAlerting && state.CoolingFailureSuspectedAt is { } failureSince
+            ? (int)Math.Ceiling((now - failureSince).TotalSeconds)
             : 0;
         var sensorRhythmSeconds = state.SensorRhythmDueAt is { } sensorRhythmDueAt && sensorRhythmDueAt > now
             ? (int)Math.Ceiling((sensorRhythmDueAt - now).TotalSeconds)
@@ -3757,6 +3962,23 @@ public sealed class DefenderStateStore
             state.NextAction,
             state.NextActionAt,
             cooldownSeconds,
+            new WebsiteCommandDebounceSnapshot(
+                websiteCommandDebounceSeconds > 0,
+                websiteCommandDebounceSeconds,
+                WebsiteCommandDebounceSeconds,
+                string.IsNullOrWhiteSpace(state.WebsiteCommandDebounceStatus)
+                    ? "Website controls are ready."
+                    : state.WebsiteCommandDebounceStatus,
+                state.LastWebsiteCommandName,
+                websiteCommandDebounceSeconds > 0 ? state.WebsiteCommandDebounceUntil : null),
+            new EmergencySnapshot(
+                emergencySeconds > 0,
+                emergencySeconds,
+                string.IsNullOrWhiteSpace(state.EmergencyProtocol) ? "None" : state.EmergencyProtocol,
+                string.IsNullOrWhiteSpace(state.EmergencyStatus)
+                    ? "No emergency quiet mode active."
+                    : state.EmergencyStatus,
+                emergencySeconds > 0 ? state.EmergencyQuietUntil : null),
             new CoolModeRestoreSnapshot(
                 state.Settings.CoolModeRestoreDelayEnabled,
                 coolModeRestoreSeconds > 0,
@@ -3971,6 +4193,16 @@ public sealed class DefenderStateStore
                     ? "Weather drift guard is watching."
                     : state.WeatherDriftStatus,
                 weatherDriftSeconds > 0 ? state.WeatherDriftHoldUntil : null),
+            new CoolingFailureSnapshot(
+                true,
+                coolingFailureAlerting,
+                coolingFailureSeconds,
+                state.CoolingFailureAlertCount,
+                string.IsNullOrWhiteSpace(state.CoolingFailureStatus)
+                    ? "Cooling failure watch is ready."
+                    : state.CoolingFailureStatus,
+                coolingFailureAlerting ? state.CoolingFailureSuspectedAt : null,
+                coolingFailureAlerting ? state.CoolingFailureNextAlertAt : null),
             new ComfortSnapshot(
                 state.Settings.UpstairsComfortEnabled,
                 state.Settings.HomePresenceRequired,
@@ -4087,6 +4319,21 @@ public sealed class DefenderStateStore
     {
         state.CoolingRunwayHoldUntil = null;
         state.CoolingRunwayStatus = status;
+    }
+
+    private void ClearEmergencyQuiet(string status)
+    {
+        state.EmergencyQuietUntil = null;
+        state.EmergencyProtocol = "None";
+        state.EmergencyStatus = status;
+    }
+
+    private void ClearCoolingFailure(string status)
+    {
+        state.CoolingDemandStartedAt = null;
+        state.CoolingFailureSuspectedAt = null;
+        state.CoolingFailureNextAlertAt = null;
+        state.CoolingFailureStatus = status;
     }
 
     private void ClearVisibilityGuard(string status)
@@ -4457,6 +4704,20 @@ public sealed class DefenderStateStore
 
         public DateTimeOffset? PendingCommandAt { get; set; }
 
+        public DateTimeOffset? WebsiteCommandDebounceUntil { get; set; }
+
+        public DateTimeOffset? LastWebsiteCommandAt { get; set; }
+
+        public string? LastWebsiteCommandName { get; set; }
+
+        public string WebsiteCommandDebounceStatus { get; set; } = "Website controls are ready.";
+
+        public DateTimeOffset? EmergencyQuietUntil { get; set; }
+
+        public string EmergencyProtocol { get; set; } = "None";
+
+        public string EmergencyStatus { get; set; } = "No emergency quiet mode active.";
+
         public DateTimeOffset? CooldownUntil { get; set; }
 
         public DateTimeOffset? NaturalHoldUntil { get; set; }
@@ -4552,6 +4813,16 @@ public sealed class DefenderStateStore
         public DateTimeOffset? CoolingRunwayHoldUntil { get; set; }
 
         public string CoolingRunwayStatus { get; set; } = "Cooling runway is watching for a fresh cooling start.";
+
+        public DateTimeOffset? CoolingDemandStartedAt { get; set; }
+
+        public DateTimeOffset? CoolingFailureSuspectedAt { get; set; }
+
+        public DateTimeOffset? CoolingFailureNextAlertAt { get; set; }
+
+        public int CoolingFailureAlertCount { get; set; }
+
+        public string CoolingFailureStatus { get; set; } = "Cooling failure watch is ready.";
 
         public DateTimeOffset? RoomTrendHoldUntil { get; set; }
 

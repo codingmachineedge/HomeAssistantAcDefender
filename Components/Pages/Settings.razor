@@ -42,7 +42,13 @@
             <MudStack Row="true" Spacing="1" Class="wrap-gap mt-2">
                 @foreach (var result in SettingsSearchResults)
                 {
-                    <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined">@result</MudChip>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               OnClick="@(() => OpenSettingsGroup(result))"
+                               StartIcon="@Icons.Material.Filled.Search">
+                        @($"{result.Tab}: {result.Name}")
+                    </MudButton>
                 }
                 @if (!SettingsSearchResults.Any())
                 {
@@ -52,7 +58,7 @@
         }
     </MudPaper>
 
-    <MudTabs Class="app-tabs" Elevation="0" Rounded="true">
+    <MudTabs Class="app-tabs" Elevation="0" Rounded="true" @bind-ActivePanelIndex="_activeSettingsTab">
         <MudTabPanel Text="Automation">
             <MudGrid Spacing="3">
         <MudItem xs="12" md="6">
@@ -1660,18 +1666,20 @@
         ("outdoor-above-target", "Outdoor above target"),
         ("outdoor-below-target", "Outdoor below target")
     ];
+    private static readonly TimeZoneInfo TorontoTimeZone = ResolveTorontoTimeZone();
     private static readonly SettingsGroup[] SettingGroups =
     [
-        new("Automation", "Schedule and weather", "Time rules, weather activation, cooldown, cool restore, conflict quiet, and weather drift."),
-        new("Recovery", "Quiet recovery", "Adaptive waits, nudge size, command gaps, safe bands, walkback, and hold chance."),
-        new("Wall Touch", "Touch behavior", "Wall settling, touch signature, visibility guard, routine timing, budget, cadence, compromise, memory, manual grace, and intent."),
-        new("Sensor Timing", "Sensor timing", "Setpoint echo, repeat command, Home Assistant sensor rhythm, cooling runway, room trend, and thermal momentum."),
-        new("Comfort", "Fan saver", "Fan mode and near-target energy saver."),
-        new("Comfort", "Upstairs comfort", "Upstairs temperature sensors, too-hot threshold, comfort target, boost, and presence rules."),
-        new("Schedule", "Custom schedule", "Add, remove, search, and edit target temperature schedule rules.")
+        new(0, "Automation", "Schedule and weather", "Time rules, weather activation, cooldown, cool restore, conflict quiet, and weather drift."),
+        new(1, "Recovery", "Quiet recovery", "Adaptive waits, nudge size, command gaps, safe bands, walkback, and hold chance."),
+        new(2, "Wall Touch", "Touch behavior", "Wall settling, touch signature, visibility guard, routine timing, budget, cadence, compromise, memory, manual grace, and intent."),
+        new(3, "Sensor Timing", "Sensor timing", "Setpoint echo, repeat command, Home Assistant sensor rhythm, cooling runway, room trend, and thermal momentum."),
+        new(4, "Comfort", "Fan saver", "Fan mode and near-target energy saver."),
+        new(4, "Comfort", "Upstairs comfort", "Upstairs temperature sensors, too-hot threshold, comfort target, boost, and presence rules."),
+        new(5, "Schedule", "Custom schedule", "Add, remove, search, and edit target temperature schedule rules.")
     ];
 
     private string _settingsSearch = "";
+    private int _activeSettingsTab;
     private bool _scheduleEnabled;
     private string _weatherActivationMode = "always";
     private int _baseCooldownSeconds = 45;
@@ -1813,10 +1821,10 @@
         ? "Unsaved changes"
         : string.IsNullOrWhiteSpace(_settingsStatus) ? "No changes saved yet" : _settingsStatus;
 
-    private IEnumerable<string> SettingsSearchResults =>
+    private IEnumerable<SettingsGroup> SettingsSearchResults =>
         SettingGroups
             .Where(group => MatchesSettingsSearch(_settingsSearch, group.Tab, group.Name, group.Description))
-            .Select(group => $"{group.Tab}: {group.Name}");
+            .ToArray();
 
     private IEnumerable<ScheduleEntry> FilteredSchedule =>
         _schedule.Where(entry => MatchesSettingsSearch(
@@ -2021,6 +2029,12 @@
         _dirty = true;
     }
 
+    private void OpenSettingsGroup(SettingsGroup group)
+    {
+        _activeSettingsTab = group.TabIndex;
+        Snackbar.Add($"Opened {group.Tab}: {group.Name}.", Severity.Info);
+    }
+
     private Variant DayVariant(ScheduleEntry entry, string day)
     {
         return DaySet(entry).Contains(day) ? Variant.Filled : Variant.Outlined;
@@ -2170,8 +2184,25 @@
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);
-        _settingsStatus = $"Saved {DateTime.Now:HH:mm:ss}";
+        _settingsStatus = $"Saved {TorontoNow():HH:mm:ss}";
         Snackbar.Add("Settings saved.", Severity.Success);
+    }
+
+    private static DateTimeOffset TorontoNow()
+    {
+        return TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TorontoTimeZone);
+    }
+
+    private static TimeZoneInfo ResolveTorontoTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("America/Toronto");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        }
     }
 
     private static HashSet<string> DaySet(ScheduleEntry entry)
@@ -2212,5 +2243,5 @@
             || terms.All(term => values.Any(value => value.Contains(term, StringComparison.OrdinalIgnoreCase)));
     }
 
-    private sealed record SettingsGroup(string Tab, string Name, string Description);
+    private sealed record SettingsGroup(int TabIndex, string Tab, string Name, string Description);
 }
