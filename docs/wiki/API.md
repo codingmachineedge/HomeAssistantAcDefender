@@ -17,6 +17,7 @@ The status snapshot includes:
 - `naturalRecovery`: quiet recovery status, quiet level, wait seconds, recent touch count, base/effective nudge size, base/effective hold chance, and effective command gap.
 - `naturalWalkback`: safe-band walkback status, active flag, touch score, and current walkback step.
 - `routineTiming`: safe correction rhythm status, wait seconds, interval, jitter, and due time.
+- `comfortBudget`: safe correction budget status, wait seconds, recent command count, max commands, and due time.
 - `comfortCompromise`: temporary blended target status, preferred wall setpoint, effective target, remaining seconds, and expiry time.
 - `comfortMemory`: learned time-window status, active flag, sample count, learned offset, and effective target.
 - `conflictQuiet`: repeated-touch stand-down status, remaining seconds, trigger touch count, comfort band, and expiry time.

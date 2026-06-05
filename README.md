@@ -20,6 +20,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Thermal Momentum so the defender can wait when the room is already cooling fast enough to reach target soon.
 - Adds Natural Walkback so safe-band recovery moves get smaller and less predictable after repeated wall thermostat touches.
 - Adds Routine Timing so safe corrections after repeated touches wait for normal-looking comfort-check intervals.
+- Adds Comfort Budget so repeated safe corrections can rest before another adjustment.
 - Adds Comfort Compromise so repeated wall choices can influence a temporary safe target that fades back naturally.
 - Adds Comfort Memory so repeated safe wall choices can teach a small time-of-day bias that expires automatically.
 - Shows the next defender action in a live status label.
@@ -74,11 +75,12 @@ Every cycle:
 13. Apply Comfort Sync quiet recovery timing unless the room or upstairs is too warm.
 14. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
 15. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
-16. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-17. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-18. Optionally set fan saver mode when near target.
-19. Correct the thermostat setpoint when it does not match the defender decision.
-20. Update the real-time dashboard status.
+16. Respect Comfort Budget when too many safe adjustments happened recently.
+17. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+18. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+19. Optionally set fan saver mode when near target.
+20. Correct the thermostat setpoint when it does not match the defender decision.
+21. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -143,6 +145,10 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `RoutineTimingJitterMinutes`: small extra random wait added to the rhythm.
 - `RoutineTimingMaxDelayMinutes`: longest safe routine timing hold.
 - `RoutineTimingSafetyBandCelsius`: extra room warmth allowed before routine timing stops waiting.
+- `ComfortBudgetEnabled`: limits repeated safe corrections inside a rolling window.
+- `ComfortBudgetWindowMinutes`: how long recent automatic setpoint commands count.
+- `ComfortBudgetMaxCommands`: safe corrections allowed inside the window.
+- `ComfortBudgetSafetyBandCelsius`: extra room warmth allowed before the budget stops waiting.
 - `ComfortCompromiseEnabled`: lets repeated wall choices temporarily influence the effective target while safe.
 - `ComfortCompromiseTriggerTouches`: recent wall touches needed before a compromise starts.
 - `ComfortCompromiseHoldMinutes`: how long the wall preference can rest before fading back.
@@ -179,6 +185,8 @@ Adaptive quiet levels are shown on the dashboard:
 Natural Walkback is the last command-shaping layer before a real setpoint command is sent. When recent wall touches reach the trigger count and the room is still inside the walkback safe band, the defender uses smaller safe-band nudges with tiny variation. If the room needs warm-room defense, it skips walkback and still commands one degree below current room temperature.
 
 Routine Timing is a timing layer for safe corrections. When repeated wall changes happen and the room is still inside its safe band, the next correction waits until a normal minute rhythm, with small wiggle time. If the room gets too warm or upstairs comfort needs direct cooling, Routine Timing clears and the real correction path continues.
+
+Comfort Budget is a rolling command limiter for safe corrections. If too many automatic setpoint adjustments happened inside the configured window, the defender rests until the oldest one leaves the window. If the room gets too warm or upstairs comfort needs direct cooling, the budget clears and the real correction path continues.
 
 Comfort Compromise is a temporary effective target. If wall changes repeat and the room is still inside the compromise safe band, the latest wall setpoint can influence the defender target up to the configured maximum offset. After the hold time, that influence fades back to the website target over the decay window. If the room gets too warm, the compromise clears immediately and normal warm-room defense resumes.
 

@@ -11,6 +11,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Cool-mode restore delay must still restore HVAC mode to `cool`; delay is allowed only while room comfort remains inside the configured safety band.
 - Natural Walkback may soften only safe-band recovery moves after repeated wall touches. Warm-room defender commands must still start one degree below current room temperature, not one degree below the wall setpoint, and continue toward the website target.
 - Routine Timing may delay only safe corrections after repeated wall touches so they land on normal-looking comfort-check intervals. It must clear immediately when room comfort needs direct cooling.
+- Comfort Budget may limit only repeated safe setpoint commands inside its window. It must clear immediately when room comfort needs direct cooling.
 - Comfort Compromise may adjust only the temporary effective target while room comfort is inside the configured safety band. Website target changes, schedule target changes, and upstairs comfort changes must clear it.
 - Comfort Memory may apply only small, expiring time-of-day offsets learned from real wall touches while room comfort is inside the configured safety band. It must skip warmer offsets when upstairs is hot.
 - Comfort Sync / quiet recovery may delay or step real commands, but it must not create fake thermostat state or simulator-only behavior.

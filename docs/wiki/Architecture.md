@@ -27,6 +27,8 @@ Natural Walkback is part of that same state-store command selection path. It cal
 
 Routine Timing is another `DefenderStateStore` timing guard consumed by `AcDefenderService`. It can hold a safe correction until a normal-looking minute rhythm after repeated wall touches, then clears before the real Home Assistant command is sent. It is skipped when room comfort needs direct correction.
 
+Comfort Budget is stored in `DefenderStateStore` as recent real setpoint command timestamps. `AcDefenderService` checks it before sending another safe correction. It limits only safe repeated commands and clears when comfort safety requires direct correction.
+
 Comfort Compromise is evaluated inside `CalculateExpectedSetPoint`. It can temporarily adjust the effective target from repeated wall choices, but only while the real room temperature remains inside its safety band. Target changes from the website, schedule, or upstairs comfort clear the compromise.
 
 Comfort Memory is also evaluated inside `CalculateExpectedSetPoint`, before temporary compromise. It stores small local-hour offsets learned from repeated safe wall choices, prunes them by retention time, and skips warmer memory when upstairs is hot.

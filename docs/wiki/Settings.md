@@ -45,6 +45,10 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Routine wiggle minutes: small extra wait so timing is not exact.
 - Max routine wait: longest safe routine timing hold.
 - Routine safe band C: extra warmth allowed before routine timing stops waiting.
+- Comfort budget: limits repeated safe adjustments so the room can settle.
+- Budget window minutes: how long recent automatic setpoint commands count.
+- Budget adjustments: safe corrections allowed inside the window.
+- Budget safe band C: extra warmth allowed before the budget stops waiting.
 - Comfort compromise: temporarily blends repeated wall choices while the room is still safe.
 - Compromise touches: recent wall touches needed before blending starts.
 - Compromise hold minutes: how long the wall choice can rest.

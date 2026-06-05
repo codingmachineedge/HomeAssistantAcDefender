@@ -139,6 +139,10 @@ public sealed class DefenderStateStore
             state.Settings.RoutineTimingJitterMinutes = Math.Clamp(request.RoutineTimingJitterMinutes, 0, 30);
             state.Settings.RoutineTimingMaxDelayMinutes = Math.Clamp(request.RoutineTimingMaxDelayMinutes, 1, 180);
             state.Settings.RoutineTimingSafetyBandCelsius = Math.Round(Math.Clamp(request.RoutineTimingSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.ComfortBudgetEnabled = request.ComfortBudgetEnabled;
+            state.Settings.ComfortBudgetWindowMinutes = Math.Clamp(request.ComfortBudgetWindowMinutes, 1, 240);
+            state.Settings.ComfortBudgetMaxCommands = Math.Clamp(request.ComfortBudgetMaxCommands, 1, 30);
+            state.Settings.ComfortBudgetSafetyBandCelsius = Math.Round(Math.Clamp(request.ComfortBudgetSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.ComfortCompromiseEnabled = request.ComfortCompromiseEnabled;
             state.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(request.ComfortCompromiseTriggerTouches, 1, 20);
             state.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(request.ComfortCompromiseHoldMinutes, 0, 240);
@@ -296,8 +300,11 @@ public sealed class DefenderStateStore
                 state.PendingCommandSetPointCelsius = setPoint;
                 state.PendingCommandAt = state.UpdatedAt;
                 state.LastDefenderCommandAt = state.UpdatedAt;
+                state.DefenderCommandTimes.Add(state.UpdatedAt);
+                PruneDefenderCommandTimes(state.UpdatedAt);
                 state.RoutineTimingDueAt = null;
                 state.RoutineTimingStatus = "Routine timing used its comfort-check slot; watching for the next one.";
+                state.ComfortBudgetStatus = $"Comfort budget counted {state.DefenderCommandTimes.Count}/{state.Settings.ComfortBudgetMaxCommands} recent comfort adjustments.";
             }
 
             AddEvent("info", message);
@@ -842,6 +849,67 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool TryRespectComfortBudget(
+        ThermostatReading reading,
+        bool bypassComfortBudget,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.ComfortBudgetEnabled)
+            {
+                ClearComfortBudget("Comfort budget is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneDefenderCommandTimes(now);
+            if (bypassComfortBudget || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearComfortBudget("Room comfort needs help now, so comfort budget is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.ComfortBudgetSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearComfortBudget($"Room is above {allowedRoomTemperature:0.0} C, so comfort budget is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var maxCommands = Math.Max(1, state.Settings.ComfortBudgetMaxCommands);
+            if (state.DefenderCommandTimes.Count < maxCommands)
+            {
+                ClearComfortBudget($"Comfort budget has room for {maxCommands - state.DefenderCommandTimes.Count} more safe adjustments.");
+                SaveState();
+                return false;
+            }
+
+            var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.ComfortBudgetWindowMinutes));
+            waitUntil = state.DefenderCommandTimes.Min().Add(window);
+            if (waitUntil <= now)
+            {
+                PruneDefenderCommandTimes(now);
+                ClearComfortBudget("Comfort budget window cleared; the next safe adjustment can continue.");
+                SaveState();
+                return false;
+            }
+
+            state.ComfortBudgetHoldUntil = waitUntil;
+            message = $"Comfort budget is resting until {waitUntil.ToLocalTime():HH:mm:ss} after {state.DefenderCommandTimes.Count} recent safe adjustments.";
+            state.ComfortBudgetStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
     public double CalculateNaturalCommandSetPoint(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -960,6 +1028,7 @@ public sealed class DefenderStateStore
                 && state.NaturalHoldUntil is null
                 && state.NaturalHoldCount == 0
                 && state.RoutineTimingDueAt is null
+                && state.ComfortBudgetHoldUntil is null
                 && state.ConflictQuietUntil is null
                 && state.RoomTrendHoldUntil is null
                 && state.ThermalMomentumHoldUntil is null)
@@ -988,6 +1057,9 @@ public sealed class DefenderStateStore
             ClearRoutineTiming(state.Settings.RoutineTimingEnabled
                 ? "Routine timing is lined up; no comfort-check slot needed."
                 : "Routine timing is off.");
+            ClearComfortBudget(state.Settings.ComfortBudgetEnabled
+                ? "Comfort budget is lined up; no adjustment rest needed."
+                : "Comfort budget is off.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
         }
@@ -1705,6 +1777,37 @@ public sealed class DefenderStateStore
         state.ExternalTouchTimes.RemoveAll(item => now - item > window);
     }
 
+    private void PruneDefenderCommandTimes(DateTimeOffset now)
+    {
+        var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.ComfortBudgetWindowMinutes));
+        state.DefenderCommandTimes.RemoveAll(item => now - item > window);
+        if (state.DefenderCommandTimes.Count > 200)
+        {
+            state.DefenderCommandTimes.RemoveRange(0, state.DefenderCommandTimes.Count - 200);
+        }
+
+        if (state.ComfortBudgetHoldUntil is { } holdUntil && holdUntil <= now)
+        {
+            state.ComfortBudgetHoldUntil = null;
+        }
+    }
+
+    private static void PruneLoadedDefenderCommandTimes(DefenderRuntimeState saved)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var window = TimeSpan.FromMinutes(Math.Max(1, saved.Settings.ComfortBudgetWindowMinutes));
+        saved.DefenderCommandTimes.RemoveAll(item => now - item > window);
+        if (saved.DefenderCommandTimes.Count > 200)
+        {
+            saved.DefenderCommandTimes.RemoveRange(0, saved.DefenderCommandTimes.Count - 200);
+        }
+
+        if (saved.ComfortBudgetHoldUntil is { } holdUntil && holdUntil <= now)
+        {
+            saved.ComfortBudgetHoldUntil = null;
+        }
+    }
+
     private DefenderRuntimeState LoadState()
     {
         try
@@ -1771,6 +1874,9 @@ public sealed class DefenderStateStore
         saved.Settings.RoutineTimingJitterMinutes = Math.Clamp(saved.Settings.RoutineTimingJitterMinutes, 0, 30);
         saved.Settings.RoutineTimingMaxDelayMinutes = Math.Clamp(saved.Settings.RoutineTimingMaxDelayMinutes, 1, 180);
         saved.Settings.RoutineTimingSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.RoutineTimingSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.ComfortBudgetWindowMinutes = Math.Clamp(saved.Settings.ComfortBudgetWindowMinutes, 1, 240);
+        saved.Settings.ComfortBudgetMaxCommands = Math.Clamp(saved.Settings.ComfortBudgetMaxCommands, 1, 30);
+        saved.Settings.ComfortBudgetSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortBudgetSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(saved.Settings.ComfortCompromiseTriggerTouches, 1, 20);
         saved.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(saved.Settings.ComfortCompromiseHoldMinutes, 0, 240);
         saved.Settings.ComfortCompromiseDecayMinutes = Math.Clamp(saved.Settings.ComfortCompromiseDecayMinutes, 1, 240);
@@ -1806,6 +1912,8 @@ public sealed class DefenderStateStore
         saved.Presence ??= [];
         saved.RoomTemperatureSamples ??= [];
         saved.ComfortMemorySlots ??= [];
+        saved.DefenderCommandTimes ??= [];
+        PruneLoadedDefenderCommandTimes(saved);
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
@@ -1815,6 +1923,9 @@ public sealed class DefenderStateStore
         saved.RoutineTimingStatus = string.IsNullOrWhiteSpace(saved.RoutineTimingStatus)
             ? "Routine timing is watching."
             : saved.RoutineTimingStatus;
+        saved.ComfortBudgetStatus = string.IsNullOrWhiteSpace(saved.ComfortBudgetStatus)
+            ? "Comfort budget is watching."
+            : saved.ComfortBudgetStatus;
         saved.ComfortCompromiseStatus = string.IsNullOrWhiteSpace(saved.ComfortCompromiseStatus)
             ? "Comfort compromise is watching for repeated wall changes."
             : saved.ComfortCompromiseStatus;
@@ -1874,6 +1985,10 @@ public sealed class DefenderStateStore
             : 0;
         var routineTimingSeconds = state.RoutineTimingDueAt is { } routineDueAt && routineDueAt > now
             ? (int)Math.Ceiling((routineDueAt - now).TotalSeconds)
+            : 0;
+        PruneDefenderCommandTimes(now);
+        var comfortBudgetSeconds = state.ComfortBudgetHoldUntil is { } budgetUntil && budgetUntil > now
+            ? (int)Math.Ceiling((budgetUntil - now).TotalSeconds)
             : 0;
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         var naturalWalkbackScore = CalculateTouchSuspicionScore(now);
@@ -1954,6 +2069,16 @@ public sealed class DefenderStateStore
                     ? "Routine timing is watching."
                     : state.RoutineTimingStatus,
                 routineTimingSeconds > 0 ? state.RoutineTimingDueAt : null),
+            new ComfortBudgetSnapshot(
+                state.Settings.ComfortBudgetEnabled,
+                comfortBudgetSeconds > 0,
+                comfortBudgetSeconds,
+                state.DefenderCommandTimes.Count,
+                state.Settings.ComfortBudgetMaxCommands,
+                string.IsNullOrWhiteSpace(state.ComfortBudgetStatus)
+                    ? "Comfort budget is watching."
+                    : state.ComfortBudgetStatus,
+                comfortBudgetSeconds > 0 ? state.ComfortBudgetHoldUntil : null),
             new ComfortCompromiseSnapshot(
                 state.Settings.ComfortCompromiseEnabled,
                 comfortCompromiseSeconds > 0,
@@ -2053,6 +2178,7 @@ public sealed class DefenderStateStore
         state.NaturalRecoveryStatus = status;
         state.NaturalWalkbackStatus = "Natural walkback is watching.";
         ClearRoutineTiming("Routine timing is watching.");
+        ClearComfortBudget("Comfort budget is watching.");
         ClearComfortCompromise("Comfort compromise reset after website target change.");
         state.ComfortMemoryEffectiveTargetCelsius = null;
         state.ComfortMemoryStatus = "Comfort memory is watching wall choices.";
@@ -2079,6 +2205,12 @@ public sealed class DefenderStateStore
     {
         state.RoutineTimingDueAt = null;
         state.RoutineTimingStatus = status;
+    }
+
+    private void ClearComfortBudget(string status)
+    {
+        state.ComfortBudgetHoldUntil = null;
+        state.ComfortBudgetStatus = status;
     }
 
     private void ClearComfortCompromise(string status)
@@ -2219,6 +2351,10 @@ public sealed class DefenderStateStore
             RoutineTimingJitterMinutes = settings.RoutineTimingJitterMinutes,
             RoutineTimingMaxDelayMinutes = settings.RoutineTimingMaxDelayMinutes,
             RoutineTimingSafetyBandCelsius = settings.RoutineTimingSafetyBandCelsius,
+            ComfortBudgetEnabled = settings.ComfortBudgetEnabled,
+            ComfortBudgetWindowMinutes = settings.ComfortBudgetWindowMinutes,
+            ComfortBudgetMaxCommands = settings.ComfortBudgetMaxCommands,
+            ComfortBudgetSafetyBandCelsius = settings.ComfortBudgetSafetyBandCelsius,
             ComfortCompromiseEnabled = settings.ComfortCompromiseEnabled,
             ComfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches,
             ComfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes,
@@ -2346,6 +2482,12 @@ public sealed class DefenderStateStore
         public DateTimeOffset? RoutineTimingDueAt { get; set; }
 
         public string RoutineTimingStatus { get; set; } = "Routine timing is watching.";
+
+        public DateTimeOffset? ComfortBudgetHoldUntil { get; set; }
+
+        public string ComfortBudgetStatus { get; set; } = "Comfort budget is watching.";
+
+        public List<DateTimeOffset> DefenderCommandTimes { get; set; } = [];
 
         public DateTimeOffset? ComfortCompromiseStartedAt { get; set; }
 

@@ -19,6 +19,7 @@ public sealed record DefenderSnapshot(
     NaturalRecoverySnapshot NaturalRecovery,
     NaturalWalkbackSnapshot NaturalWalkback,
     RoutineTimingSnapshot RoutineTiming,
+    ComfortBudgetSnapshot ComfortBudget,
     ComfortCompromiseSnapshot ComfortCompromise,
     ComfortMemorySnapshot ComfortMemory,
     ConflictQuietSnapshot ConflictQuiet,
@@ -113,6 +114,15 @@ public sealed record RoutineTimingSnapshot(
     int JitterMinutes,
     string Status,
     DateTimeOffset? DueAt);
+
+public sealed record ComfortBudgetSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    int RecentCommandCount,
+    int MaxCommands,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record ComfortCompromiseSnapshot(
     bool Enabled,
@@ -262,6 +272,14 @@ public sealed class DefenderSettings
     public int RoutineTimingMaxDelayMinutes { get; set; } = 12;
 
     public double RoutineTimingSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool ComfortBudgetEnabled { get; set; } = true;
+
+    public int ComfortBudgetWindowMinutes { get; set; } = 30;
+
+    public int ComfortBudgetMaxCommands { get; set; } = 3;
+
+    public double ComfortBudgetSafetyBandCelsius { get; set; } = 1.2;
 
     public bool ComfortCompromiseEnabled { get; set; } = true;
 
