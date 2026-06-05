@@ -124,6 +124,10 @@ public sealed class DefenderStateStore
             state.Settings.RoomTrendWindowMinutes = Math.Clamp(request.RoomTrendWindowMinutes, 2, 240);
             state.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(request.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
             state.Settings.RoomTrendHoldMinutes = Math.Clamp(request.RoomTrendHoldMinutes, 1, 120);
+            state.Settings.ThermalMomentumGuardEnabled = request.ThermalMomentumGuardEnabled;
+            state.Settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour = Math.Round(Math.Clamp(request.ThermalMomentumMinimumCoolingRateCelsiusPerHour, 0.1, 5.0), 2);
+            state.Settings.ThermalMomentumLookAheadMinutes = Math.Clamp(request.ThermalMomentumLookAheadMinutes, 5, 240);
+            state.Settings.ThermalMomentumHoldMinutes = Math.Clamp(request.ThermalMomentumHoldMinutes, 1, 120);
             state.Settings.FanEnergySaverEnabled = request.FanEnergySaverEnabled;
             state.Settings.FanEnergySaverThresholdCelsius = Math.Clamp(request.FanEnergySaverThresholdCelsius, 0.1, 5.0);
             state.Settings.FanEnergySaverMode = string.IsNullOrWhiteSpace(request.FanEnergySaverMode)
@@ -401,6 +405,104 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool TryRespectThermalMomentumGuard(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.ThermalMomentumGuardEnabled)
+            {
+                state.ThermalMomentumHoldUntil = null;
+                state.ThermalMomentumStatus = "Thermal momentum guard is off.";
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            if (state.ExternalTouchTimes.Count == 0)
+            {
+                state.ThermalMomentumHoldUntil = null;
+                state.ThermalMomentumStatus = "No recent wall touch, so thermal momentum is only watching.";
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                state.ThermalMomentumHoldUntil = null;
+                state.ThermalMomentumStatus = "Room comfort needs help now, so thermal momentum is stepping aside.";
+                SaveState();
+                return false;
+            }
+
+            if (reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius)
+            {
+                state.ThermalMomentumHoldUntil = null;
+                state.ThermalMomentumStatus = "Room is already near target, so thermal momentum does not need to hold.";
+                SaveState();
+                return false;
+            }
+
+            if (reading.SetPointCelsius < expectedSetPointCelsius - 0.05)
+            {
+                state.ThermalMomentumHoldUntil = null;
+                state.ThermalMomentumStatus = "Thermostat is colder than the defender target, so thermal momentum lets it line up.";
+                SaveState();
+                return false;
+            }
+
+            var momentum = BuildThermalMomentum(now, reading.CurrentTemperatureCelsius);
+            if (momentum.SampleCount < 2)
+            {
+                state.ThermalMomentumStatus = "Thermal momentum is collecting more real room readings.";
+                SaveState();
+                return false;
+            }
+
+            var rate = momentum.CoolingRateCelsiusPerHour;
+            if (rate is null || rate.Value < state.Settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour)
+            {
+                state.ThermalMomentumHoldUntil = null;
+                state.ThermalMomentumStatus = rate is null
+                    ? "Room is not cooling yet, so thermal momentum lets correction continue."
+                    : $"Room is cooling at {rate.Value:0.0} C/hour, below the momentum threshold.";
+                SaveState();
+                return false;
+            }
+
+            var eta = momentum.EstimatedMinutesToTarget;
+            if (eta is null || eta.Value > state.Settings.ThermalMomentumLookAheadMinutes)
+            {
+                state.ThermalMomentumHoldUntil = null;
+                state.ThermalMomentumStatus = eta is null
+                    ? "Thermal momentum cannot estimate arrival yet."
+                    : $"Room may take about {eta.Value:0} min to reach target, so correction can continue.";
+                SaveState();
+                return false;
+            }
+
+            if (state.ThermalMomentumHoldUntil is not { } holdUntil || holdUntil <= now)
+            {
+                holdUntil = now.AddMinutes(state.Settings.ThermalMomentumHoldMinutes);
+                state.ThermalMomentumHoldUntil = holdUntil;
+            }
+
+            waitUntil = holdUntil;
+            message = $"Room is already cooling at {rate.Value:0.0} C/hour; holding until {holdUntil.ToLocalTime():HH:mm:ss} because target is estimated in {eta.Value:0} min.";
+            state.ThermalMomentumStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
     public bool TryDelayNaturalCorrection(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -520,7 +622,8 @@ public sealed class DefenderStateStore
             if (state.NaturalRecoveryStatus == status
                 && state.NaturalHoldUntil is null
                 && state.NaturalHoldCount == 0
-                && state.RoomTrendHoldUntil is null)
+                && state.RoomTrendHoldUntil is null
+                && state.ThermalMomentumHoldUntil is null)
             {
                 return;
             }
@@ -532,6 +635,10 @@ public sealed class DefenderStateStore
             state.RoomTrendStatus = state.Settings.RoomTrendGuardEnabled
                 ? "Room trend is lined up; no hold needed."
                 : "Room trend guard is off.";
+            state.ThermalMomentumHoldUntil = null;
+            state.ThermalMomentumStatus = state.Settings.ThermalMomentumGuardEnabled
+                ? "Thermal momentum is lined up; no hold needed."
+                : "Thermal momentum guard is off.";
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
         }
@@ -783,6 +890,38 @@ public sealed class DefenderStateStore
         return new RoomTrendAnalysis(direction, delta, state.RoomTemperatureSamples.Count);
     }
 
+    private ThermalMomentumAnalysis BuildThermalMomentum(DateTimeOffset now, double? currentTemperatureCelsius = null)
+    {
+        PruneRoomTemperatureSamples(now);
+        if (state.RoomTemperatureSamples.Count < 2)
+        {
+            return new ThermalMomentumAnalysis(null, null, state.RoomTemperatureSamples.Count);
+        }
+
+        var oldest = state.RoomTemperatureSamples.First();
+        var newest = state.RoomTemperatureSamples.Last();
+        var elapsedHours = (newest.Timestamp - oldest.Timestamp).TotalHours;
+        if (elapsedHours <= 0)
+        {
+            return new ThermalMomentumAnalysis(null, null, state.RoomTemperatureSamples.Count);
+        }
+
+        var delta = newest.TemperatureCelsius - oldest.TemperatureCelsius;
+        if (delta >= 0)
+        {
+            return new ThermalMomentumAnalysis(null, null, state.RoomTemperatureSamples.Count);
+        }
+
+        var rate = Math.Round(-delta / elapsedHours, 2);
+        var current = currentTemperatureCelsius ?? newest.TemperatureCelsius;
+        var distanceToTarget = current - state.TargetTemperatureCelsius;
+        var eta = distanceToTarget <= 0
+            ? 0.0
+            : Math.Round(distanceToTarget / rate * 60.0, 1);
+
+        return new ThermalMomentumAnalysis(rate, eta, state.RoomTemperatureSamples.Count);
+    }
+
     private void PruneRoomTemperatureSamples(DateTimeOffset now)
     {
         var window = TimeSpan.FromMinutes(Math.Max(2, state.Settings.RoomTrendWindowMinutes));
@@ -978,6 +1117,9 @@ public sealed class DefenderStateStore
         saved.Settings.RoomTrendWindowMinutes = Math.Clamp(saved.Settings.RoomTrendWindowMinutes, 2, 240);
         saved.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(saved.Settings.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
         saved.Settings.RoomTrendHoldMinutes = Math.Clamp(saved.Settings.RoomTrendHoldMinutes, 1, 120);
+        saved.Settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour = Math.Round(Math.Clamp(saved.Settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour, 0.1, 5.0), 2);
+        saved.Settings.ThermalMomentumLookAheadMinutes = Math.Clamp(saved.Settings.ThermalMomentumLookAheadMinutes, 5, 240);
+        saved.Settings.ThermalMomentumHoldMinutes = Math.Clamp(saved.Settings.ThermalMomentumHoldMinutes, 1, 120);
         saved.Settings.DefenderRunsContinuously = true;
         saved.Schedule ??= [];
         saved.Events ??= [];
@@ -995,6 +1137,9 @@ public sealed class DefenderStateStore
         saved.RoomTrendStatus = string.IsNullOrWhiteSpace(saved.RoomTrendStatus)
             ? "Room trend guard is watching."
             : saved.RoomTrendStatus;
+        saved.ThermalMomentumStatus = string.IsNullOrWhiteSpace(saved.ThermalMomentumStatus)
+            ? "Thermal momentum guard is watching."
+            : saved.ThermalMomentumStatus;
         saved.ComfortStatus = string.IsNullOrWhiteSpace(saved.ComfortStatus)
             ? "Waiting for upstairs comfort readings."
             : saved.ComfortStatus;
@@ -1019,8 +1164,12 @@ public sealed class DefenderStateStore
         var roomTrendSeconds = state.RoomTrendHoldUntil is { } trendUntil && trendUntil > now
             ? (int)Math.Ceiling((trendUntil - now).TotalSeconds)
             : 0;
+        var thermalMomentumSeconds = state.ThermalMomentumHoldUntil is { } momentumUntil && momentumUntil > now
+            ? (int)Math.Ceiling((momentumUntil - now).TotalSeconds)
+            : 0;
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         var roomTrend = BuildRoomTrend(now);
+        var thermalMomentum = BuildThermalMomentum(now, state.HomeAssistantThermostat?.CurrentTemperatureCelsius);
         return new DefenderSnapshot(
             state.TargetTemperatureCelsius,
             state.DefenderEnabled,
@@ -1069,6 +1218,15 @@ public sealed class DefenderStateStore
                     ? "Room trend guard is watching."
                     : state.RoomTrendStatus,
                 roomTrend.SampleCount),
+            new ThermalMomentumSnapshot(
+                state.Settings.ThermalMomentumGuardEnabled,
+                thermalMomentumSeconds > 0,
+                thermalMomentumSeconds,
+                thermalMomentum.CoolingRateCelsiusPerHour,
+                thermalMomentum.EstimatedMinutesToTarget,
+                string.IsNullOrWhiteSpace(state.ThermalMomentumStatus)
+                    ? "Thermal momentum guard is watching."
+                    : state.ThermalMomentumStatus),
             new ComfortSnapshot(
                 state.Settings.UpstairsComfortEnabled,
                 state.Settings.HomePresenceRequired,
@@ -1112,6 +1270,8 @@ public sealed class DefenderStateStore
         ClearManualComfortGrace();
         state.RoomTrendHoldUntil = null;
         state.RoomTrendStatus = "Room trend guard is watching.";
+        state.ThermalMomentumHoldUntil = null;
+        state.ThermalMomentumStatus = "Thermal momentum guard is watching.";
     }
 
     private void ClearManualComfortGrace()
@@ -1238,6 +1398,10 @@ public sealed class DefenderStateStore
             RoomTrendWindowMinutes = settings.RoomTrendWindowMinutes,
             RoomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius,
             RoomTrendHoldMinutes = settings.RoomTrendHoldMinutes,
+            ThermalMomentumGuardEnabled = settings.ThermalMomentumGuardEnabled,
+            ThermalMomentumMinimumCoolingRateCelsiusPerHour = settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour,
+            ThermalMomentumLookAheadMinutes = settings.ThermalMomentumLookAheadMinutes,
+            ThermalMomentumHoldMinutes = settings.ThermalMomentumHoldMinutes,
             FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
             FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
             FanEnergySaverMode = settings.FanEnergySaverMode,
@@ -1348,6 +1512,10 @@ public sealed class DefenderStateStore
 
         public string RoomTrendStatus { get; set; } = "Room trend guard is watching.";
 
+        public DateTimeOffset? ThermalMomentumHoldUntil { get; set; }
+
+        public string ThermalMomentumStatus { get; set; } = "Thermal momentum guard is watching.";
+
         public List<RoomTemperatureSample> RoomTemperatureSamples { get; set; } = [];
 
         public DefenderSettings Settings { get; set; } = new();
@@ -1395,6 +1563,11 @@ public sealed class DefenderStateStore
     private sealed record RoomTrendAnalysis(
         string Direction,
         double? DeltaCelsius,
+        int SampleCount);
+
+    private sealed record ThermalMomentumAnalysis(
+        double? CoolingRateCelsiusPerHour,
+        double? EstimatedMinutesToTarget,
         int SampleCount);
 
     private sealed class ThermostatRuntimeState

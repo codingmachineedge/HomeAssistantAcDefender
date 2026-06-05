@@ -98,6 +98,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectThermalMomentumGuard(reading, expectedSetPoint, comfort.BypassCooldown, now, out var momentumUntil, out var momentumMessage))
+                {
+                    stateStore.SetNextAction(momentumMessage, momentumUntil);
+                    return;
+                }
+
                 if (stateStore.TryDelayNaturalCorrection(reading, expectedSetPoint, comfort.BypassCooldown, now, out var waitUntil, out var waitMessage))
                 {
                     stateStore.SetNextAction(waitMessage, waitUntil);

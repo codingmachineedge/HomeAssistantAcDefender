@@ -13,10 +13,11 @@ Every cycle performs these steps:
 9. Respect dynamic cooldown after external changes unless severe upstairs heat bypasses it.
 10. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
 11. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
-12. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
-13. Apply fan energy saver when enabled and near target.
-14. Correct the real thermostat setpoint when needed.
-15. Update the next-action status label.
+12. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
+13. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
+14. Apply fan energy saver when enabled and near target.
+15. Correct the real thermostat setpoint when needed.
+16. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -80,6 +81,17 @@ delta = newestRoomTemperature - oldestRoomTemperature
 If `delta` is above the stable tolerance, the room is warming and correction can continue. If `delta` is inside the tolerance or below it, the room is stable or cooling and the defender can keep observing for the configured hold time.
 
 Trend Guard only applies after recent external wall touches. It steps aside when the room is above the grace band, crosses the safety override, or severe upstairs heat bypasses quiet timing.
+
+## Thermal Momentum
+
+Thermal Momentum uses the same real dining room temperature samples. After a recent wall touch, it estimates cooling speed:
+
+```text
+coolingRate = temperatureDrop / elapsedHours
+etaMinutes = (currentRoomTemperature - targetTemperature) / coolingRate * 60
+```
+
+If the room is above target but already cooling at or above the configured rate, and the target is estimated inside the look-ahead window, the defender holds briefly instead of sending another visible thermostat command. It steps aside when the room is not cooling, the target is too far away, the room crosses the safety override, or severe upstairs heat bypasses quiet timing.
 
 ## Upstairs Comfort
 

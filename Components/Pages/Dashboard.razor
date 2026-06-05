@@ -81,6 +81,9 @@
                 <MudAlert Class="mt-2" Severity="@RoomTrendSeverity" Variant="Variant.Outlined">@RoomTrendText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if the room is warming, stable, or cooling before the helper nudges.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@ThermalMomentumSeverity" Variant="Variant.Outlined">@ThermalMomentumText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if the room is cooling fast enough to wait.</MudText>
+
                 <MudText Typo="Typo.subtitle2" Class="mt-3">@LastCommandText</MudText>
                 <MudText Typo="Typo.caption" Class="helper-text">This shows the last command the website sent to Home Assistant.</MudText>
 
@@ -147,6 +150,8 @@
                     <MetricCard Label="Wall grace" Value="@ManualGraceWaitText" Help="How long a wall change can rest." />
                     <MetricCard Label="Room trend" Value="@RoomTrendDirectionText" Help="Whether the room is warming or cooling." />
                     <MetricCard Label="Trend hold" Value="@RoomTrendHoldText" Help="How long trend guard is observing." />
+                    <MetricCard Label="Cooling rate" Value="@ThermalMomentumRateText" Help="How fast the room is cooling." />
+                    <MetricCard Label="Target ETA" Value="@ThermalMomentumEtaText" Help="Estimated minutes until target." />
                     <MetricCard Label="Updated" Value="@ShortTime(Snapshot?.HomeAssistantThermostat?.UpdatedAt)" Help="When this thermostat data was seen." />
                     <MetricCard Label="Entity" Value="@(Snapshot?.HomeAssistantEntityId ?? "--")" Help="The Home Assistant thermostat name." />
                 </MudGrid>
@@ -269,6 +274,15 @@
         ? $"{Snapshot.RoomTrend.Direction} {TrendDeltaText}"
         : "Off";
     private string RoomTrendHoldText => Snapshot?.RoomTrend.Holding == true ? $"{Snapshot.RoomTrend.SecondsRemaining}s" : "Ready";
+    private string ThermalMomentumText => Snapshot?.ThermalMomentum.Status ?? "Thermal momentum guard is watching.";
+    private string ThermalMomentumRateText => Snapshot?.ThermalMomentum.Enabled == true && Snapshot.ThermalMomentum.CoolingRateCelsiusPerHour is { } rate
+        ? $"{rate:0.0} C/h"
+        : Snapshot?.ThermalMomentum.Enabled == true ? "--" : "Off";
+    private string ThermalMomentumEtaText => Snapshot?.ThermalMomentum.Holding == true
+        ? $"{Snapshot.ThermalMomentum.SecondsRemaining}s hold"
+        : Snapshot?.ThermalMomentum.Enabled == true && Snapshot.ThermalMomentum.EstimatedMinutesToTarget is { } eta
+            ? $"{eta:0} min"
+            : Snapshot?.ThermalMomentum.Enabled == true ? "--" : "Off";
     private string LastCommandText => Snapshot?.LastCommand ?? "No commands yet";
     private string HomePresenceText => Snapshot?.Comfort.IsHome == true ? "Home" : "Away";
     private string GuardText => Snapshot?.Comfort.UpstairsTooHot == true ? "Active" : Snapshot?.Comfort.UpstairsComfortEnabled == true ? "Watching" : "Off";
@@ -284,6 +298,9 @@
     private Severity RoomTrendSeverity => Snapshot?.RoomTrend.Holding == true
         ? Severity.Warning
         : Snapshot?.RoomTrend.Direction == "warming" ? Severity.Error : Severity.Info;
+    private Severity ThermalMomentumSeverity => Snapshot?.ThermalMomentum.Holding == true
+        ? Severity.Warning
+        : Snapshot?.ThermalMomentum.Enabled == true ? Severity.Info : Severity.Normal;
 
     private string TrendDeltaText
     {

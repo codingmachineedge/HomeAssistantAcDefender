@@ -284,6 +284,48 @@
                                          Max="120" />
                     </MudItem>
                 </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
+                           Value="_thermalMomentumGuardEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _thermalMomentumGuardEnabled = v))"
+                           Label="Use cooling momentum"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Waits when the room is already cooling fast enough.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="double"
+                                         Value="_thermalMomentumMinimumCoolingRateCelsiusPerHour"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _thermalMomentumMinimumCoolingRateCelsiusPerHour = value))"
+                                         Label="Cooling rate C/hour"
+                                         HelperText="How fast cooling must be to wait."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_thermalMomentumLookAheadMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _thermalMomentumLookAheadMinutes = value))"
+                                         Label="Look-ahead minutes"
+                                         HelperText="Only wait if target looks this close."
+                                         Variant="Variant.Outlined"
+                                         Min="5"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_thermalMomentumHoldMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _thermalMomentumHoldMinutes = value))"
+                                         Label="Momentum hold minutes"
+                                         HelperText="How long to let cooling keep working."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="120" />
+                    </MudItem>
+                </MudGrid>
             </MudPaper>
         </MudItem>
 
@@ -575,6 +617,10 @@
     private int _roomTrendWindowMinutes = 12;
     private double _roomTrendStableToleranceCelsius = 0.2;
     private int _roomTrendHoldMinutes = 8;
+    private bool _thermalMomentumGuardEnabled = true;
+    private double _thermalMomentumMinimumCoolingRateCelsiusPerHour = 0.4;
+    private int _thermalMomentumLookAheadMinutes = 45;
+    private int _thermalMomentumHoldMinutes = 6;
     private bool _fanEnergySaverEnabled;
     private double _fanEnergySaverThresholdCelsius = 0.6;
     private string _fanEnergySaverMode = "auto";
@@ -627,6 +673,10 @@
         _roomTrendWindowMinutes = settings.RoomTrendWindowMinutes;
         _roomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius;
         _roomTrendHoldMinutes = settings.RoomTrendHoldMinutes;
+        _thermalMomentumGuardEnabled = settings.ThermalMomentumGuardEnabled;
+        _thermalMomentumMinimumCoolingRateCelsiusPerHour = settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour;
+        _thermalMomentumLookAheadMinutes = settings.ThermalMomentumLookAheadMinutes;
+        _thermalMomentumHoldMinutes = settings.ThermalMomentumHoldMinutes;
         _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
         _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
         _fanEnergySaverMode = settings.FanEnergySaverMode;
@@ -726,6 +776,10 @@
             _roomTrendWindowMinutes,
             _roomTrendStableToleranceCelsius,
             _roomTrendHoldMinutes,
+            _thermalMomentumGuardEnabled,
+            _thermalMomentumMinimumCoolingRateCelsiusPerHour,
+            _thermalMomentumLookAheadMinutes,
+            _thermalMomentumHoldMinutes,
             _fanEnergySaverEnabled,
             _fanEnergySaverThresholdCelsius,
             _fanEnergySaverMode,

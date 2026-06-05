@@ -18,6 +18,7 @@ public sealed record DefenderSnapshot(
     NaturalRecoverySnapshot NaturalRecovery,
     ManualComfortGraceSnapshot ManualComfortGrace,
     RoomTrendSnapshot RoomTrend,
+    ThermalMomentumSnapshot ThermalMomentum,
     ComfortSnapshot Comfort,
     DefenderSettings Settings,
     IReadOnlyList<ScheduleEntry> Schedule,
@@ -101,6 +102,14 @@ public sealed record RoomTrendSnapshot(
     string Status,
     int SampleCount);
 
+public sealed record ThermalMomentumSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    double? CoolingRateCelsiusPerHour,
+    double? EstimatedMinutesToTarget,
+    string Status);
+
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,
     bool HomePresenceRequired,
@@ -174,6 +183,14 @@ public sealed class DefenderSettings
     public double RoomTrendStableToleranceCelsius { get; set; } = 0.2;
 
     public int RoomTrendHoldMinutes { get; set; } = 8;
+
+    public bool ThermalMomentumGuardEnabled { get; set; } = true;
+
+    public double ThermalMomentumMinimumCoolingRateCelsiusPerHour { get; set; } = 0.4;
+
+    public int ThermalMomentumLookAheadMinutes { get; set; } = 45;
+
+    public int ThermalMomentumHoldMinutes { get; set; } = 6;
 
     public bool FanEnergySaverEnabled { get; set; }
 

@@ -33,6 +33,10 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Trend window minutes: how far back the defender compares room temperature.
 - Stable change C: small room temperature movement counted as steady.
 - Trend hold minutes: how long to observe before nudging when room trend is okay.
+- Use cooling momentum: waits when real room readings show the room is already cooling fast enough.
+- Cooling rate C/hour: minimum cooling speed needed before the defender waits.
+- Look-ahead minutes: only wait if the target is estimated within this many minutes.
+- Momentum hold minutes: how long to let cooling continue before checking again.
 
 ## Weather Rules
 
