@@ -17,6 +17,7 @@ public sealed record DefenderSnapshot(
     int CooldownSeconds,
     NaturalRecoverySnapshot NaturalRecovery,
     ManualComfortGraceSnapshot ManualComfortGrace,
+    RoomTrendSnapshot RoomTrend,
     ComfortSnapshot Comfort,
     DefenderSettings Settings,
     IReadOnlyList<ScheduleEntry> Schedule,
@@ -91,6 +92,15 @@ public sealed record ManualComfortGraceSnapshot(
     double ComfortBandCelsius,
     DateTimeOffset? Until);
 
+public sealed record RoomTrendSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    string Direction,
+    double? DeltaCelsius,
+    string Status,
+    int SampleCount);
+
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,
     bool HomePresenceRequired,
@@ -156,6 +166,14 @@ public sealed class DefenderSettings
     public int ManualComfortGraceMinutes { get; set; } = 20;
 
     public double ManualComfortGraceBandCelsius { get; set; } = 0.8;
+
+    public bool RoomTrendGuardEnabled { get; set; } = true;
+
+    public int RoomTrendWindowMinutes { get; set; } = 12;
+
+    public double RoomTrendStableToleranceCelsius { get; set; } = 0.2;
+
+    public int RoomTrendHoldMinutes { get; set; } = 8;
 
     public bool FanEnergySaverEnabled { get; set; }
 

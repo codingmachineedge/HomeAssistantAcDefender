@@ -15,6 +15,7 @@ The status snapshot includes:
 - `cooldownSeconds`: remaining dynamic/manual-touch cooldown.
 - `naturalRecovery`: quiet recovery status, quiet level, wait seconds, recent touch count, base/effective nudge size, base/effective hold chance, and effective command gap.
 - `manualComfortGrace`: wall-change grace status, remaining seconds, comfort band, and expiry time.
+- `roomTrend`: real room trend direction, delta, sample count, hold status, and remaining hold seconds.
 - `thermostatChanges`: external thermostat touch audit log.
 - `comfort`: upstairs comfort and presence status.
 

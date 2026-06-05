@@ -120,6 +120,10 @@ public sealed class DefenderStateStore
             state.Settings.ManualComfortGraceEnabled = request.ManualComfortGraceEnabled;
             state.Settings.ManualComfortGraceMinutes = Math.Clamp(request.ManualComfortGraceMinutes, 0, 240);
             state.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(request.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
+            state.Settings.RoomTrendGuardEnabled = request.RoomTrendGuardEnabled;
+            state.Settings.RoomTrendWindowMinutes = Math.Clamp(request.RoomTrendWindowMinutes, 2, 240);
+            state.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(request.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
+            state.Settings.RoomTrendHoldMinutes = Math.Clamp(request.RoomTrendHoldMinutes, 1, 120);
             state.Settings.FanEnergySaverEnabled = request.FanEnergySaverEnabled;
             state.Settings.FanEnergySaverThresholdCelsius = Math.Clamp(request.FanEnergySaverThresholdCelsius, 0.1, 5.0);
             state.Settings.FanEnergySaverMode = string.IsNullOrWhiteSpace(request.FanEnergySaverMode)
@@ -198,6 +202,7 @@ public sealed class DefenderStateStore
         {
             var now = DateTimeOffset.UtcNow;
             DetectExternalSetPointChange(reading, now);
+            RecordRoomTemperatureSample(reading, now);
 
             state.ConnectionState = "home-assistant";
             state.HomeAssistantEntityId = reading.EntityId;
@@ -319,6 +324,83 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool TryRespectRoomTrendGuard(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.RoomTrendGuardEnabled)
+            {
+                state.RoomTrendStatus = "Room trend guard is off.";
+                state.RoomTrendHoldUntil = null;
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            if (state.ExternalTouchTimes.Count == 0)
+            {
+                state.RoomTrendHoldUntil = null;
+                state.RoomTrendStatus = "No recent wall touch, so trend guard is only watching.";
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                state.RoomTrendHoldUntil = null;
+                state.RoomTrendStatus = "Room comfort needs help now, so trend guard is stepping aside.";
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.ManualComfortGraceBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                state.RoomTrendHoldUntil = null;
+                state.RoomTrendStatus = $"Room is above {allowedRoomTemperature:0.0} C, so trend guard lets correction continue.";
+                SaveState();
+                return false;
+            }
+
+            var trend = BuildRoomTrend(now);
+            if (trend.SampleCount < 2)
+            {
+                state.RoomTrendStatus = "Room trend guard is collecting more real temperature readings.";
+                SaveState();
+                return false;
+            }
+
+            if (trend.Direction == "warming")
+            {
+                state.RoomTrendHoldUntil = null;
+                state.RoomTrendStatus = $"Room is warming by {trend.DeltaCelsius:0.0} C, so correction can continue.";
+                SaveState();
+                return false;
+            }
+
+            if (state.RoomTrendHoldUntil is not { } holdUntil || holdUntil <= now)
+            {
+                holdUntil = now.AddMinutes(state.Settings.RoomTrendHoldMinutes);
+                state.RoomTrendHoldUntil = holdUntil;
+            }
+
+            waitUntil = holdUntil;
+            message = $"Room trend is {trend.Direction}; observing until {holdUntil.ToLocalTime():HH:mm:ss} before nudging toward {expectedSetPointCelsius:0.0} C.";
+            state.RoomTrendStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
     public bool TryDelayNaturalCorrection(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -430,7 +512,8 @@ public sealed class DefenderStateStore
                 : "Quiet recovery is off.";
             if (state.NaturalRecoveryStatus == status
                 && state.NaturalHoldUntil is null
-                && state.NaturalHoldCount == 0)
+                && state.NaturalHoldCount == 0
+                && state.RoomTrendHoldUntil is null)
             {
                 return;
             }
@@ -438,6 +521,10 @@ public sealed class DefenderStateStore
             state.NaturalHoldUntil = null;
             state.NaturalHoldCount = 0;
             state.NaturalRecoveryStatus = status;
+            state.RoomTrendHoldUntil = null;
+            state.RoomTrendStatus = state.Settings.RoomTrendGuardEnabled
+                ? "Room trend is lined up; no hold needed."
+                : "Room trend guard is off.";
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
         }
@@ -662,6 +749,43 @@ public sealed class DefenderStateStore
         return Math.Min(maxSeconds, baseSeconds * touches);
     }
 
+    private void RecordRoomTemperatureSample(ThermostatReading reading, DateTimeOffset now)
+    {
+        state.RoomTemperatureSamples.Add(new RoomTemperatureSample(
+            now,
+            Math.Round(reading.CurrentTemperatureCelsius, 2)));
+        PruneRoomTemperatureSamples(now);
+    }
+
+    private RoomTrendAnalysis BuildRoomTrend(DateTimeOffset now)
+    {
+        PruneRoomTemperatureSamples(now);
+        if (state.RoomTemperatureSamples.Count < 2)
+        {
+            return new RoomTrendAnalysis("collecting", null, state.RoomTemperatureSamples.Count);
+        }
+
+        var oldest = state.RoomTemperatureSamples.First();
+        var newest = state.RoomTemperatureSamples.Last();
+        var delta = Math.Round(newest.TemperatureCelsius - oldest.TemperatureCelsius, 2);
+        var tolerance = Math.Max(0.05, state.Settings.RoomTrendStableToleranceCelsius);
+        var direction = delta > tolerance
+            ? "warming"
+            : delta < -tolerance ? "cooling" : "stable";
+
+        return new RoomTrendAnalysis(direction, delta, state.RoomTemperatureSamples.Count);
+    }
+
+    private void PruneRoomTemperatureSamples(DateTimeOffset now)
+    {
+        var window = TimeSpan.FromMinutes(Math.Max(2, state.Settings.RoomTrendWindowMinutes));
+        state.RoomTemperatureSamples.RemoveAll(item => now - item.Timestamp > window);
+        if (state.RoomTemperatureSamples.Count > 300)
+        {
+            state.RoomTemperatureSamples.RemoveRange(0, state.RoomTemperatureSamples.Count - 300);
+        }
+    }
+
     private int CalculateNaturalDelaySeconds(DateTimeOffset now)
     {
         if (!state.Settings.NaturalRecoveryEnabled)
@@ -844,6 +968,9 @@ public sealed class DefenderStateStore
         saved.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
         saved.Settings.ManualComfortGraceMinutes = Math.Clamp(saved.Settings.ManualComfortGraceMinutes, 0, 240);
         saved.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(saved.Settings.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.RoomTrendWindowMinutes = Math.Clamp(saved.Settings.RoomTrendWindowMinutes, 2, 240);
+        saved.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(saved.Settings.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
+        saved.Settings.RoomTrendHoldMinutes = Math.Clamp(saved.Settings.RoomTrendHoldMinutes, 1, 120);
         saved.Settings.DefenderRunsContinuously = true;
         saved.Schedule ??= [];
         saved.Events ??= [];
@@ -851,12 +978,16 @@ public sealed class DefenderStateStore
         saved.ExternalTouchTimes ??= [];
         saved.UpstairsSensors ??= [];
         saved.Presence ??= [];
+        saved.RoomTemperatureSamples ??= [];
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
         saved.ManualComfortGraceStatus = string.IsNullOrWhiteSpace(saved.ManualComfortGraceStatus)
             ? "No wall-change grace active."
             : saved.ManualComfortGraceStatus;
+        saved.RoomTrendStatus = string.IsNullOrWhiteSpace(saved.RoomTrendStatus)
+            ? "Room trend guard is watching."
+            : saved.RoomTrendStatus;
         saved.ComfortStatus = string.IsNullOrWhiteSpace(saved.ComfortStatus)
             ? "Waiting for upstairs comfort readings."
             : saved.ComfortStatus;
@@ -878,7 +1009,11 @@ public sealed class DefenderStateStore
         var manualGraceSeconds = state.ManualComfortGraceUntil is { } graceUntil && graceUntil > now
             ? (int)Math.Ceiling((graceUntil - now).TotalSeconds)
             : 0;
+        var roomTrendSeconds = state.RoomTrendHoldUntil is { } trendUntil && trendUntil > now
+            ? (int)Math.Ceiling((trendUntil - now).TotalSeconds)
+            : 0;
         var naturalPlan = BuildNaturalRecoveryPlan(now);
+        var roomTrend = BuildRoomTrend(now);
         return new DefenderSnapshot(
             state.TargetTemperatureCelsius,
             state.DefenderEnabled,
@@ -917,6 +1052,16 @@ public sealed class DefenderStateStore
                     : state.ManualComfortGraceStatus,
                 state.Settings.ManualComfortGraceBandCelsius,
                 manualGraceSeconds > 0 ? state.ManualComfortGraceUntil : null),
+            new RoomTrendSnapshot(
+                state.Settings.RoomTrendGuardEnabled,
+                roomTrendSeconds > 0,
+                roomTrendSeconds,
+                roomTrend.Direction,
+                roomTrend.DeltaCelsius,
+                string.IsNullOrWhiteSpace(state.RoomTrendStatus)
+                    ? "Room trend guard is watching."
+                    : state.RoomTrendStatus,
+                roomTrend.SampleCount),
             new ComfortSnapshot(
                 state.Settings.UpstairsComfortEnabled,
                 state.Settings.HomePresenceRequired,
@@ -958,6 +1103,8 @@ public sealed class DefenderStateStore
         state.NaturalHoldCount = 0;
         state.NaturalRecoveryStatus = status;
         ClearManualComfortGrace();
+        state.RoomTrendHoldUntil = null;
+        state.RoomTrendStatus = "Room trend guard is watching.";
     }
 
     private void ClearManualComfortGrace()
@@ -1080,6 +1227,10 @@ public sealed class DefenderStateStore
             ManualComfortGraceEnabled = settings.ManualComfortGraceEnabled,
             ManualComfortGraceMinutes = settings.ManualComfortGraceMinutes,
             ManualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius,
+            RoomTrendGuardEnabled = settings.RoomTrendGuardEnabled,
+            RoomTrendWindowMinutes = settings.RoomTrendWindowMinutes,
+            RoomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius,
+            RoomTrendHoldMinutes = settings.RoomTrendHoldMinutes,
             FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
             FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
             FanEnergySaverMode = settings.FanEnergySaverMode,
@@ -1186,6 +1337,12 @@ public sealed class DefenderStateStore
 
         public string ManualComfortGraceStatus { get; set; } = "No wall-change grace active.";
 
+        public DateTimeOffset? RoomTrendHoldUntil { get; set; }
+
+        public string RoomTrendStatus { get; set; } = "Room trend guard is watching.";
+
+        public List<RoomTemperatureSample> RoomTemperatureSamples { get; set; } = [];
+
         public DefenderSettings Settings { get; set; } = new();
 
         public List<ScheduleEntry> Schedule { get; set; } = [];
@@ -1223,6 +1380,15 @@ public sealed class DefenderStateStore
         int MaxHolds,
         int CommandGapSeconds,
         bool IsAdaptive);
+
+    private sealed record RoomTemperatureSample(
+        DateTimeOffset Timestamp,
+        double TemperatureCelsius);
+
+    private sealed record RoomTrendAnalysis(
+        string Direction,
+        double? DeltaCelsius,
+        int SampleCount);
 
     private sealed class ThermostatRuntimeState
     {

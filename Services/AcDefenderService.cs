@@ -92,6 +92,12 @@ public sealed class AcDefenderService
             if (changed)
             {
                 var now = DateTimeOffset.UtcNow;
+                if (stateStore.TryRespectRoomTrendGuard(reading, expectedSetPoint, comfort.BypassCooldown, now, out var trendUntil, out var trendMessage))
+                {
+                    stateStore.SetNextAction(trendMessage, trendUntil);
+                    return;
+                }
+
                 if (stateStore.TryDelayNaturalCorrection(reading, expectedSetPoint, comfort.BypassCooldown, now, out var waitUntil, out var waitMessage))
                 {
                     stateStore.SetNextAction(waitMessage, waitUntil);

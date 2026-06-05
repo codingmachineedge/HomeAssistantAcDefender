@@ -12,10 +12,11 @@ Every cycle performs these steps:
 8. Apply upstairs comfort rules.
 9. Respect dynamic cooldown after external changes unless severe upstairs heat bypasses it.
 10. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
-11. Apply Comfort Sync quiet recovery timing and one-step nudge sizing unless comfort is too warm.
-12. Apply fan energy saver when enabled and near target.
-13. Correct the real thermostat setpoint when needed.
-14. Update the next-action status label.
+11. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
+12. Apply Comfort Sync quiet recovery timing and one-step nudge sizing unless comfort is too warm.
+13. Apply fan energy saver when enabled and near target.
+14. Correct the real thermostat setpoint when needed.
+15. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -66,6 +67,18 @@ targetTemperature + manualComfortGraceBandCelsius
 ```
 
 Grace ends when the configured grace time expires, the room rises above the band, upstairs severe heat bypasses quiet timing, or the room crosses the safety override. This reduces obvious back-and-forth while still restoring comfort before the room gets too warm.
+
+## Room Trend Guard
+
+Room Trend Guard records real dining room temperature samples from Home Assistant. It compares the oldest and newest samples inside the configured trend window:
+
+```text
+delta = newestRoomTemperature - oldestRoomTemperature
+```
+
+If `delta` is above the stable tolerance, the room is warming and correction can continue. If `delta` is inside the tolerance or below it, the room is stable or cooling and the defender can keep observing for the configured hold time.
+
+Trend Guard only applies after recent external wall touches. It steps aside when the room is above the grace band, crosses the safety override, or severe upstairs heat bypasses quiet timing.
 
 ## Upstairs Comfort
 

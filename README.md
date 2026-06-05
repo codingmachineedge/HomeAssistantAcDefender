@@ -15,6 +15,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Uses a dynamic cooldown after manual thermostat touches so corrections do not happen instantly every time.
 - Adds Comfort Sync quiet recovery: randomized extra waits, optional extra holds, command spacing, adaptive quiet levels, and small setpoint nudges so repeated wall changes do not create an obvious immediate tug-of-war.
 - Adds Manual Comfort Grace so a wall thermostat change can be left alone while the room remains within the configured comfort band.
+- Adds Room Trend Guard so the defender keeps observing when the room is stable or cooling after a wall change, and resumes when it starts warming.
 - Shows the next defender action in a live status label.
 - Supports a custom schedule for target temperatures.
 - Supports weather-based activation rules.
@@ -61,10 +62,11 @@ Every cycle:
 7. Evaluate the weather activation rule.
 8. Respect dynamic cooldown after manual thermostat changes.
 9. Respect Manual Comfort Grace when the room is still comfortable after a wall change.
-10. Apply Comfort Sync quiet recovery timing and small nudge sizing unless the room or upstairs is too warm.
-11. Optionally set fan saver mode when near target.
-12. Correct the thermostat setpoint when it does not match the defender decision.
-13. Update the real-time dashboard status.
+10. Respect Room Trend Guard when the room is stable or cooling after a wall change.
+11. Apply Comfort Sync quiet recovery timing and small nudge sizing unless the room or upstairs is too warm.
+12. Optionally set fan saver mode when near target.
+13. Correct the thermostat setpoint when it does not match the defender decision.
+14. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -97,6 +99,10 @@ Comfort Sync is the natural-change algorithm. It only affects timing and setpoin
 - `ManualComfortGraceEnabled`: lets a wall thermostat change rest while the room is still comfortable.
 - `ManualComfortGraceMinutes`: maximum time to leave that wall change alone.
 - `ManualComfortGraceBandCelsius`: extra room warmth allowed above target before the defender resumes.
+- `RoomTrendGuardEnabled`: lets the defender observe real room temperature trend before nudging.
+- `RoomTrendWindowMinutes`: how far back real room-temperature samples are compared.
+- `RoomTrendStableToleranceCelsius`: small temperature changes counted as stable.
+- `RoomTrendHoldMinutes`: how long to keep observing when room trend is stable or cooling.
 
 Example: if the room is `25.0 C`, the website target is `22.0 C`, and the thermostat was manually moved to `26.0 C`, the defender decision is `24.0 C` because it starts one degree below current room temperature. With a `1.0 C` nudge size, the first automatic command can move from `26.0 C` to `25.0 C`, then later to `24.0 C`. If Home Assistant says cooling has stopped while the room is still above target, later decisions continue down toward `22.0 C`.
 
@@ -109,6 +115,8 @@ Adaptive quiet levels are shown on the dashboard:
 - `Softest`: maximum adaptive quietness before comfort safety overrides.
 
 Manual Comfort Grace is different from cooldown. Cooldown waits after a manual touch. Manual Comfort Grace can keep waiting after cooldown if the room is still within the comfort band. If the room rises above the band, the HVAC mode changes away from `cool`, or upstairs becomes severely hot, grace ends and the real thermostat correction path resumes.
+
+Room Trend Guard uses real Home Assistant room-temperature readings. It compares the oldest and newest room samples inside the configured trend window. If the room is stable or cooling after a wall change, it can keep observing before sending a nudge. If the room is warming, above the grace band, or beyond the safety override, it lets the real correction continue.
 
 ## Schedule And Weather Rules
 

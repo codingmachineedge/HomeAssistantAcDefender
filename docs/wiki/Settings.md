@@ -29,6 +29,10 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Respect wall changes: leaves a wall thermostat change alone while the room is still okay.
 - Grace minutes: maximum time that wall change can rest.
 - Grace room band C: extra warmth allowed above target before the defender resumes.
+- Watch room trend: waits if real room readings are stable or cooling after a wall change.
+- Trend window minutes: how far back the defender compares room temperature.
+- Stable change C: small room temperature movement counted as steady.
+- Trend hold minutes: how long to observe before nudging when room trend is okay.
 
 ## Weather Rules
 

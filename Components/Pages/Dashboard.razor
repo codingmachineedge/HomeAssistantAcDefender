@@ -78,6 +78,9 @@
                 <MudAlert Class="mt-2" Severity="@ManualGraceSeverity" Variant="Variant.Outlined">@ManualGraceText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if a wall thermostat change is being left alone while the room still feels okay.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@RoomTrendSeverity" Variant="Variant.Outlined">@RoomTrendText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if the room is warming, stable, or cooling before the helper nudges.</MudText>
+
                 <MudText Typo="Typo.subtitle2" Class="mt-3">@LastCommandText</MudText>
                 <MudText Typo="Typo.caption" Class="helper-text">This shows the last command the website sent to Home Assistant.</MudText>
 
@@ -142,6 +145,8 @@
                     <MetricCard Label="Hold chance" Value="@HoldChanceText" Help="Chance it waits one more beat." />
                     <MetricCard Label="Command gap" Value="@CommandGapText" Help="Space between automatic nudges." />
                     <MetricCard Label="Wall grace" Value="@ManualGraceWaitText" Help="How long a wall change can rest." />
+                    <MetricCard Label="Room trend" Value="@RoomTrendDirectionText" Help="Whether the room is warming or cooling." />
+                    <MetricCard Label="Trend hold" Value="@RoomTrendHoldText" Help="How long trend guard is observing." />
                     <MetricCard Label="Updated" Value="@ShortTime(Snapshot?.HomeAssistantThermostat?.UpdatedAt)" Help="When this thermostat data was seen." />
                     <MetricCard Label="Entity" Value="@(Snapshot?.HomeAssistantEntityId ?? "--")" Help="The Home Assistant thermostat name." />
                 </MudGrid>
@@ -259,6 +264,11 @@
     private string CommandGapText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveCommandGapSeconds}s" : "Off";
     private string ManualGraceText => Snapshot?.ManualComfortGrace.Status ?? "No wall-change grace active.";
     private string ManualGraceWaitText => Snapshot?.ManualComfortGrace.Active == true ? $"{Snapshot.ManualComfortGrace.SecondsRemaining}s" : "Ready";
+    private string RoomTrendText => Snapshot?.RoomTrend.Status ?? "Room trend guard is watching.";
+    private string RoomTrendDirectionText => Snapshot?.RoomTrend.Enabled == true
+        ? $"{Snapshot.RoomTrend.Direction} {TrendDeltaText}"
+        : "Off";
+    private string RoomTrendHoldText => Snapshot?.RoomTrend.Holding == true ? $"{Snapshot.RoomTrend.SecondsRemaining}s" : "Ready";
     private string LastCommandText => Snapshot?.LastCommand ?? "No commands yet";
     private string HomePresenceText => Snapshot?.Comfort.IsHome == true ? "Home" : "Away";
     private string GuardText => Snapshot?.Comfort.UpstairsTooHot == true ? "Active" : Snapshot?.Comfort.UpstairsComfortEnabled == true ? "Watching" : "Off";
@@ -271,6 +281,18 @@
     private Severity ManualGraceSeverity => Snapshot?.ManualComfortGrace.Active == true
         ? Severity.Warning
         : Snapshot?.ManualComfortGrace.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity RoomTrendSeverity => Snapshot?.RoomTrend.Holding == true
+        ? Severity.Warning
+        : Snapshot?.RoomTrend.Direction == "warming" ? Severity.Error : Severity.Info;
+
+    private string TrendDeltaText
+    {
+        get
+        {
+            var delta = Snapshot?.RoomTrend.DeltaCelsius;
+            return delta is null ? "" : $"({delta.Value:+0.0;-0.0;0.0} C)";
+        }
+    }
 
     private IReadOnlyList<string> FanModes
     {

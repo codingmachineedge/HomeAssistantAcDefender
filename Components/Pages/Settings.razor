@@ -242,6 +242,48 @@
                                          Step="0.1" />
                     </MudItem>
                 </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
+                           Value="_roomTrendGuardEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _roomTrendGuardEnabled = v))"
+                           Label="Watch room trend"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Waits if the room is stable or cooling after a wall change.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_roomTrendWindowMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _roomTrendWindowMinutes = value))"
+                                         Label="Trend window minutes"
+                                         HelperText="How far back to compare room temp."
+                                         Variant="Variant.Outlined"
+                                         Min="2"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="double"
+                                         Value="_roomTrendStableToleranceCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _roomTrendStableToleranceCelsius = value))"
+                                         Label="Stable change C"
+                                         HelperText="Small change counts as steady."
+                                         Variant="Variant.Outlined"
+                                         Min="0.05"
+                                         Max="2"
+                                         Step="0.05" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_roomTrendHoldMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _roomTrendHoldMinutes = value))"
+                                         Label="Trend hold minutes"
+                                         HelperText="How long to observe before nudging."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="120" />
+                    </MudItem>
+                </MudGrid>
             </MudPaper>
         </MudItem>
 
@@ -529,6 +571,10 @@
     private bool _manualComfortGraceEnabled = true;
     private int _manualComfortGraceMinutes = 20;
     private double _manualComfortGraceBandCelsius = 0.8;
+    private bool _roomTrendGuardEnabled = true;
+    private int _roomTrendWindowMinutes = 12;
+    private double _roomTrendStableToleranceCelsius = 0.2;
+    private int _roomTrendHoldMinutes = 8;
     private bool _fanEnergySaverEnabled;
     private double _fanEnergySaverThresholdCelsius = 0.6;
     private string _fanEnergySaverMode = "auto";
@@ -577,6 +623,10 @@
         _manualComfortGraceEnabled = settings.ManualComfortGraceEnabled;
         _manualComfortGraceMinutes = settings.ManualComfortGraceMinutes;
         _manualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius;
+        _roomTrendGuardEnabled = settings.RoomTrendGuardEnabled;
+        _roomTrendWindowMinutes = settings.RoomTrendWindowMinutes;
+        _roomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius;
+        _roomTrendHoldMinutes = settings.RoomTrendHoldMinutes;
         _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
         _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
         _fanEnergySaverMode = settings.FanEnergySaverMode;
@@ -672,6 +722,10 @@
             _manualComfortGraceEnabled,
             _manualComfortGraceMinutes,
             _manualComfortGraceBandCelsius,
+            _roomTrendGuardEnabled,
+            _roomTrendWindowMinutes,
+            _roomTrendStableToleranceCelsius,
+            _roomTrendHoldMinutes,
             _fanEnergySaverEnabled,
             _fanEnergySaverThresholdCelsius,
             _fanEnergySaverMode,
