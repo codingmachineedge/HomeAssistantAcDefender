@@ -68,6 +68,10 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Budget window minutes: how long recent automatic setpoint commands count.
 - Budget adjustments: safe corrections allowed inside the window.
 - Budget safe band C: extra warmth allowed before the budget stops waiting.
+- Command camouflage: spaces another safe correction after the last helper setpoint command.
+- Camouflage min gap seconds: shortest cover gap after a helper command.
+- Camouflage pressure extra seconds: extra gap added as recent touches or helper commands rise.
+- Camouflage safe band C: extra warmth allowed before camouflage stops waiting.
 - Natural cadence: picks a variable future time slot for safe nudges after repeated wall touches.
 - Cadence touches: recent wall touches needed before cadence starts.
 - Min cadence minutes: shortest safe cadence wait.

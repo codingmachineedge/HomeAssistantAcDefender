@@ -186,6 +186,14 @@ public sealed class DefenderStateStore
             state.Settings.ComfortBudgetWindowMinutes = Math.Clamp(request.ComfortBudgetWindowMinutes, 1, 240);
             state.Settings.ComfortBudgetMaxCommands = Math.Clamp(request.ComfortBudgetMaxCommands, 1, 30);
             state.Settings.ComfortBudgetSafetyBandCelsius = Math.Round(Math.Clamp(request.ComfortBudgetSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.CommandCamouflageEnabled = request.CommandCamouflageEnabled;
+            state.Settings.CommandCamouflageMinimumGapSeconds = Math.Clamp(request.CommandCamouflageMinimumGapSeconds, 0, 1800);
+            state.Settings.CommandCamouflagePressureExtraSeconds = Math.Clamp(request.CommandCamouflagePressureExtraSeconds, 0, 3600);
+            state.Settings.CommandCamouflageSafetyBandCelsius = Math.Round(Math.Clamp(request.CommandCamouflageSafetyBandCelsius, 0.1, 5.0), 1);
+            if (!state.Settings.CommandCamouflageEnabled)
+            {
+                ClearCommandCamouflage("Command camouflage is off.");
+            }
             state.Settings.NaturalCadenceEnabled = request.NaturalCadenceEnabled;
             state.Settings.NaturalCadenceTriggerTouches = Math.Clamp(request.NaturalCadenceTriggerTouches, 1, 20);
             state.Settings.NaturalCadenceMinimumMinutes = Math.Clamp(request.NaturalCadenceMinimumMinutes, 1, 120);
@@ -2021,7 +2029,92 @@ public sealed class DefenderStateStore
         }
     }
 
-    /// <summary>Natural Cadence: true while waiting for a varied future slot (min–max minutes by pressure, plus jitter).</summary>
+    /// <summary>Command Camouflage: true while spacing a safe follow-up after a recent visible helper command.</summary>
+    public bool TryRespectCommandCamouflage(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassCommandCamouflage,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.CommandCamouflageEnabled)
+            {
+                ClearCommandCamouflage("Command camouflage is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneDefenderCommandTimes(now);
+            if (bypassCommandCamouflage || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearCommandCamouflage("Room comfort needs help now, so command camouflage is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.CommandCamouflageSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearCommandCamouflage($"Room is above {allowedRoomTemperature:0.0} C, so command camouflage is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearCommandCamouflage("Command camouflage is lined up; no follow-up correction is needed.");
+                SaveState();
+                return false;
+            }
+
+            if (state.LastDefenderCommandAt is not { } lastCommandAt)
+            {
+                ClearCommandCamouflage("Command camouflage is watching for a recent helper command.");
+                SaveState();
+                return false;
+            }
+
+            if (state.CommandCamouflageHoldUntil is { } holdUntil)
+            {
+                if (holdUntil > now)
+                {
+                    waitUntil = holdUntil;
+                    var pressure = CalculateCommandCamouflagePressure(now);
+                    message = $"Command camouflage is letting the last helper command look normal until {holdUntil.ToLocalTime():HH:mm:ss} before another safe move toward {expectedSetPointCelsius:0.0} C. Pressure is {pressure}/100.";
+                    state.CommandCamouflageStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearCommandCamouflage("Command camouflage slot arrived; the next safe correction can continue.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = CalculateCommandCamouflageUntil(lastCommandAt, now);
+            if (waitUntil <= now)
+            {
+                ClearCommandCamouflage("Command camouflage has enough spacing; no helper-command cover is needed.");
+                SaveState();
+                return false;
+            }
+
+            state.CommandCamouflageHoldUntil = waitUntil;
+            var camouflagePressure = CalculateCommandCamouflagePressure(now);
+            message = $"Command camouflage is letting the last helper command look normal until {waitUntil.ToLocalTime():HH:mm:ss} before another safe move toward {expectedSetPointCelsius:0.0} C. Pressure is {camouflagePressure}/100.";
+            state.CommandCamouflageStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>Natural Cadence: true while waiting for a varied future slot (min-max minutes by pressure, plus jitter).</summary>
     public bool TryRespectNaturalCadence(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -2576,6 +2669,7 @@ public sealed class DefenderStateStore
                 && state.NaturalHoldCount == 0
                 && state.RoutineTimingDueAt is null
                 && state.ComfortBudgetHoldUntil is null
+                && state.CommandCamouflageHoldUntil is null
                 && state.NaturalCadenceDueAt is null
                 && state.NaturalChangePlannerDueAt is null
                 && state.ComfortEnvelopeUntil is null
@@ -2632,6 +2726,9 @@ public sealed class DefenderStateStore
             ClearComfortBudget(state.Settings.ComfortBudgetEnabled
                 ? "Comfort budget is lined up; no adjustment rest needed."
                 : "Comfort budget is off.");
+            ClearCommandCamouflage(state.Settings.CommandCamouflageEnabled
+                ? "Command camouflage is lined up; no helper-command gap needed."
+                : "Command camouflage is off.");
             ClearNaturalCadence(state.Settings.NaturalCadenceEnabled
                 ? "Natural cadence is lined up; no quiet slot needed."
                 : "Natural cadence is off.");
@@ -2673,6 +2770,7 @@ public sealed class DefenderStateStore
                     state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
                     ResetCoolingDefenderStep();
                     ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
+                    ClearCommandCamouflage($"Schedule {activeSchedule.Name} changed the target, so command camouflage reset.");
                     ClearNaturalChangePlanner($"Schedule {activeSchedule.Name} changed the target, so Comfort Pace reset.");
                     ClearComfortEnvelope($"Schedule {activeSchedule.Name} changed the target, so comfort envelope reset.");
                     ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
@@ -2718,6 +2816,7 @@ public sealed class DefenderStateStore
                 state.TargetTemperatureCelsius = Math.Round(comfortTarget, 1);
                 state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
                 ClearNaturalCadence("Upstairs comfort changed the target, so natural cadence reset.");
+                ClearCommandCamouflage("Upstairs comfort changed the target, so command camouflage reset.");
                 ClearNaturalChangePlanner("Upstairs comfort changed the target, so Comfort Pace reset.");
                 ClearComfortEnvelope("Upstairs comfort changed the target, so comfort envelope reset.");
                 ClearRepeatCommand("Upstairs comfort changed the target, so repeat quiet reset.");
@@ -3340,6 +3439,7 @@ public sealed class DefenderStateStore
         ClearManualComfortGrace();
         ClearRoutineTiming("Cooler intent fast lane is active, so routine timing is stepping aside.");
         ClearComfortBudget("Cooler intent fast lane is active, so comfort budget is stepping aside.");
+        ClearCommandCamouflage("Cooler intent fast lane is active, so command camouflage is stepping aside.");
         ClearNaturalCadence("Cooler intent fast lane is active, so natural cadence is stepping aside.");
         ClearNaturalChangePlanner("Cooler intent fast lane is active, so Comfort Pace is stepping aside.");
         ClearComfortEnvelope("Cooler intent fast lane is active, so comfort envelope is stepping aside.");
@@ -4095,6 +4195,14 @@ public sealed class DefenderStateStore
         return lastCommandAt.AddSeconds(baseSeconds + extraSeconds);
     }
 
+    private DateTimeOffset CalculateCommandCamouflageUntil(DateTimeOffset lastCommandAt, DateTimeOffset now)
+    {
+        var baseSeconds = Math.Clamp(state.Settings.CommandCamouflageMinimumGapSeconds, 0, 1800);
+        var pressure = CalculateCommandCamouflagePressure(now) / 100.0;
+        var extraSeconds = (int)Math.Round(Math.Clamp(state.Settings.CommandCamouflagePressureExtraSeconds, 0, 3600) * pressure);
+        return lastCommandAt.AddSeconds(baseSeconds + extraSeconds);
+    }
+
     private DateTimeOffset CalculateCoolingRunwayUntil(DateTimeOffset startedAt, DateTimeOffset now)
     {
         var baseSeconds = Math.Clamp(state.Settings.CoolingRunwayMinimumSeconds, 0, 1800);
@@ -4110,6 +4218,18 @@ public sealed class DefenderStateStore
         var touchPressure = CalculateTouchSuspicionScore(now) / 100.0;
         var commandPressure = Math.Clamp(
             state.DefenderCommandTimes.Count / Math.Max(1.0, state.Settings.ComfortBudgetMaxCommands),
+            0.0,
+            1.0);
+        return (int)Math.Round(Math.Clamp(Math.Max(touchPressure, commandPressure), 0.0, 1.0) * 100);
+    }
+
+    private int CalculateCommandCamouflagePressure(DateTimeOffset now)
+    {
+        PruneTouchTimes(now);
+        PruneDefenderCommandTimes(now);
+        var touchPressure = CalculateTouchSuspicionScore(now) / 100.0;
+        var commandPressure = Math.Clamp(
+            Math.Max(0, state.DefenderCommandTimes.Count - 1) / Math.Max(1.0, state.Settings.ComfortBudgetMaxCommands),
             0.0,
             1.0);
         return (int)Math.Round(Math.Clamp(Math.Max(touchPressure, commandPressure), 0.0, 1.0) * 100);
@@ -4540,6 +4660,9 @@ public sealed class DefenderStateStore
         saved.Settings.ComfortBudgetWindowMinutes = Math.Clamp(saved.Settings.ComfortBudgetWindowMinutes, 1, 240);
         saved.Settings.ComfortBudgetMaxCommands = Math.Clamp(saved.Settings.ComfortBudgetMaxCommands, 1, 30);
         saved.Settings.ComfortBudgetSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortBudgetSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.CommandCamouflageMinimumGapSeconds = Math.Clamp(saved.Settings.CommandCamouflageMinimumGapSeconds, 0, 1800);
+        saved.Settings.CommandCamouflagePressureExtraSeconds = Math.Clamp(saved.Settings.CommandCamouflagePressureExtraSeconds, 0, 3600);
+        saved.Settings.CommandCamouflageSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.CommandCamouflageSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.NaturalCadenceTriggerTouches = Math.Clamp(saved.Settings.NaturalCadenceTriggerTouches, 1, 20);
         saved.Settings.NaturalCadenceMinimumMinutes = Math.Clamp(saved.Settings.NaturalCadenceMinimumMinutes, 1, 120);
         saved.Settings.NaturalCadenceMaximumMinutes = Math.Clamp(
@@ -4669,6 +4792,19 @@ public sealed class DefenderStateStore
         saved.ComfortBudgetStatus = string.IsNullOrWhiteSpace(saved.ComfortBudgetStatus)
             ? "Comfort budget is watching."
             : saved.ComfortBudgetStatus;
+        saved.CommandCamouflageStatus = string.IsNullOrWhiteSpace(saved.CommandCamouflageStatus)
+            ? "Command camouflage is watching for a recent helper command."
+            : saved.CommandCamouflageStatus;
+        if (!saved.Settings.CommandCamouflageEnabled)
+        {
+            saved.CommandCamouflageHoldUntil = null;
+            saved.CommandCamouflageStatus = "Command camouflage is off.";
+        }
+        else if (saved.CommandCamouflageHoldUntil is { } camouflageUntil && camouflageUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.CommandCamouflageHoldUntil = null;
+            saved.CommandCamouflageStatus = "Command camouflage is watching for a recent helper command.";
+        }
         saved.NaturalCadenceStatus = string.IsNullOrWhiteSpace(saved.NaturalCadenceStatus)
             ? "Natural cadence is watching."
             : saved.NaturalCadenceStatus;
@@ -5002,6 +5138,13 @@ public sealed class DefenderStateStore
         var comfortBudgetSeconds = state.ComfortBudgetHoldUntil is { } budgetUntil && budgetUntil > now
             ? (int)Math.Ceiling((budgetUntil - now).TotalSeconds)
             : 0;
+        var commandCamouflageSeconds = state.CommandCamouflageHoldUntil is { } camouflageUntil && camouflageUntil > now
+            ? (int)Math.Ceiling((camouflageUntil - now).TotalSeconds)
+            : 0;
+        if (commandCamouflageSeconds == 0 && state.CommandCamouflageHoldUntil is not null)
+        {
+            ClearCommandCamouflage("Command camouflage slot arrived; watching for the next helper-command gap.");
+        }
         var naturalCadenceSeconds = state.NaturalCadenceDueAt is { } cadenceDueAt && cadenceDueAt > now
             ? (int)Math.Ceiling((cadenceDueAt - now).TotalSeconds)
             : 0;
@@ -5026,6 +5169,7 @@ public sealed class DefenderStateStore
         var visibilityPressure = CalculateVisibilityPressure(now);
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         var naturalWalkbackScore = CalculateTouchSuspicionScore(now);
+        var commandCamouflagePressure = CalculateCommandCamouflagePressure(now);
         var repeatCommandPressure = CalculateRepeatCommandPressure(now);
         var coolingRunwayPressure = CalculateCoolingRunwayPressure(now);
         var naturalWalkbackStep = Math.Min(
@@ -5201,6 +5345,16 @@ public sealed class DefenderStateStore
                     ? "Comfort budget is watching."
                     : state.ComfortBudgetStatus,
                 comfortBudgetSeconds > 0 ? state.ComfortBudgetHoldUntil : null),
+            new CommandCamouflageSnapshot(
+                state.Settings.CommandCamouflageEnabled,
+                commandCamouflageSeconds > 0,
+                commandCamouflageSeconds,
+                commandCamouflagePressure,
+                state.DefenderCommandTimes.Count,
+                string.IsNullOrWhiteSpace(state.CommandCamouflageStatus)
+                    ? "Command camouflage is watching for a recent helper command."
+                    : state.CommandCamouflageStatus,
+                commandCamouflageSeconds > 0 ? state.CommandCamouflageHoldUntil : null),
             new NaturalCadenceSnapshot(
                 state.Settings.NaturalCadenceEnabled,
                 naturalCadenceSeconds > 0,
@@ -5464,6 +5618,7 @@ public sealed class DefenderStateStore
         ClearVisibilityGuard("Visibility guard is watching.");
         ClearRoutineTiming("Routine timing is watching.");
         ClearComfortBudget("Comfort budget is watching.");
+        ClearCommandCamouflage("Command camouflage is watching for a recent helper command.");
         ClearNaturalCadence("Natural cadence is watching.");
         ClearNaturalChangePlanner("Comfort Pace is watching.");
         ClearComfortEnvelope("Comfort envelope is watching.");
@@ -5519,6 +5674,12 @@ public sealed class DefenderStateStore
     {
         state.ComfortBudgetHoldUntil = null;
         state.ComfortBudgetStatus = status;
+    }
+
+    private void ClearCommandCamouflage(string status)
+    {
+        state.CommandCamouflageHoldUntil = null;
+        state.CommandCamouflageStatus = status;
     }
 
     private void ClearNaturalCadence(string status)
@@ -5631,6 +5792,8 @@ public sealed class DefenderStateStore
             state.RoutineTimingDueAt = null;
             state.RoutineTimingStatus = "Routine timing used its comfort-check slot; watching for the next one.";
             state.ComfortBudgetStatus = $"Comfort budget counted {state.DefenderCommandTimes.Count}/{state.Settings.ComfortBudgetMaxCommands} recent comfort adjustments.";
+            state.CommandCamouflageHoldUntil = null;
+            state.CommandCamouflageStatus = "Command camouflage counted the latest helper command and is watching the next safe gap.";
             state.NaturalCadenceDueAt = null;
             state.NaturalCadenceStatus = "Natural cadence used its quiet slot; watching for the next safe rhythm.";
             ClearNaturalChangePlanner("Comfort Pace used its climate slot; watching for the next calm opening.");
@@ -5969,6 +6132,10 @@ public sealed class DefenderStateStore
             ComfortBudgetWindowMinutes = settings.ComfortBudgetWindowMinutes,
             ComfortBudgetMaxCommands = settings.ComfortBudgetMaxCommands,
             ComfortBudgetSafetyBandCelsius = settings.ComfortBudgetSafetyBandCelsius,
+            CommandCamouflageEnabled = settings.CommandCamouflageEnabled,
+            CommandCamouflageMinimumGapSeconds = settings.CommandCamouflageMinimumGapSeconds,
+            CommandCamouflagePressureExtraSeconds = settings.CommandCamouflagePressureExtraSeconds,
+            CommandCamouflageSafetyBandCelsius = settings.CommandCamouflageSafetyBandCelsius,
             NaturalCadenceEnabled = settings.NaturalCadenceEnabled,
             NaturalCadenceTriggerTouches = settings.NaturalCadenceTriggerTouches,
             NaturalCadenceMinimumMinutes = settings.NaturalCadenceMinimumMinutes,
@@ -6211,6 +6378,10 @@ public sealed class DefenderStateStore
         public DateTimeOffset? ComfortBudgetHoldUntil { get; set; }
 
         public string ComfortBudgetStatus { get; set; } = "Comfort budget is watching.";
+
+        public DateTimeOffset? CommandCamouflageHoldUntil { get; set; }
+
+        public string CommandCamouflageStatus { get; set; } = "Command camouflage is watching for a recent helper command.";
 
         public List<DateTimeOffset> DefenderCommandTimes { get; set; } = [];
 

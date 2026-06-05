@@ -14,6 +14,7 @@ tests.ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom();
 tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
+tests.CommandCamouflageSpacesSafeFollowUpButBypassesHotRoom();
 tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
 tests.WebsiteCommandDebounceCanBypassNonThermostatButtons();
 tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
@@ -40,9 +41,9 @@ internal sealed class DefenderSetPointRegressionTests
         var snapshot = fixture.Store.GetSnapshot();
 
         var live = GuardCatalog.Live.ToList();
-        if (live.Count < 27)
+        if (live.Count < 28)
         {
-            throw new InvalidOperationException($"Expected at least 27 live guard cards in the catalog, found {live.Count}.");
+            throw new InvalidOperationException($"Expected at least 28 live guard cards in the catalog, found {live.Count}.");
         }
 
         foreach (var guard in live)
@@ -317,6 +318,70 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.RepeatCommand.Holding)
         {
             throw new InvalidOperationException("Repeat Quiet should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void CommandCamouflageSpacesSafeFollowUpButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.CommandCamouflageEnabled = true;
+        settings.CommandCamouflageMinimumGapSeconds = 120;
+        settings.CommandCamouflagePressureExtraSeconds = 0;
+        settings.CommandCamouflageSafetyBandCelsius = 1.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        store.RecordCommand("Seed helper command.", 23.5);
+        var now = DateTimeOffset.UtcNow;
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.5,
+            25.0,
+            "cool",
+            "idle",
+            null,
+            []);
+
+        var waited = store.TryRespectCommandCamouflage(
+            safeReading,
+            22.0,
+            bypassCommandCamouflage: false,
+            now,
+            out var waitUntil,
+            out var message);
+
+        if (!waited || waitUntil <= now || !message.Contains("camouflage", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Command Camouflage should space a safe follow-up after a recent helper command.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.CommandCamouflage.Holding
+            || snapshot.CommandCamouflage.SecondsRemaining <= 0
+            || snapshot.CommandCamouflage.RecentCommandCount < 1)
+        {
+            throw new InvalidOperationException("Command Camouflage snapshot should show the active hold and recent command count.");
+        }
+
+        var hotRoom = store.TryRespectCommandCamouflage(
+            safeReading with { CurrentTemperatureCelsius = 24.2 },
+            22.0,
+            bypassCommandCamouflage: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Command Camouflage must step aside when the room is too warm.");
+        }
+
+        snapshot = store.GetSnapshot();
+        if (snapshot.CommandCamouflage.Holding)
+        {
+            throw new InvalidOperationException("Command Camouflage should clear its hold after a comfort bypass.");
         }
     }
 

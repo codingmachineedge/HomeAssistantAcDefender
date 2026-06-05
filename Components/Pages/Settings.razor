@@ -194,6 +194,16 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("command camouflage helper command spacing cover less obvious")) {
+                <MudExpansionPanel Text="Command camouflage" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Command camouflage" Value="_commandCamouflageEnabled" ValueChanged="@(v => SetDirty(v, x => _commandCamouflageEnabled = x))" Help="Let a recent helper command breathe before another safe correction." />
+                        <SettingInt Label="Min gap" Unit="s" Value="_commandCamouflageMinimumGapSeconds" ValueChanged="@(v => SetDirty(v, x => _commandCamouflageMinimumGapSeconds = x))" Min="0" Max="1800" />
+                        <SettingInt Label="Pressure extra" Unit="s" Value="_commandCamouflagePressureExtraSeconds" ValueChanged="@(v => SetDirty(v, x => _commandCamouflagePressureExtraSeconds = x))" Min="0" Max="3600" />
+                        <SettingDouble Label="Safe band" Value="_commandCamouflageSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _commandCamouflageSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("natural cadence slot")) {
                 <MudExpansionPanel Text="Natural cadence" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -588,6 +598,10 @@
     private int _comfortBudgetWindowMinutes = 30;
     private int _comfortBudgetMaxCommands = 3;
     private double _comfortBudgetSafetyBandCelsius = 1.2;
+    private bool _commandCamouflageEnabled = true;
+    private int _commandCamouflageMinimumGapSeconds = 180;
+    private int _commandCamouflagePressureExtraSeconds = 360;
+    private double _commandCamouflageSafetyBandCelsius = 1.0;
     private bool _naturalCadenceEnabled = true;
     private int _naturalCadenceTriggerTouches = 2;
     private int _naturalCadenceMinimumMinutes = 3;
@@ -788,6 +802,10 @@
         _comfortBudgetWindowMinutes = settings.ComfortBudgetWindowMinutes;
         _comfortBudgetMaxCommands = settings.ComfortBudgetMaxCommands;
         _comfortBudgetSafetyBandCelsius = settings.ComfortBudgetSafetyBandCelsius;
+        _commandCamouflageEnabled = settings.CommandCamouflageEnabled;
+        _commandCamouflageMinimumGapSeconds = settings.CommandCamouflageMinimumGapSeconds;
+        _commandCamouflagePressureExtraSeconds = settings.CommandCamouflagePressureExtraSeconds;
+        _commandCamouflageSafetyBandCelsius = settings.CommandCamouflageSafetyBandCelsius;
         _naturalCadenceEnabled = settings.NaturalCadenceEnabled;
         _naturalCadenceTriggerTouches = settings.NaturalCadenceTriggerTouches;
         _naturalCadenceMinimumMinutes = settings.NaturalCadenceMinimumMinutes;
@@ -1025,6 +1043,10 @@
             _comfortBudgetWindowMinutes,
             _comfortBudgetMaxCommands,
             _comfortBudgetSafetyBandCelsius,
+            _commandCamouflageEnabled,
+            _commandCamouflageMinimumGapSeconds,
+            _commandCamouflagePressureExtraSeconds,
+            _commandCamouflageSafetyBandCelsius,
             _naturalCadenceEnabled,
             _naturalCadenceTriggerTouches,
             _naturalCadenceMinimumMinutes,

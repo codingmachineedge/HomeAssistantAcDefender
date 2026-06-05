@@ -25,6 +25,7 @@ public sealed record DefenderSnapshot(
     VisibilityGuardSnapshot VisibilityGuard,
     RoutineTimingSnapshot RoutineTiming,
     ComfortBudgetSnapshot ComfortBudget,
+    CommandCamouflageSnapshot CommandCamouflage,
     NaturalCadenceSnapshot NaturalCadence,
     NaturalChangePlannerSnapshot NaturalChangePlanner,
     ComfortEnvelopeSnapshot ComfortEnvelope,
@@ -205,6 +206,15 @@ public sealed record ComfortBudgetSnapshot(
     int SecondsRemaining,
     int RecentCommandCount,
     int MaxCommands,
+    string Status,
+    DateTimeOffset? Until);
+
+public sealed record CommandCamouflageSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    int Pressure,
+    int RecentCommandCount,
     string Status,
     DateTimeOffset? Until);
 
@@ -550,6 +560,14 @@ public sealed class DefenderSettings
     public int ComfortBudgetMaxCommands { get; set; } = 3;
 
     public double ComfortBudgetSafetyBandCelsius { get; set; } = 1.2;
+
+    public bool CommandCamouflageEnabled { get; set; } = true;
+
+    public int CommandCamouflageMinimumGapSeconds { get; set; } = 180;
+
+    public int CommandCamouflagePressureExtraSeconds { get; set; } = 360;
+
+    public double CommandCamouflageSafetyBandCelsius { get; set; } = 1.0;
 
     public bool NaturalCadenceEnabled { get; set; } = true;
 

@@ -37,7 +37,9 @@ Routine Timing is another `DefenderStateStore` timing guard consumed by `AcDefen
 
 Comfort Budget is stored in `DefenderStateStore` as recent real setpoint command timestamps. `AcDefenderService` checks it before sending another safe correction. It limits only safe repeated commands and clears when comfort safety requires direct correction.
 
-Natural Cadence is a persisted timing slot in `DefenderStateStore`. `AcDefenderService` checks it after routine timing and comfort budget, then waits only for safe corrections. Its delay is based on recent wall-touch pressure and recent automatic command pressure, and it clears when direct comfort correction is needed.
+Command Camouflage is a persisted safe-correction hold in `DefenderStateStore`. `AcDefenderService` checks it after Comfort Budget and before the later visibility/cadence holds. It spaces another safe command after the most recent helper setpoint command using recent touch and command pressure, and it clears immediately when direct comfort correction or quiet-timing bypass is needed.
+
+Natural Cadence is a persisted timing slot in `DefenderStateStore`. `AcDefenderService` checks it after routine timing, comfort budget, command camouflage, and visibility guard, then waits only for safe corrections. Its delay is based on recent wall-touch pressure and recent automatic command pressure, and it clears when direct comfort correction is needed.
 
 Comfort Pace is a higher-pressure timing slot in `DefenderStateStore` for frequent wall changes. `AcDefenderService` checks it before routine timing and other late safe-correction holds. It chooses a persisted due time from wall-touch pressure, recent command pressure, real weather movement, the learned Home Assistant sensor rhythm, and local 5/10-minute clock boundaries. It only delays safe corrections and clears immediately when direct comfort correction is needed.
 

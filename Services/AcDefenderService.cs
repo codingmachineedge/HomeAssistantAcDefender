@@ -251,6 +251,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectCommandCamouflage(reading, expectedSetPoint, bypassQuietTiming, now, out var camouflageUntil, out var camouflageMessage))
+                {
+                    stateStore.SetNextAction(camouflageMessage, camouflageUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectVisibilityGuard(reading, expectedSetPoint, bypassQuietTiming, now, out var visibilityUntil, out var visibilityMessage))
                 {
                     stateStore.SetNextAction(visibilityMessage, visibilityUntil);

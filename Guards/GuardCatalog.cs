@@ -146,6 +146,24 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Command Camouflage", GuardCategory.WallTouch,
+            "Gives a recent helper command time to look normal before another safe correction appears.",
+            "The last real helper setpoint command, recent helper-command pressure, recent wall-touch pressure, and the room temperature.",
+            "After a setpoint command, it waits at least the minimum gap plus pressure-scaled extra seconds before another safe correction. Higher recent touch or command pressure makes the gap longer. A room over the safety band or any comfort/safety bypass clears it immediately.",
+            "Holds the next safe correction until the recent command has enough spacing.",
+            ["CommandCamouflageEnabled", "CommandCamouflageMinimumGapSeconds", "CommandCamouflagePressureExtraSeconds", "CommandCamouflageSafetyBandCelsius"],
+            s =>
+            {
+                var c = s.CommandCamouflage;
+                return GuardLiveView.Standard(c.Enabled, c.Holding, "Covering", c.Status,
+                [
+                    new("Cover wait", OffWait(c.Enabled, c.Holding, c.SecondsRemaining), "Time left before another safe command looks spaced out."),
+                    new("Pressure", Score(c.Enabled, c.Pressure), "How strongly recent touches or helper commands extend the gap."),
+                    new("Commands", c.Enabled ? c.RecentCommandCount.ToString() : "Off", "Recent helper setpoint commands in the rolling budget window."),
+                ], busyTone: GuardTone.Holding);
+            }),
+
+        new GuardInfo(
             "Natural Cadence", GuardCategory.WallTouch,
             "Picks a variable future slot for safe nudges so they never land at identical, robotic times.",
             "Recent wall-touch pressure and recent command pressure.",

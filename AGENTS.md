@@ -14,6 +14,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Visibility Guard may hold only safe corrections after wall touches that happen soon after defender commands. It must clear immediately when room comfort needs direct cooling.
 - Routine Timing may delay only safe corrections after repeated wall touches so they land on normal-looking comfort-check intervals. It must clear immediately when room comfort needs direct cooling.
 - Comfort Budget may limit only repeated safe setpoint commands inside its window. It must clear immediately when room comfort needs direct cooling.
+- Command Camouflage may delay only safe follow-up corrections after a recent helper setpoint command. It must clear immediately when room comfort needs direct cooling or a quiet-timing bypass is active.
 - Natural Cadence may choose a variable future slot only for safe corrections after repeated wall touches. It must clear immediately when room comfort needs direct cooling.
 - Comfort Compromise may adjust only the temporary effective target while room comfort is inside the configured safety band. Website target changes, schedule target changes, and upstairs comfort changes must clear it.
 - Comfort Memory may apply only small, expiring time-of-day offsets learned from real wall touches while room comfort is inside the configured safety band. It must skip warmer offsets when upstairs is hot.
