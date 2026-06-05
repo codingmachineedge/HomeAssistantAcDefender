@@ -18,6 +18,7 @@ The status snapshot includes:
 - `cooldownSeconds`: remaining dynamic/manual-touch cooldown.
 - `websiteCommandDebounce`: two-minute website command gate, remaining seconds, last accepted command, status, and expiry time.
 - `emergency`: active emergency quiet protocol, remaining seconds, status, and expiry time.
+- `frontDoorKillSwitch`: real front-door person detector guard status, active/person flags, detector count, configured entity IDs, last detector, recent thermostat-off command flag, hold seconds, and detector readings.
 - `coolModeRestore`: cool-mode restore delay status, remaining seconds, and due time.
 - `naturalRecovery`: quiet recovery status, quiet level, wait seconds, recent touch count, base/effective nudge size, base/effective hold chance, and effective command gap.
 - `naturalWalkback`: safe-band walkback status, active flag, touch score, and current walkback step.
@@ -54,11 +55,11 @@ GET /api/usage/history?hours=24
 GET /api/usage/history?entityId=sensor.alectra_hui_energy_today&from=2026-06-05T00:00:00Z&to=2026-06-05T23:59:59Z
 ```
 
-`/api/usage/live` returns the configured Home Assistant usage sensors for current power, daily energy, hourly cost, daily cost, current bill, bill due date, bill fetch status, and an `alectraHuiEntities` list containing every Home Assistant entity whose entity ID contains `alectra_hui`.
+`/api/usage/live` returns the configured Home Assistant usage sensors for current power, daily energy, hourly cost, daily cost, current bill, bill due date, bill fetch status, and an `alectraHuiEntities` list containing every Home Assistant entity whose entity ID contains `alectra_hui`. The Energy page uses this payload for the Alectra Hui overview, search, desk filters, grouped cards, and table.
 
 `/api/usage/alectra-hui` returns only the full Alectra Hui entity list used by the Energy dashboard.
 
-`/api/usage/history` reads Home Assistant recorder history for the configured energy entity by default. Pass `entityId` to inspect another sensor, `hours` for a window ending now, or explicit `from` and `to` timestamps.
+`/api/usage/history` reads Home Assistant recorder history for the configured energy entity by default. Pass `entityId` to inspect another sensor, `hours` for a window ending now, or explicit `from` and `to` timestamps. The Energy page chart uses this endpoint and labels samples in Toronto 24-hour time.
 
 ## Target And Defender
 
@@ -69,7 +70,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, Comfort Pace, Comfort Envelope, Alectra Peak Power Saver, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Comfort Pace, Comfort Envelope, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 
@@ -90,7 +91,7 @@ All thermostat command endpoints act on the real configured Home Assistant clima
 { "protocol": "too-cold" }
 ```
 
-Supported protocols are `too-cold`, `someone-upset`, and `suspicion`. Normal website command endpoints, including target changes, defender toggles, settings saves, thermostat refresh, exact target, boost, fan mode, and thermostat off, are protected by a two-minute debounce and return `429` with the current snapshot when another command is attempted too quickly. Emergency commands bypass an active debounce, then start a fresh debounce window.
+Supported protocols are `too-cold`, `someone-upset`, and `suspicion`. Thermostat-affecting website actions, including target generation, target changes, exact target, boost, fan mode, thermostat off, and the `too-cold` emergency, are protected by a two-minute debounce and return `429` with the current snapshot when another thermostat-affecting command is attempted too quickly. Defender activation, settings saves, refresh-only actions, and non-thermostat emergency quiet actions bypass the thermostat debounce.
 
 ## CLI Usage
 

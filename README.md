@@ -21,6 +21,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Thermal Momentum so the defender can wait when the room is already cooling fast enough to reach target soon.
 - Adds Weather Drift Timing so safe corrections can wait for real outdoor weather movement instead of happening immediately.
 - Adds Alectra Peak Power Saver so safe cooling corrections get more chill during On-peak, high-price, or high-power periods.
+- Adds a Front-door Guard Post kill switch that pauses the defender and can turn the thermostat off when a real front-door person detector trips.
 - Adds Natural Walkback so safe-band recovery moves get smaller and less predictable after repeated wall thermostat touches.
 - Adds Touch Signature so safe nudges can match the size of recent real wall thermostat steps.
 - Adds Visibility Guard so safe nudges slow down when a wall touch happens soon after a defender command.
@@ -34,7 +35,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Touch Intent so clear warmer wall-choice patterns can get extra safe grace instead of an obvious immediate fight-back.
 - Adds Cooler Intent Fast Lane so repeated cooler wall choices can skip quiet waits and cool sooner without changing the website target.
 - Adds Super Defender so repeated Home Assistant user/phone or automation changes can temporarily bypass quiet waits while the room still needs cooling.
-- Adds a two-minute website command debounce so fast button tapping does not spam Home Assistant.
+- Adds a two-minute website command debounce only around controls that can affect thermostat temperature or mode.
 - Adds emergency protocols for too-cold, someone-upset, and suspicion quiet situations.
 - Adds a repeated mega alert when cool mode is demanded but the thermostat stays idle or cooling does not lower room temperature.
 - Shows the next defender action in a live status label.
@@ -46,6 +47,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Can use Home Assistant presence entities so upstairs priority applies only while someone is home.
 - Exposes fan mode and can optionally move the fan to an energy-saving mode when the room is near target.
 - Reads optional Home Assistant usage sensors for live power, daily energy, daily cost, and 24-hour recorder history.
+- Adds a tabbed Alectra Hui command tent with search, desk filters, grouped entity cards, tables, and charts.
 - Includes CLI commands for live and historical usage checks without starting the web app.
 - Uses a MudBlazor front end with real-time dashboard polling and 24-hour time display, so the user does not need to refresh.
 
@@ -83,7 +85,7 @@ If `HomeAssistant__WeatherEntityId` is blank, the app discovers the first `weath
 
 The usage entities are optional Home Assistant sensor IDs. `UsagePowerEntityId` is shown as current live power, `UsageEnergyEntityId` is used for daily energy and default history, `UsageHourlyCostEntityId` is the newest hourly interval cost, `UsageCostEntityId` is shown as current daily cost, and the bill entity IDs show the current bill amount, due date, and bill fetch status when available. Historical usage uses Home Assistant recorder history from `api/history/period`, so the entity must be recorded by Home Assistant.
 
-For Alectra readings, install the Alectra Hui Home Assistant integration or run the Windows publisher first. It creates `sensor.alectra_hui_current_power`, `sensor.alectra_hui_energy_today`, `sensor.alectra_hui_hourly_cost`, `sensor.alectra_hui_cost_today`, and the `sensor.alectra_hui_current_bill*` bill entities; AC Defender only reads those entities after Home Assistant has created them. The Energy tab also lists every Home Assistant entity whose entity ID contains `alectra_hui`, including setting controls like the auto-switch, current-plan selector, and live-poll number.
+For Alectra readings, install the Alectra Hui Home Assistant integration or run the Windows publisher first. It creates `sensor.alectra_hui_current_power`, `sensor.alectra_hui_energy_today`, `sensor.alectra_hui_hourly_cost`, `sensor.alectra_hui_cost_today`, and the `sensor.alectra_hui_current_bill*` bill entities; AC Defender only reads those entities after Home Assistant has created them. The Energy page has an Alectra Hui command tent with tabs for overview, searchable grouped entities, 24-hour charts, and a table view. It lists every Home Assistant entity whose entity ID contains `alectra_hui`, including setting controls like the auto-switch, current-plan selector, and live-poll number. The Energy page is read-only except for refresh; it does not send thermostat commands.
 
 When Home Assistant includes a climate state `context`, the defender stores it with the thermostat reading and audit log. A `user_id` is treated as a Home Assistant user or phone app change. A `parent_id` is treated as a Home Assistant automation, script, or service-chain change. A context ID without either field is treated as a thermostat/device-side change. This source label is an attribution helper, not a fake thermostat state.
 
@@ -119,13 +121,14 @@ Every cycle:
 26. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
 27. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
 28. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
-29. Optionally set fan saver mode when near target.
-30. Correct the thermostat setpoint when it does not match the defender decision.
-31. Update the real-time dashboard status.
+29. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
+30. Optionally set fan saver mode when near target.
+31. Correct the thermostat setpoint when it does not match the defender decision.
+32. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
-Website command debounce is a separate two-minute guard around manual website actions such as target changes, defender toggles, settings saves, force cooling, fan changes, refresh, and thermostat-off controls. The first click is accepted, later clicks show the remaining wait instead of sending repeated Home Assistant calls or state writes. Emergency protocols bypass any active debounce so urgent action can still run, then start a fresh debounce window.
+Website command debounce is a separate two-minute guard around manual website actions that affect the thermostat or a future thermostat command: target generation, target changes, force exact target, force cooling, fan changes, thermostat-off controls, and the too-cold emergency. Defender activation, settings saves, and refresh-only actions bypass the thermostat debounce. The first thermostat-affecting click is accepted; later thermostat-affecting clicks show the remaining wait instead of spamming Home Assistant.
 
 Cooling failure watch reads only real Home Assistant data. It raises a repeated mega alert when the climate entity is in `cool`, room temperature is clearly above the setpoint, and `hvac_action` stays idle for several minutes. It also watches for the fallback case where `hvac_action` says cooling but the room does not drop over the retained sample window.
 
@@ -295,6 +298,11 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `PeakPowerSaverSafetyBandCelsius`: extra room warmth allowed before comfort overrides peak saving.
 - `PeakPowerSaverFanSaverEnabled`: sets the configured fan saver mode during peak saving when the room is still safe.
 - `PeakPowerSaverFanMode`: fan mode used during peak saving, usually `auto`.
+- `FrontDoorKillSwitchEnabled`: enables the real front-door person detector kill switch.
+- `FrontDoorPersonEntityIds`: comma-separated Home Assistant front-door person detector entities. Leave blank to auto-discover likely front-door/porch/entry person sensors.
+- `FrontDoorKillSwitchHoldMinutes`: how long the front-door guard window stays active after a person detection.
+- `FrontDoorKillSwitchRefreshSeconds`: how often the worker polls the front-door detector entities.
+- `FrontDoorKillSwitchTurnsThermostatOff`: sends `climate.set_hvac_mode` `off` when the front-door guard fires.
 - `SuperDefenderModeEnabled`: watches repeated Home Assistant user/phone or automation changes and can arm strict timing.
 - `SuperDefenderRemoteChangeThreshold`: remote-style changes needed before Super Defender arms.
 - `SuperDefenderWindowMinutes`: time window used to count remote-style changes.
@@ -353,6 +361,15 @@ Thermal Momentum also uses real Home Assistant room-temperature readings. After 
 Weather Drift Timing uses real Home Assistant outdoor temperature readings. After a recent wall touch, if the room is still inside the weather safe band and outdoor temperature is stable or cooling, it can hold a safe correction for a short configured window. If the outdoor temperature has genuinely warmed enough, the hold clears so the next correction can line up with real weather movement. If the room gets too warm, it clears immediately.
 
 Alectra Peak Power Saver uses real Alectra Hui Home Assistant usage sensors. It watches `sensor.alectra_hui_current_tou_period`, `sensor.alectra_hui_current_price`, `sensor.alectra_hui_current_power`, and the current plan entity when present. If Alectra reports On-peak, price above the configured threshold, or power above the configured kW threshold, it holds only safe cooling commands that would demand more cooling. If the room or upstairs gets too hot, or the command would save energy by raising the setpoint, it steps aside. It can also set the fan to the configured saver mode while the room remains inside the safe band.
+
+The Energy page organizes Alectra Hui data into four tabs:
+
+- **Overview**: a quick dashboard for power, energy, cost, bill, TOU, price, plan, and peak-saver state.
+- **Alectra Hui**: search box, desk filter, grouped entity cards, and helper text for each search/filter action.
+- **Charts**: Home Assistant recorder line chart for the configured 24-hour energy entity plus entity-count bar charts.
+- **Entity Table**: the filtered Alectra Hui entities in a compact table that stacks cleanly on mobile.
+
+Front-door Guard Post uses real Home Assistant front-door person detector entities. Configure exact entity IDs such as `binary_sensor.front_door_person`, or leave the setting blank so the worker auto-discovers likely front-door, porch, entry, or entrance person sensors. When any detector reports a person, the defender pauses immediately and, if enabled, sends `climate.set_hvac_mode` with `off`. The command is tagged as `front-door-kill-switch`, so later Home Assistant echoes do not look like wall-control touches.
 
 ## Schedule And Weather Rules
 
@@ -421,7 +438,7 @@ routed pages instead of a single crowded page:
 - **Dashboard** (`/`) — summary-first hero (target, live readings, connection, defender switch), priority alerts, a "defense at a glance" summary, and quick controls.
 - **Defense** (`/defense`) — every timing/comfort/safety guard as a live card with an inline "How this works" explainer; searchable and filterable by category.
 - **Comfort** (`/comfort`) — upstairs comfort guard, sensors, and presence.
-- **Energy** (`/energy`) — live usage sensors, the Alectra Hui entity list, and 24-hour history.
+- **Energy** (`/energy`) — tabbed Alectra Hui overview, search/filter entity groups, charts, table view, live usage sensors, and 24-hour history.
 - **Logs** (`/logs`) — the wall-touch audit log and activity events with clickable JSON detail.
 - **Controls** (`/controls`) — target, fan, refresh/force/emergency thermostat actions.
 - **Settings** (`/settings`) — grouped expanders for every guard plus the schedule editor.
@@ -458,6 +475,8 @@ POST /api/thermostat/refresh
 POST /api/thermostat/force-target
 POST /api/thermostat/force-boost
 POST /api/thermostat/fan
+POST /api/thermostat/off
+POST /api/emergency
 ```
 
 ## CLI

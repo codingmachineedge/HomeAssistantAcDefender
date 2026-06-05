@@ -27,8 +27,11 @@
 
         <div class="hero__side">
             <MudChip T="string" Color="@ConnectionColor" Variant="Variant.Filled">@ConnectionText</MudChip>
-            <MudSwitch T="bool" Value="@(Snapshot?.DefenderEnabled ?? false)" ValueChanged="SetDefenderEnabled" Color="Color.Success" Label="Defender active" />
-            <MudText Typo="Typo.caption" Class="helper-text">Switch the helper on, or pause it.</MudText>
+            <MudButton Class="@DefenderToggleClass" FullWidth="true" Variant="Variant.Filled" Color="@DefenderToggleColor"
+                       Size="Size.Large" StartIcon="@DefenderToggleIcon" OnClick="ToggleDefender">
+                @DefenderToggleText
+            </MudButton>
+            <MudText Typo="Typo.caption" Class="helper-text">@DefenderToggleHelp</MudText>
         </div>
     </MudPaper>
 
@@ -46,7 +49,13 @@
     {
         <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot.Emergency.Status</MudAlert>
     }
+    @if (Snapshot?.FrontDoorKillSwitch.Active == true || Snapshot?.FrontDoorKillSwitch.PersonDetected == true)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Dense="true">@Snapshot.FrontDoorKillSwitch.Status</MudAlert>
+    }
 
+    @if (Snapshot?.DefenderEnabled == true)
+    {
     @* ---------- Live readings ---------- *@
     <SectionCard Title="Live readings" Help="The real dining-room thermostat right now.">
         <MudGrid Spacing="2">
@@ -56,9 +65,23 @@
             }
         </MudGrid>
     </SectionCard>
+    }
+    else
+    {
+        <SectionCard Title="Guard post standby"
+                     Subtitle="Defender is paused"
+                     Help="Live tactical doodads are hidden while the crew is standing down. Very hush-hush, very snack-based.">
+            <MudButton Class="@DefenderToggleClass" Variant="Variant.Filled" Color="@DefenderToggleColor"
+                       Size="Size.Large" StartIcon="@DefenderToggleIcon" OnClick="ToggleDefender">
+                @DefenderToggleText
+            </MudButton>
+        </SectionCard>
+    }
 
     <MudGrid Spacing="3">
         @* ---------- Defense at a glance ---------- *@
+        @if (Snapshot?.DefenderEnabled == true)
+        {
         <MudItem xs="12" lg="7">
             <SectionCard Title="Defense at a glance"
                          Subtitle="@($"{BusyGuards.Count} guard{(BusyGuards.Count == 1 ? "" : "s")} acting")"
@@ -88,9 +111,10 @@
                 </ChildContent>
             </SectionCard>
         </MudItem>
+        }
 
         @* ---------- Quick controls ---------- *@
-        <MudItem xs="12" lg="5">
+        <MudItem xs="12" lg="@(Snapshot?.DefenderEnabled == true ? 5 : 12)">
             <SectionCard Title="Quick controls" Help="These talk to the real dining-room thermostat.">
                 <MudStack Spacing="2">
                     <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh reading</MudButton>
@@ -113,6 +137,12 @@
     private string ConnectionText => Snapshot?.ConnectionState == "home-assistant" ? "Home Assistant" : Snapshot?.ConnectionState ?? "--";
     private Color ConnectionColor => Snapshot?.ConnectionState == "home-assistant" ? Color.Success : Color.Error;
     private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
+    private bool DefenderIsEnabled => Snapshot?.DefenderEnabled == true;
+    private string DefenderToggleText => DefenderIsEnabled ? "Stand Down Defender" : "Activate Defender";
+    private string DefenderToggleHelp => DefenderIsEnabled ? "Green means the guard post is awake." : "Red means paused. Tap to wake the tiny guard shift.";
+    private string DefenderToggleIcon => DefenderIsEnabled ? Icons.Material.Filled.Shield : Icons.Material.Filled.PowerSettingsNew;
+    private Color DefenderToggleColor => DefenderIsEnabled ? Color.Success : Color.Error;
+    private string DefenderToggleClass => DefenderIsEnabled ? "defender-toggle defender-toggle--active" : "defender-toggle defender-toggle--paused";
 
     private IReadOnlyList<MetricItem> ReadingMetrics =>
     [
@@ -186,9 +216,11 @@
         Snackbar.Add("Target saved.", Severity.Success);
     }
 
+    private Task ToggleDefender() => SetDefenderEnabled(!DefenderIsEnabled);
+
     private async Task SetDefenderEnabled(bool enabled)
     {
-        if (!TryBeginWebsiteCommand(enabled ? "turn defender on" : "pause defender"))
+        if (!TryBeginWebsiteCommand(enabled ? "turn defender on" : "pause defender", bypassDebounce: true))
         {
             return;
         }
@@ -210,11 +242,11 @@
 
         if (turnOff == true)
         {
-            await RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off", bypassDebounce: true);
+            await RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off");
         }
     }
 
-    private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat");
+    private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat", bypassDebounce: true);
     private Task ForceTarget() => RunThermostatAction(() => Defender.ForceTargetAsync(CancellationToken.None), "Exact target sent.", "force exact target");
     private Task ForceBoost() => RunThermostatAction(() => Defender.ForceCoolingBoostAsync(CancellationToken.None), "Cooling boost sent.", "force cooling");
 

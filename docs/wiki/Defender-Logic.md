@@ -15,22 +15,22 @@ sequence. The first guard that wants to wait stops the cycle and reports its nex
 
 1. Pull weather and outdoor temperature.
 2. Pull the real dining-room climate entity.
-3. **Emergency protocols** — stand down if a too-cold, someone-upset, or suspicion window is active.
-4. If the defender is **paused**, keep reading 24/7 but send nothing.
-5. **Cool Mode Restore** — bring the HVAC mode back to `cool` (after a short safe delay).
-6. **Schedule & weather rules** — choose the target and decide whether corrective action is allowed.
-7. **Upstairs Comfort Guard** — lower the target and add boost when upstairs is hot.
-8. Decide whether **severe upstairs heat**, **Cooler Intent Fast Lane**, or **Super Defender** should bypass quiet timing.
-9. **Wall Settling**, **Conflict Quiet**, **Manual Comfort Grace**, and **Dynamic Cooldown** may each hold.
-10. **Alectra Peak Power Saver** — make safe cooling more chill during On-peak/high-price/high-power usage.
-11. **Fan Energy Saver** — move the fan to a saver mode when near target.
-12. Compute the **expected setpoint** (1 °C below room when the room is warm — see below).
-13. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver → Comfort Envelope → Room Trend →
-    Thermal Momentum → Weather Drift → Setpoint Echo → Cooling Runway → Sensor Rhythm → Comfort Sync →
-    Comfort Pace → Routine Timing → Comfort Budget → Visibility Guard → Natural Cadence**.
-14. Shape the command size with **Natural Walkback** and **Touch Signature**, then **Repeat Quiet**.
-15. Send the corrected setpoint to Home Assistant.
-16. **Cooling Failure Watch** runs alongside and raises a mega-alert if cooling is demanded but not real.
+3. Pull real front-door person detector entities when the guard is enabled.
+4. **Front-door Guard Post** pauses the defender and can turn the thermostat off if a person is detected.
+5. **Emergency protocols** stand down if a too-cold, someone-upset, or suspicion window is active.
+6. If the defender is **paused**, keep reading 24/7 but send nothing.
+7. **Cool Mode Restore** brings the HVAC mode back to `cool` after a short safe delay.
+8. **Schedule & weather rules** choose the target and decide whether corrective action is allowed.
+9. **Upstairs Comfort Guard** lowers the target and adds boost when upstairs is hot.
+10. Decide whether **severe upstairs heat**, **Cooler Intent Fast Lane**, or **Super Defender** should bypass quiet timing.
+11. **Wall Settling**, **Conflict Quiet**, **Manual Comfort Grace**, and **Dynamic Cooldown** may each hold.
+12. **Alectra Peak Power Saver** makes safe cooling more chill during On-peak, high-price, or high-power usage.
+13. **Fan Energy Saver** moves the fan to a saver mode when near target.
+14. Compute the **expected setpoint**: 1 C below room when the room is warm.
+15. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver -> Comfort Envelope -> Room Trend -> Thermal Momentum -> Weather Drift -> Setpoint Echo -> Cooling Runway -> Sensor Rhythm -> Comfort Sync -> Comfort Pace -> Routine Timing -> Comfort Budget -> Visibility Guard -> Natural Cadence**.
+16. Shape the command size with **Natural Walkback** and **Touch Signature**, then **Repeat Quiet**.
+17. Send the corrected setpoint to Home Assistant.
+18. **Cooling Failure Watch** runs alongside and raises a mega-alert if cooling is demanded but not real.
 
 ## Warm-room cooling — the "1 °C below room" rule
 
@@ -231,6 +231,11 @@ Makes safe cooling more chill and resource-saving when Alectra Hui says power is
 - **Logic:** the worker refreshes Alectra Hui usage sensors on the configured interval. On-peak TOU, current price at or above the c/kWh threshold, or current power at or above the kW threshold arms the saver window. While active, it holds only safe commands that would demand more cooling, and can set the configured fan saver mode. If the room or upstairs gets too hot, or the command would save energy by raising the setpoint, it steps aside.
 - **Settings:** `PeakPowerSaverEnabled`, `PeakPowerSaverOnPeakEnabled`, `PeakPowerSaverHighPowerEnabled`, `PeakPowerSaverPowerThresholdKilowatts`, `PeakPowerSaverPriceThresholdCentsPerKwh`, `PeakPowerSaverHoldMinutes`, `PeakPowerSaverRefreshSeconds`, `PeakPowerSaverSafetyBandCelsius`, `PeakPowerSaverFanSaverEnabled`, `PeakPowerSaverFanMode`.
 
+### Front-door Guard Post
+Pauses the defender when a real front-door person detector reports a person, and can immediately turn the thermostat off.
+- **Logic:** the worker reads configured front-door person detector entity IDs, or auto-discovers likely front-door, porch, entry, or entrance person sensors. If any detector is active, it pauses the defender, holds the guard window, and sends thermostat `off` when that setting is enabled. The command source is tagged as `front-door-kill-switch`, so its Home Assistant echo is not treated like a wall-control touch.
+- **Settings:** `FrontDoorKillSwitchEnabled`, `FrontDoorPersonEntityIds`, `FrontDoorKillSwitchHoldMinutes`, `FrontDoorKillSwitchRefreshSeconds`, `FrontDoorKillSwitchTurnsThermostatOff`.
+
 ### Upstairs Comfort Guard
 Prioritizes cooling when upstairs rooms get hot while someone is home.
 - **Logic:** if the hottest upstairs room exceeds the comfort maximum, it lowers the target toward the comfort target and adds the cooling boost. Severe upstairs heat bypasses cooldown. When presence is required and nobody is detected, it assumes home rather than under-cooling.
@@ -242,14 +247,14 @@ Time-of-day target rules, each gated by a weather activation condition.
 - **Settings:** `ScheduleEnabled`, `WeatherActivationMode`, and per-rule Days / Start / End / Target / Weather.
 
 ### Website Debounce
-Blocks repeated website button taps for two minutes so the UI does not spam Home Assistant.
-- **Logic:** the first click runs; later clicks within the debounce window show the remaining wait. Emergency actions bypass the debounce and then start a fresh window.
+Blocks repeated thermostat-affecting website button taps for two minutes so the UI does not spam Home Assistant.
+- **Logic:** the first thermostat-affecting click runs; later thermostat-affecting clicks within the debounce window show the remaining wait. Defender activation, settings save, refresh, search/filter controls, and non-thermostat emergency pauses bypass the thermostat debounce.
 
 ### Emergency Protocols
 One-tap stand-down modes, run from the Controls page.
 - **Too cold** (30 min): pauses the defender and turns the thermostat off.
 - **Someone upset** (45 min) and **Suspicion quiet** (90 min): keep reading the thermostat 24/7 but send no corrective commands until the window ends.
-- Emergency actions bypass the website debounce.
+- Too-cold uses the thermostat debounce because it turns the thermostat off. Someone-upset and suspicion bypass the thermostat debounce because they only pause defender commands.
 
 ### Cooling Failure Watch (MEGA → OMEGA)
 Raises a repeating **mega-alert** when cool mode is demanded but the AC is not really cooling, and escalates to a full-site **OMEGA alert** once a rising room confirms the failure.

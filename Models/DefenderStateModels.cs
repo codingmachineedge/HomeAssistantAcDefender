@@ -17,6 +17,7 @@ public sealed record DefenderSnapshot(
     int CooldownSeconds,
     WebsiteCommandDebounceSnapshot WebsiteCommandDebounce,
     EmergencySnapshot Emergency,
+    FrontDoorKillSwitchSnapshot FrontDoorKillSwitch,
     CoolModeRestoreSnapshot CoolModeRestore,
     NaturalRecoverySnapshot NaturalRecovery,
     NaturalWalkbackSnapshot NaturalWalkback,
@@ -92,6 +93,20 @@ public sealed record EmergencySnapshot(
     string Status,
     DateTimeOffset? Until);
 
+public sealed record FrontDoorKillSwitchSnapshot(
+    bool Enabled,
+    bool Active,
+    bool PersonDetected,
+    bool ThermostatOffCommanded,
+    int SecondsRemaining,
+    int DetectorCount,
+    string EntityIds,
+    string LastDetectedBy,
+    string Status,
+    DateTimeOffset? Until,
+    DateTimeOffset? UpdatedAt,
+    IReadOnlyList<FrontDoorPersonReading> Detectors);
+
 public sealed record ThermostatReading(
     string EntityId,
     double CurrentTemperatureCelsius,
@@ -123,6 +138,13 @@ public sealed record PresenceReading(
     string Name,
     string State,
     bool IsHome);
+
+public sealed record FrontDoorPersonReading(
+    string EntityId,
+    string Name,
+    string State,
+    bool PersonDetected,
+    DateTimeOffset? UpdatedAt);
 
 public sealed record CoolModeRestoreSnapshot(
     bool Enabled,
@@ -696,6 +718,16 @@ public sealed class DefenderSettings
     public bool PeakPowerSaverFanSaverEnabled { get; set; } = true;
 
     public string PeakPowerSaverFanMode { get; set; } = "auto";
+
+    public bool FrontDoorKillSwitchEnabled { get; set; } = true;
+
+    public string FrontDoorPersonEntityIds { get; set; } = "";
+
+    public int FrontDoorKillSwitchHoldMinutes { get; set; } = 20;
+
+    public int FrontDoorKillSwitchRefreshSeconds { get; set; } = 5;
+
+    public bool FrontDoorKillSwitchTurnsThermostatOff { get; set; } = true;
 
     public bool SuperDefenderModeEnabled { get; set; } = true;
 

@@ -34,8 +34,8 @@
 <MudLayout Class="@(_isDarkMode ? "app-shell app-dark" : "app-shell app-light")">
     <MudAppBar Class="top-bar" Color="Color.Default" Elevation="0" Fixed="true">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" aria-label="Toggle navigation" />
-        <MudIcon Icon="@Icons.Material.Filled.AcUnit" Class="brand-icon" />
-        <MudText Typo="Typo.h6" Class="brand-text">AC Defender</MudText>
+        <MudIcon Icon="@Icons.Material.Filled.Security" Class="brand-icon" />
+        <MudText Typo="Typo.h6" Class="brand-text">AC Defender Guard Post</MudText>
         <MudSpacer />
         <MudChip T="string" Class="status-chip" Color="@HeaderColor" Variant="Variant.Filled" Size="Size.Small">@HeaderStatus</MudChip>
         <MudTooltip Text="@ThemeTooltip">
@@ -119,8 +119,8 @@
     private string HeaderStatus => Snapshot switch
     {
         null => "Starting",
-        { DefenderEnabled: false } => "Paused",
-        { ConnectionState: "home-assistant" } => "Defender active",
+        { DefenderEnabled: false } => "Stand down",
+        { ConnectionState: "home-assistant" } => "Guard active",
         _ => "Home Assistant offline"
     };
 

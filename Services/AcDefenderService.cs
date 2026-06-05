@@ -34,7 +34,6 @@ public sealed class AcDefenderService
     {
         try
         {
-            var snapshot = stateStore.GetSnapshot();
             var nextCheck = DateTimeOffset.UtcNow.AddSeconds(Math.Max(3, options.CurrentValue.PollIntervalSeconds));
 
             var reading = await RefreshReadingAsync(cancellationToken);
@@ -43,6 +42,20 @@ public sealed class AcDefenderService
                 return;
             }
             await RefreshPeakPowerStatusIfDueAsync(cancellationToken);
+            await RefreshFrontDoorKillSwitchIfDueAsync(cancellationToken);
+
+            var frontDoorNow = DateTimeOffset.UtcNow;
+            if (stateStore.TryRespectFrontDoorKillSwitch(reading, frontDoorNow, out var shouldTurnOff, out var frontDoorUntil, out var frontDoorMessage))
+            {
+                stateStore.SetNextAction(frontDoorMessage, frontDoorUntil);
+                if (shouldTurnOff)
+                {
+                    await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
+                    stateStore.RecordFrontDoorThermostatOffCommand(reading.EntityId);
+                }
+
+                return;
+            }
 
             var emergencyNow = DateTimeOffset.UtcNow;
             if (stateStore.TryRespectEmergencyQuiet(emergencyNow, out var emergencyUntil, out var emergencyMessage))
@@ -51,6 +64,7 @@ public sealed class AcDefenderService
                 return;
             }
 
+            var snapshot = stateStore.GetSnapshot();
             if (!snapshot.DefenderEnabled)
             {
                 stateStore.SetNextAction("Defender paused; still reading the real thermostat 24/7.", nextCheck);
@@ -69,7 +83,10 @@ public sealed class AcDefenderService
                 stateStore.SetNextAction("Cool mode restore delay finished; restoring cool mode now.", now);
                 await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "cool", cancellationToken);
                 stateStore.RecordCoolModeRestoreCommand(reading.HvacMode);
-                stateStore.RecordCommand($"Home Assistant {reading.EntityId} mode restored to cool.");
+                stateStore.RecordCommand(
+                    $"Home Assistant {reading.EntityId} mode restored to cool.",
+                    commandedHvacMode: "cool",
+                    commandSourceDetail: "AC Defender restored cool mode because the thermostat mode was changed away from cool.");
                 return;
             }
 
@@ -141,13 +158,19 @@ public sealed class AcDefenderService
             {
                 var fanMode = stateStore.GetPeakPowerFanSaverMode();
                 await homeAssistantClient.SetFanModeAsync(reading.EntityId, fanMode, cancellationToken);
-                stateStore.RecordCommand($"Home Assistant {reading.EntityId} fan set to {fanMode} for Alectra Peak Power Saver.");
+                stateStore.RecordCommand(
+                    $"Home Assistant {reading.EntityId} fan set to {fanMode} for Alectra Peak Power Saver.",
+                    commandedFanMode: fanMode,
+                    commandSourceDetail: "AC Defender adjusted fan mode for Alectra Peak Power Saver.");
             }
             else if (stateStore.ShouldUseFanSaver(reading))
             {
                 var fanMode = stateStore.GetFanSaverMode();
                 await homeAssistantClient.SetFanModeAsync(reading.EntityId, fanMode, cancellationToken);
-                stateStore.RecordCommand($"Home Assistant {reading.EntityId} fan set to {fanMode} for energy saver.");
+                stateStore.RecordCommand(
+                    $"Home Assistant {reading.EntityId} fan set to {fanMode} for energy saver.",
+                    commandedFanMode: fanMode,
+                    commandSourceDetail: "AC Defender adjusted fan mode for energy saver.");
             }
 
             var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, reading.HvacAction);
@@ -249,7 +272,11 @@ public sealed class AcDefenderService
 
                 stateStore.SetNextAction($"Setting real thermostat to {commandSetPoint:0.0} C from the current-room-minus-1 C defender target.", now);
                 await homeAssistantClient.SetCoolingAsync(reading.EntityId, commandSetPoint, cancellationToken);
-                stateStore.RecordCommand($"Home Assistant {reading.EntityId} set to {commandSetPoint:0.0} C from current-room-minus-1 C target {expectedSetPoint:0.0} C.", commandSetPoint);
+                stateStore.RecordCommand(
+                    $"Home Assistant {reading.EntityId} set to {commandSetPoint:0.0} C from current-room-minus-1 C target {expectedSetPoint:0.0} C.",
+                    commandSetPoint,
+                    commandedHvacMode: "cool",
+                    commandSourceDetail: "AC Defender background service sent the current-room-minus-1 C correction.");
                 return;
             }
 
@@ -285,12 +312,39 @@ public sealed class AcDefenderService
         }
     }
 
+    private async Task RefreshFrontDoorKillSwitchIfDueAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (!stateStore.ShouldRefreshFrontDoorKillSwitch(now))
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = stateStore.GetSettings();
+            var readings = await homeAssistantClient.GetFrontDoorPersonDetectorsAsync(settings.FrontDoorPersonEntityIds, cancellationToken);
+            stateStore.RecordFrontDoorPersonReadings(readings);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Front-door kill switch refresh failed");
+            stateStore.RecordFrontDoorKillSwitchUnavailable(ex.Message);
+        }
+    }
+
     public async Task ForceTargetAsync(CancellationToken cancellationToken)
     {
         var reading = await RequireReadingAsync(cancellationToken);
         var target = stateStore.GetTargetTemperature();
         await homeAssistantClient.SetCoolingAsync(reading.EntityId, target, cancellationToken);
-        stateStore.RecordCommand($"Home Assistant {reading.EntityId} set to exact target {target:0.0} C.", target);
+        stateStore.RecordCommand(
+            $"Home Assistant {reading.EntityId} set to exact target {target:0.0} C.",
+            target,
+            commandedHvacMode: "cool",
+            commandSourceKind: "website-command",
+            commandSourceLabel: "Website control",
+            commandSourceDetail: "Website Force exact target button sent this Home Assistant command.");
         stateStore.SetNextAction("Exact target command sent; waiting for the next live reading.", DateTimeOffset.UtcNow.AddSeconds(options.CurrentValue.PollIntervalSeconds));
     }
 
@@ -299,7 +353,13 @@ public sealed class AcDefenderService
         var reading = await RequireReadingAsync(cancellationToken);
         var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, "idle");
         await homeAssistantClient.SetCoolingAsync(reading.EntityId, expectedSetPoint, cancellationToken);
-        stateStore.RecordCommand($"Home Assistant {reading.EntityId} cooling boost set to {expectedSetPoint:0.0} C.", expectedSetPoint);
+        stateStore.RecordCommand(
+            $"Home Assistant {reading.EntityId} cooling boost set to {expectedSetPoint:0.0} C.",
+            expectedSetPoint,
+            commandedHvacMode: "cool",
+            commandSourceKind: "website-command",
+            commandSourceLabel: "Website control",
+            commandSourceDetail: "Website Force cooling button sent this Home Assistant command.");
         stateStore.SetNextAction("Cooling boost command sent; waiting for the next live reading.", DateTimeOffset.UtcNow.AddSeconds(options.CurrentValue.PollIntervalSeconds));
     }
 
@@ -307,14 +367,28 @@ public sealed class AcDefenderService
     {
         var reading = await RequireReadingAsync(cancellationToken);
         await homeAssistantClient.SetFanModeAsync(reading.EntityId, fanMode, cancellationToken);
-        stateStore.RecordCommand($"Home Assistant {reading.EntityId} fan set to {fanMode}.");
+        stateStore.RecordCommand(
+            $"Home Assistant {reading.EntityId} fan set to {fanMode}.",
+            commandedFanMode: fanMode,
+            commandSourceKind: "website-command",
+            commandSourceLabel: "Website control",
+            commandSourceDetail: "Website fan-mode button sent this Home Assistant command.");
     }
 
-    public async Task TurnThermostatOffAsync(CancellationToken cancellationToken)
+    public async Task TurnThermostatOffAsync(
+        CancellationToken cancellationToken,
+        string commandSourceKind = "website-command",
+        string commandSourceLabel = "Website control",
+        string commandSourceDetail = "Website thermostat-off button sent this Home Assistant command.")
     {
         var reading = await RequireReadingAsync(cancellationToken);
         await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
-        stateStore.RecordCommand($"Home Assistant {reading.EntityId} thermostat turned off while defender is paused.");
+        stateStore.RecordCommand(
+            $"Home Assistant {reading.EntityId} thermostat turned off while defender is paused.",
+            commandedHvacMode: "off",
+            commandSourceKind: commandSourceKind,
+            commandSourceLabel: commandSourceLabel,
+            commandSourceDetail: commandSourceDetail);
         stateStore.SetNextAction("Thermostat off command sent; defender is paused and will keep reading status.", DateTimeOffset.UtcNow.AddSeconds(options.CurrentValue.PollIntervalSeconds));
     }
 

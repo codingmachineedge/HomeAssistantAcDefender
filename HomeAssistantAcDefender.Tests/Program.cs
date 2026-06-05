@@ -15,9 +15,11 @@ tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
 tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
+tests.WebsiteCommandDebounceCanBypassNonThermostatButtons();
 tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
 tests.OmegaAlertEscalatesOnlyWhenRoomRisesDuringIdleCoolingFailure();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
+tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
 tests.CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches();
 tests.WeatherDriftWaitsOnlyForSafeStableOutdoorConditions();
@@ -349,23 +351,47 @@ internal sealed class DefenderSetPointRegressionTests
             throw new InvalidOperationException("Blocked website command should report the active debounce and previous command.");
         }
 
-        var settingsSave = store.TryBeginWebsiteCommand("save settings");
-        if (settingsSave.Accepted)
-        {
-            throw new InvalidOperationException("Settings save should be blocked during the same website debounce window.");
-        }
-
-        var defenderToggle = store.TryBeginWebsiteCommand("pause defender");
-        if (defenderToggle.Accepted)
-        {
-            throw new InvalidOperationException("Defender toggle should be blocked during the same website debounce window.");
-        }
-
         SetRuntimeProperty(store, "WebsiteCommandDebounceUntil", DateTimeOffset.UtcNow.AddSeconds(-1));
-        var afterExpiry = store.TryBeginWebsiteCommand("refresh thermostat");
+        var afterExpiry = store.TryBeginWebsiteCommand("force exact target");
         if (!afterExpiry.Accepted)
         {
             throw new InvalidOperationException("Website debounce should reopen after its expiry time.");
+        }
+    }
+
+    public void WebsiteCommandDebounceCanBypassNonThermostatButtons()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+
+        var first = store.TryBeginWebsiteCommand("force cooling");
+        if (!first.Accepted)
+        {
+            throw new InvalidOperationException("First thermostat-affecting command should be accepted.");
+        }
+
+        var settingsSave = store.TryBeginWebsiteCommand("save settings", bypassDebounce: true);
+        if (!settingsSave.Accepted)
+        {
+            throw new InvalidOperationException("Settings save should bypass the thermostat debounce.");
+        }
+
+        if (!settingsSave.Snapshot.WebsiteCommandDebounce.Active
+            || settingsSave.Snapshot.WebsiteCommandDebounce.LastCommand != "force cooling")
+        {
+            throw new InvalidOperationException("Bypassed commands should not overwrite the active thermostat debounce owner.");
+        }
+
+        var defenderToggle = store.TryBeginWebsiteCommand("pause defender", bypassDebounce: true);
+        if (!defenderToggle.Accepted)
+        {
+            throw new InvalidOperationException("Defender toggle should bypass the thermostat debounce.");
+        }
+
+        var nextThermostatCommand = store.TryBeginWebsiteCommand("force exact target");
+        if (nextThermostatCommand.Accepted)
+        {
+            throw new InvalidOperationException("A second thermostat-affecting command should still be blocked.");
         }
     }
 
@@ -861,6 +887,70 @@ internal sealed class DefenderSetPointRegressionTests
         if (hotRoom)
         {
             throw new InvalidOperationException("Comfort Envelope must step aside when the room is too warm.");
+        }
+    }
+
+    public void FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        var settings = store.GetSettings();
+        settings.FrontDoorKillSwitchEnabled = true;
+        settings.FrontDoorKillSwitchHoldMinutes = 20;
+        settings.FrontDoorKillSwitchRefreshSeconds = 5;
+        settings.FrontDoorKillSwitchTurnsThermostatOff = true;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var baseline = new ThermostatReading(
+            "climate.dining_room",
+            22.0,
+            22.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(baseline);
+
+        var snapshot = store.RecordFrontDoorPersonReadings(
+        [
+            new FrontDoorPersonReading("binary_sensor.front_door_person", "Front Door Person", "on", true, DateTimeOffset.UtcNow)
+        ]);
+
+        if (snapshot.DefenderEnabled
+            || !snapshot.FrontDoorKillSwitch.Active
+            || !snapshot.FrontDoorKillSwitch.PersonDetected)
+        {
+            throw new InvalidOperationException("Front-door kill switch should pause the defender and show an active person detection.");
+        }
+
+        var respected = store.TryRespectFrontDoorKillSwitch(
+            baseline,
+            DateTimeOffset.UtcNow,
+            out var shouldTurnOff,
+            out var waitUntil,
+            out var message);
+        if (!respected || !shouldTurnOff || waitUntil is null || !message.Contains("Front-door", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Front-door kill switch should ask the worker to turn the thermostat off.");
+        }
+
+        store.RecordFrontDoorThermostatOffCommand("climate.dining_room");
+        snapshot = store.RecordHomeAssistantReading(baseline with
+        {
+            SetPointCelsius = 23.0,
+            HvacMode = "off",
+            HvacAction = "off"
+        });
+
+        if (snapshot.ThermostatChanges.Count != 0)
+        {
+            throw new InvalidOperationException("A thermostat state echo from the front-door kill switch must not be logged as a wall touch.");
+        }
+
+        if (!snapshot.Events.Any(item => item.Message.Contains("Front-door kill switch turned", StringComparison.OrdinalIgnoreCase)
+            || item.Message.Contains("Known thermostat command echoed", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException("Front-door thermostat-off source should be visible in activity events.");
         }
     }
 

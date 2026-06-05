@@ -17,11 +17,11 @@ The application is one ASP.NET Core process with two responsibilities:
 
 ## Command Attribution
 
-The app records setpoints it commands itself and treats matching Home Assistant updates inside the command grace window as app-originated. Other setpoint changes are logged as external thermostat touches.
+The app records setpoints, HVAC mode, and fan mode it commands itself and treats matching Home Assistant updates inside the command grace window as app-originated. Other setpoint changes are logged as external thermostat touches.
 
 When Home Assistant includes state `context` data, the audit log also stores the context ID, parent ID, and user ID. A `user_id` is labeled as a Home Assistant user or phone app change. A `parent_id` is labeled as a Home Assistant automation, script, or service chain. A context ID without those fields is labeled as a thermostat/device change.
 
-Website command debounce is also stored in `DefenderStateStore`. Dashboard handlers and HTTP POST endpoints call the same gate before accepting manual target changes, defender toggles, settings saves, thermostat refresh, exact target, boost, fan mode, or thermostat-off commands. Emergency protocols intentionally bypass an active debounce, then start a new two-minute debounce window.
+Website command debounce is also stored in `DefenderStateStore`. Dashboard handlers and HTTP POST endpoints call the same gate before accepting thermostat-affecting manual actions such as target generation, target changes, exact target, boost, fan mode, thermostat off, and the too-cold emergency. Defender activation, settings saves, thermostat refresh, and non-thermostat quiet actions bypass the thermostat debounce.
 
 ## Comfort Sync
 
@@ -76,3 +76,7 @@ Thermal Momentum is another `DefenderStateStore` decision that uses those same r
 Weather Drift Timing is a persisted `DefenderStateStore` timing guard using real Home Assistant outdoor weather samples. `AcDefenderService` checks it after room trend and thermal momentum. It can hold only safe post-touch corrections while outdoor temperature is stable or cooling, then clears when outdoor temperature has genuinely warmed enough, the hold expires, or room comfort needs direct correction.
 
 Alectra Peak Power Saver is another persisted `DefenderStateStore` timing guard using real Alectra Hui Home Assistant entities. `AcDefenderService` refreshes the Alectra reading on the configured interval, not every thermostat poll. The guard arms from On-peak TOU, high current price, or high current power, then holds only safe commands that would demand more cooling. It allows energy-saving setpoint raises and clears when room or upstairs comfort requires cooling. Optional peak fan saver calls still go through `HomeAssistantClient.SetFanModeAsync`.
+
+The Energy page is a read-only MudBlazor view over `HomeAssistantClient.GetLiveUsageAsync` and `GetUsageHistoryAsync`. Its Alectra Hui tabs, search, filters, tables, and charts do not call thermostat command APIs.
+
+Front-door Guard Post is a real detector kill switch. `HomeAssistantClient` reads configured front-door person detector entities, or auto-discovers likely `binary_sensor`/`sensor` entities whose names look like front-door, porch, entry, or entrance person detection. `AcDefenderService` checks it immediately after real thermostat and detector refreshes. If any detector reports a person, `DefenderStateStore` pauses the defender and the worker sends `climate.set_hvac_mode` `off` when enabled. The off command is tagged as `front-door-kill-switch`, so a later Home Assistant state echo is not logged as a wall-control touch.

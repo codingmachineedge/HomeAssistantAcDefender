@@ -159,6 +159,33 @@ Settings include:
 - Saver fan mode
 - Peak fan mode
 
+## Energy And Alectra Hui Page
+
+The Energy page is read-only except for refresh. It organizes real Home Assistant Alectra Hui data into tabs so you do not need to scroll through one giant list.
+
+- Refresh intel: asks Home Assistant for current usage and history again. It does not touch the thermostat.
+- Overview tab: shows the main power, energy, bill, TOU, plan, price, and peak-saver numbers.
+- Alectra Hui tab: shows a search box, a desk filter, grouped entity cards, and helper text under the controls.
+- Search Alectra Hui: type words like power, bill, price, plan, TOU, switch, or an entity ID to shrink the results.
+- Desk filter: shows only one group, such as Live usage, Guard signals, Bill desk, Plan controls, or Other signals.
+- Clear search: empties the search box.
+- Charts tab: shows a 24-hour Home Assistant recorder line chart and an entity-count bar chart.
+- Entity Table tab: shows the filtered entities in a table that stacks on mobile.
+
+## Front-door Guard Post
+
+When enabled, the app watches real front-door person detector entities. If a person is detected, it pauses the defender and can turn the thermostat off through Home Assistant.
+
+Settings include:
+
+- Front-door guard
+- Turn thermostat off
+- Guard hold min
+- Detector refresh s
+- Front-door person entity IDs
+
+Leave the entity ID box blank to auto-discover likely front-door, porch, entry, or entrance person sensors. Use exact IDs when you want full control, such as `binary_sensor.front_door_person`.
+
 ## Upstairs Comfort
 
 Settings include:

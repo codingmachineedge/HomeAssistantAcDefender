@@ -26,6 +26,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Cooling Runway may delay only safe corrections after real Home Assistant `hvac_action` changes into cooling. It must clear immediately when cooling stops or room comfort needs direct cooling.
 - Weather Drift Timing may delay only safe post-touch corrections using real Home Assistant outdoor weather samples. It must clear when outdoor warming provides a natural slot, the hold expires, or direct cooling is needed.
 - Alectra Peak Power Saver may delay only safe cooling commands using real Alectra Hui Home Assistant usage sensors. It must step aside when room/upstairs comfort needs cooling or when a command would save energy by raising the setpoint.
+- Front-door Guard Post must use real Home Assistant detector entities only. If it turns the thermostat off, tag the command source as the front-door kill switch so Home Assistant echoes are not logged as wall-control touches.
 - Comfort Sync / quiet recovery may delay or step real commands, but it must not create fake thermostat state or simulator-only behavior.
 - Conflict Quiet may stand down after repeated wall touches only while real room temperature remains inside the configured safety band.
 - Thermal momentum and room-trend decisions must use real Home Assistant room-temperature samples, not fake timing or simulated cooling.
@@ -34,6 +35,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 
 - Run `dotnet build` before pushing.
 - Use the dashboard and settings page in a browser after frontend changes.
+- Use the Energy page in a browser after Alectra Hui frontend changes; verify tabs, search/filter controls, charts, and mobile layout.
 - Check mobile layout for horizontal overflow after CSS/layout changes.
 - After each coherent change set, commit, push, rebuild, and redeploy the Docker Compose stack on the Linux host.
 
@@ -48,13 +50,13 @@ docker@192.168.50.242
 Project path:
 
 ```text
-/home/docker/homeassistant-ac-defender
+/home/docker/HomeAssistantAcDefender
 ```
 
 Deployment command:
 
 ```bash
-cd /home/docker/homeassistant-ac-defender
+cd /home/docker/HomeAssistantAcDefender
 docker compose build --no-cache
 docker compose up -d
 ```

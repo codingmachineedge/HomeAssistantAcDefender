@@ -140,6 +140,36 @@ public sealed class HomeAssistantClient
             .ToArray();
     }
 
+    public async Task<IReadOnlyList<FrontDoorPersonReading>> GetFrontDoorPersonDetectorsAsync(string configuredEntityIds, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return Array.Empty<FrontDoorPersonReading>();
+        }
+
+        var configured = SplitEntityIds(configuredEntityIds).ToArray();
+        if (configured.Length > 0)
+        {
+            var readings = new List<FrontDoorPersonReading>();
+            foreach (var entityId in configured)
+            {
+                var reading = await TryGetFrontDoorPersonDetectorAsync(entityId, cancellationToken);
+                if (reading is not null)
+                {
+                    readings.Add(reading);
+                }
+            }
+
+            return readings;
+        }
+
+        return (await GetStatesAsync(cancellationToken))
+            .Where(IsLikelyFrontDoorPersonDetector)
+            .Select(ParseFrontDoorPersonDetector)
+            .Take(8)
+            .ToArray();
+    }
+
     public async Task<UsageLiveSnapshot> GetLiveUsageAsync(CancellationToken cancellationToken)
     {
         if (!IsConfigured)
@@ -320,6 +350,21 @@ public sealed class HomeAssistantClient
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         return ParsePresence(document.RootElement);
+    }
+
+    private async Task<FrontDoorPersonReading?> TryGetFrontDoorPersonDetectorAsync(string entityId, CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(HttpMethod.Get, $"api/states/{Uri.EscapeDataString(entityId)}", null, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            logger.LogWarning("Home Assistant front-door person entity {EntityId} was not found", entityId);
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return ParseFrontDoorPersonDetector(document.RootElement);
     }
 
     private async Task<ThermostatReading?> TryGetClimateStateAsync(string entityId, CancellationToken cancellationToken)
@@ -559,6 +604,18 @@ public sealed class HomeAssistantClient
             string.Equals(state, "home", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static FrontDoorPersonReading ParseFrontDoorPersonDetector(JsonElement root)
+    {
+        var entityId = GetEntityId(root);
+        var state = TryGetState(root);
+        return new FrontDoorPersonReading(
+            entityId,
+            TryGetAttributeString(root, "friendly_name") ?? entityId,
+            state,
+            IsDetectedState(state),
+            TryGetTimestamp(root, "last_changed") ?? TryGetTimestamp(root, "last_updated"));
+    }
+
     private static UsageEntityReading ParseUsageEntity(JsonElement root)
     {
         var entityId = GetEntityId(root);
@@ -731,6 +788,50 @@ public sealed class HomeAssistantClient
         var entityId = GetEntityId(root);
         return entityId.StartsWith("person.", StringComparison.OrdinalIgnoreCase)
             || entityId.StartsWith("device_tracker.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsLikelyFrontDoorPersonDetector(JsonElement root)
+    {
+        var entityId = GetEntityId(root);
+        if (!entityId.StartsWith("binary_sensor.", StringComparison.OrdinalIgnoreCase)
+            && !entityId.StartsWith("sensor.", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var text = $"{entityId} {TryGetAttributeString(root, "friendly_name")}".ToLowerInvariant();
+        var nearFrontDoor = (text.Contains("front") && text.Contains("door"))
+            || text.Contains("porch")
+            || text.Contains("entry")
+            || text.Contains("entrance");
+        var detectsPerson = text.Contains("person")
+            || text.Contains("human")
+            || text.Contains("occupancy")
+            || text.Contains("occupant")
+            || text.Contains("visitor")
+            || text.Contains("motion");
+
+        return nearFrontDoor && detectsPerson;
+    }
+
+    private static bool IsDetectedState(string state)
+    {
+        var value = (state ?? string.Empty).Trim();
+        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var numeric))
+        {
+            return numeric > 0;
+        }
+
+        return value.Equals("on", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("detected", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("person", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("human", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("occupied", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("present", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("home", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("motion", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<string> SplitEntityIds(string entityIds)

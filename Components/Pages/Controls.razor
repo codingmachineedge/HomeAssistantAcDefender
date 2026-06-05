@@ -11,9 +11,12 @@
 <MudStack Spacing="3">
     <SectionCard Title="Defender"
                  Subtitle="@(Snapshot?.DefenderEnabled == true ? "Active" : "Paused")"
-                 Help="The switch turns the helper on or pauses it. Pausing offers to turn the real thermostat off.">
+        Help="The switch turns the helper on or pauses it. Pausing offers to turn the real thermostat off.">
         <Actions>
-            <MudSwitch T="bool" Value="@(Snapshot?.DefenderEnabled ?? false)" ValueChanged="SetDefenderEnabled" Color="Color.Success" Label="Defender active" />
+            <MudButton Class="@DefenderToggleClass" Variant="Variant.Filled" Color="@DefenderToggleColor"
+                       Size="Size.Large" StartIcon="@DefenderToggleIcon" OnClick="ToggleDefender">
+                @DefenderToggleText
+            </MudButton>
         </Actions>
         <ChildContent>
             @if (Snapshot?.WebsiteCommandDebounce.Active == true)
@@ -24,9 +27,15 @@
             {
                 <MudText Typo="Typo.body2" Class="helper-text">No website lock active.</MudText>
             }
+            @if (Snapshot?.FrontDoorKillSwitch.Active == true || Snapshot?.FrontDoorKillSwitch.PersonDetected == true)
+            {
+                <MudAlert Class="mt-2" Severity="Severity.Error" Variant="Variant.Filled" Dense="true">@Snapshot.FrontDoorKillSwitch.Status</MudAlert>
+            }
         </ChildContent>
     </SectionCard>
 
+    @if (Snapshot?.DefenderEnabled == true)
+    {
     <SectionCard Title="Super Defender"
                  Subtitle="@(Snapshot?.SuperDefender.Active == true ? "Armed" : "Watching")"
                  Help="Detects repeated phone/Home Assistant thermostat changes and can tighten response without cutting Wi-Fi.">
@@ -114,6 +123,18 @@
             </MudItem>
         </MudGrid>
     </SectionCard>
+    }
+    else
+    {
+        <SectionCard Title="Guard post standby"
+                     Subtitle="Defender is paused"
+                     Help="The live boards are covered with a tarp. Tap Activate Defender when the tiny shift is back on duty.">
+            <MudButton Class="@DefenderToggleClass" Variant="Variant.Filled" Color="@DefenderToggleColor"
+                       Size="Size.Large" StartIcon="@DefenderToggleIcon" OnClick="ToggleDefender">
+                @DefenderToggleText
+            </MudButton>
+        </SectionCard>
+    }
 
     <SectionCard Title="Emergency" Help="Urgent quiet actions. These bypass the website lock.">
         <MudGrid Spacing="2">
@@ -151,6 +172,11 @@
 
     private DefenderSnapshot? Snapshot => State.Snapshot;
     private string EmergencyProtocolHelp => EmergencyProtocols.FirstOrDefault(o => o.Value == _emergencyProtocol).Help ?? "Pick an emergency action.";
+    private bool DefenderIsEnabled => Snapshot?.DefenderEnabled == true;
+    private string DefenderToggleText => DefenderIsEnabled ? "Stand Down Defender" : "Activate Defender";
+    private string DefenderToggleIcon => DefenderIsEnabled ? Icons.Material.Filled.Shield : Icons.Material.Filled.PowerSettingsNew;
+    private Color DefenderToggleColor => DefenderIsEnabled ? Color.Success : Color.Error;
+    private string DefenderToggleClass => DefenderIsEnabled ? "defender-toggle defender-toggle--active" : "defender-toggle defender-toggle--paused";
 
     private IReadOnlyList<string> FanModes
     {
@@ -211,9 +237,11 @@
         Snackbar.Add("Target saved.", Severity.Success);
     }
 
+    private Task ToggleDefender() => SetDefenderEnabled(!DefenderIsEnabled);
+
     private async Task SetDefenderEnabled(bool enabled)
     {
-        if (!TryBeginWebsiteCommand(enabled ? "turn defender on" : "pause defender"))
+        if (!TryBeginWebsiteCommand(enabled ? "turn defender on" : "pause defender", bypassDebounce: true))
         {
             return;
         }
@@ -235,14 +263,18 @@
 
         if (turnOff == true)
         {
-            await TurnThermostatOff(bypassDebounce: true);
+            await TurnThermostatOff();
         }
     }
 
-    private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat");
+    private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat", bypassDebounce: true);
     private Task ForceTarget() => RunThermostatAction(() => Defender.ForceTargetAsync(CancellationToken.None), "Exact target sent.", "force exact target");
     private Task ForceBoost() => RunThermostatAction(() => Defender.ForceCoolingBoostAsync(CancellationToken.None), "Cooling boost sent.", "force cooling");
-    private Task RunEmergencyProtocol() => RunThermostatAction(() => Defender.ApplyEmergencyProtocolAsync(_emergencyProtocol, CancellationToken.None), "Emergency protocol started.", $"emergency {_emergencyProtocol}", bypassDebounce: true);
+    private Task RunEmergencyProtocol() => RunThermostatAction(
+        () => Defender.ApplyEmergencyProtocolAsync(_emergencyProtocol, CancellationToken.None),
+        "Emergency protocol started.",
+        $"emergency {_emergencyProtocol}",
+        bypassDebounce: !string.Equals(_emergencyProtocol, "too-cold", StringComparison.OrdinalIgnoreCase));
     private Task TurnThermostatOff(bool bypassDebounce = false) => RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off", bypassDebounce);
 
     private async Task ApplyFanMode()

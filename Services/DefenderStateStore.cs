@@ -294,6 +294,15 @@ public sealed class DefenderStateStore
             {
                 ClearPeakPowerSaver("Alectra Peak Power Saver is off.");
             }
+            state.Settings.FrontDoorKillSwitchEnabled = request.FrontDoorKillSwitchEnabled;
+            state.Settings.FrontDoorPersonEntityIds = request.FrontDoorPersonEntityIds?.Trim() ?? string.Empty;
+            state.Settings.FrontDoorKillSwitchHoldMinutes = Math.Clamp(request.FrontDoorKillSwitchHoldMinutes, 1, 240);
+            state.Settings.FrontDoorKillSwitchRefreshSeconds = Math.Clamp(request.FrontDoorKillSwitchRefreshSeconds, 2, 300);
+            state.Settings.FrontDoorKillSwitchTurnsThermostatOff = request.FrontDoorKillSwitchTurnsThermostatOff;
+            if (!state.Settings.FrontDoorKillSwitchEnabled)
+            {
+                ClearFrontDoorKillSwitch("Front-door guard post is off. The little sentry went for juice.");
+            }
             state.Settings.SuperDefenderModeEnabled = request.SuperDefenderModeEnabled;
             state.Settings.SuperDefenderRemoteChangeThreshold = Math.Clamp(request.SuperDefenderRemoteChangeThreshold, 1, 20);
             state.Settings.SuperDefenderWindowMinutes = Math.Clamp(request.SuperDefenderWindowMinutes, 1, 1440);
@@ -418,6 +427,169 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool ShouldRefreshFrontDoorKillSwitch(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (!state.Settings.FrontDoorKillSwitchEnabled)
+            {
+                ClearFrontDoorKillSwitch("Front-door guard post is off. The little sentry went for juice.");
+                return false;
+            }
+
+            if (state.FrontDoorPersonReadings.Count == 0)
+            {
+                return true;
+            }
+
+            if (state.FrontDoorKillSwitchUpdatedAt is not { } lastPollAt)
+            {
+                return true;
+            }
+
+            var refreshSeconds = Math.Clamp(state.Settings.FrontDoorKillSwitchRefreshSeconds, 2, 300);
+            return now - lastPollAt >= TimeSpan.FromSeconds(refreshSeconds);
+        }
+    }
+
+    public DefenderSnapshot RecordFrontDoorPersonReadings(IReadOnlyList<FrontDoorPersonReading> readings)
+    {
+        lock (gate)
+        {
+            var now = DateTimeOffset.UtcNow;
+            state.FrontDoorPersonReadings = readings
+                .OrderByDescending(item => item.PersonDetected)
+                .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            state.FrontDoorKillSwitchUpdatedAt = now;
+
+            if (!state.Settings.FrontDoorKillSwitchEnabled)
+            {
+                ClearFrontDoorKillSwitch("Front-door guard post is off. The little sentry went for juice.");
+                state.UpdatedAt = now;
+                SaveState();
+                return CreateSnapshot();
+            }
+
+            var detected = state.FrontDoorPersonReadings.FirstOrDefault(item => item.PersonDetected);
+            if (detected is not null)
+            {
+                var wasActive = IsFrontDoorKillSwitchActive(now);
+                var holdMinutes = Math.Max(1, state.Settings.FrontDoorKillSwitchHoldMinutes);
+                state.FrontDoorKillSwitchTriggeredAt = now;
+                state.FrontDoorKillSwitchUntil = now.AddMinutes(holdMinutes);
+                state.FrontDoorKillSwitchLastDetector = $"{detected.Name} ({detected.EntityId})";
+                state.DefenderEnabled = false;
+                var offPlan = state.Settings.FrontDoorKillSwitchTurnsThermostatOff
+                    ? "thermostat off order is ready"
+                    : "thermostat off is disabled";
+                state.FrontDoorKillSwitchStatus =
+                    $"Front-door guard post saw {detected.Name}; defender paused and {offPlan}. Guard report: totally normal hallway business.";
+                state.NextAction = state.FrontDoorKillSwitchStatus;
+                state.NextActionAt = state.FrontDoorKillSwitchUntil;
+                if (!wasActive)
+                {
+                    AddEvent("warning", $"Front-door kill switch fired from {detected.EntityId}; defender paused.");
+                }
+            }
+            else if (state.FrontDoorKillSwitchUntil is { } until && until > now)
+            {
+                state.FrontDoorKillSwitchStatus =
+                    $"Front door is clear; guard post is keeping the defender paused until {until.ToLocalTime():HH:mm:ss}. Very official, very tiny clipboard.";
+            }
+            else
+            {
+                ClearFrontDoorKillSwitch(readings.Count == 0
+                    ? "Front-door guard post is armed, but no matching real Home Assistant detector has reported yet."
+                    : "Front-door guard post is armed and clear.");
+            }
+
+            state.UpdatedAt = now;
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    public DefenderSnapshot RecordFrontDoorKillSwitchUnavailable(string message)
+    {
+        lock (gate)
+        {
+            state.FrontDoorPersonReadings = [];
+            state.FrontDoorKillSwitchUpdatedAt = DateTimeOffset.UtcNow;
+            state.FrontDoorKillSwitchStatus = $"Front-door guard post could not read detectors: {message}";
+            state.UpdatedAt = state.FrontDoorKillSwitchUpdatedAt.Value;
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    public bool TryRespectFrontDoorKillSwitch(
+        ThermostatReading reading,
+        DateTimeOffset now,
+        out bool shouldTurnThermostatOff,
+        out DateTimeOffset? waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            shouldTurnThermostatOff = false;
+            waitUntil = null;
+            message = string.Empty;
+
+            if (!state.Settings.FrontDoorKillSwitchEnabled)
+            {
+                ClearFrontDoorKillSwitch("Front-door guard post is off. The little sentry went for juice.");
+                return false;
+            }
+
+            if (!IsFrontDoorKillSwitchActive(now))
+            {
+                return false;
+            }
+
+            waitUntil = state.FrontDoorKillSwitchUntil;
+            message = string.IsNullOrWhiteSpace(state.FrontDoorKillSwitchStatus)
+                ? "Front-door kill switch is active; defender is paused."
+                : state.FrontDoorKillSwitchStatus;
+            state.FrontDoorKillSwitchStatus = message;
+            state.DefenderEnabled = false;
+            state.NextAction = message;
+            state.NextActionAt = waitUntil;
+
+            shouldTurnThermostatOff = state.Settings.FrontDoorKillSwitchTurnsThermostatOff
+                && !string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase)
+                && (state.FrontDoorThermostatOffCommandedAt is null
+                    || now - state.FrontDoorThermostatOffCommandedAt.Value > TimeSpan.FromSeconds(60));
+
+            SaveState();
+            return true;
+        }
+    }
+
+    public DefenderSnapshot RecordFrontDoorThermostatOffCommand(string entityId)
+    {
+        lock (gate)
+        {
+            var now = DateTimeOffset.UtcNow;
+            state.FrontDoorThermostatOffCommandedAt = now;
+            RecordPendingThermostatCommand(
+                commandedSetPointCelsius: null,
+                commandedHvacMode: "off",
+                commandedFanMode: null,
+                commandSourceKind: "front-door-kill-switch",
+                commandSourceLabel: "Front-door guard post",
+                commandSourceDetail: "Front-door person detector triggered the kill switch; thermostat off was sent by AC Defender.");
+            state.LastCommand = $"Home Assistant {entityId} thermostat turned off by front-door guard post.";
+            state.FrontDoorKillSwitchStatus = "Front-door guard post sent thermostat OFF. The guards are whispering into plastic walkie-talkies.";
+            state.NextAction = state.FrontDoorKillSwitchStatus;
+            state.NextActionAt = state.FrontDoorKillSwitchUntil;
+            state.UpdatedAt = now;
+            AddEvent("warning", $"Front-door kill switch turned {entityId} off.");
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
     public DefenderSnapshot RecordComfortReadings(
         IReadOnlyList<TemperatureSensorReading> upstairsSensors,
         IReadOnlyList<PresenceReading> presence)
@@ -504,31 +676,30 @@ public sealed class DefenderStateStore
         }
     }
 
-    public DefenderSnapshot RecordCommand(string message, double? commandedSetPointCelsius = null)
+    public DefenderSnapshot RecordCommand(
+        string message,
+        double? commandedSetPointCelsius = null,
+        string? commandedHvacMode = null,
+        string? commandedFanMode = null,
+        string commandSourceKind = "defender-service",
+        string commandSourceLabel = "AC Defender",
+        string commandSourceDetail = "AC Defender background service sent this Home Assistant command.")
     {
         lock (gate)
         {
             state.LastCommand = message;
             state.UpdatedAt = DateTimeOffset.UtcNow;
-            if (commandedSetPointCelsius is { } setPoint)
+            if (commandedSetPointCelsius is not null
+                || !string.IsNullOrWhiteSpace(commandedHvacMode)
+                || !string.IsNullOrWhiteSpace(commandedFanMode))
             {
-                state.PendingCommandSetPointCelsius = setPoint;
-                state.PendingCommandAt = state.UpdatedAt;
-                state.SetpointEchoStatus = state.Settings.SetpointEchoGuardEnabled
-                    ? $"Setpoint echo is waiting for Home Assistant to report {setPoint:0.0} C."
-                    : "Setpoint echo guard is off.";
-                state.LastDefenderCommandAt = state.UpdatedAt;
-                state.LastDefenderCommandSetPointCelsius = Math.Round(setPoint, 1);
-                state.DefenderCommandTimes.Add(state.UpdatedAt);
-                PruneDefenderCommandTimes(state.UpdatedAt);
-                state.RoutineTimingDueAt = null;
-                state.RoutineTimingStatus = "Routine timing used its comfort-check slot; watching for the next one.";
-                state.ComfortBudgetStatus = $"Comfort budget counted {state.DefenderCommandTimes.Count}/{state.Settings.ComfortBudgetMaxCommands} recent comfort adjustments.";
-                state.NaturalCadenceDueAt = null;
-                state.NaturalCadenceStatus = "Natural cadence used its quiet slot; watching for the next safe rhythm.";
-                ClearNaturalChangePlanner("Comfort Pace used its climate slot; watching for the next calm opening.");
-                ClearComfortEnvelope("Real comfort command sent; comfort envelope is watching again.");
-                ClearRepeatCommand("Repeat quiet used its slot; watching for identical follow-up commands.");
+                RecordPendingThermostatCommand(
+                    commandedSetPointCelsius,
+                    commandedHvacMode,
+                    commandedFanMode,
+                    commandSourceKind,
+                    commandSourceLabel,
+                    commandSourceDetail);
             }
 
             AddEvent("info", message);
@@ -581,6 +752,17 @@ public sealed class DefenderStateStore
                 state.UpdatedAt = now;
                 SaveState();
                 return new WebsiteCommandGateResult(false, blockedMessage, CreateSnapshot());
+            }
+
+            if (bypassDebounce)
+            {
+                state.WebsiteCommandDebounceStatus = state.WebsiteCommandDebounceUntil is { } stillActiveUntil && stillActiveUntil > now
+                    ? $"Website accepted {cleanName}; thermostat buttons still rest until {stillActiveUntil.ToLocalTime():HH:mm:ss}."
+                    : $"Website accepted {cleanName}; no thermostat debounce needed.";
+                state.UpdatedAt = now;
+                AddEvent("info", $"Website command accepted without thermostat debounce: {cleanName}.");
+                SaveState();
+                return new WebsiteCommandGateResult(true, state.WebsiteCommandDebounceStatus, CreateSnapshot());
             }
 
             var debounceUntil = now.AddSeconds(WebsiteCommandDebounceSeconds);
@@ -2825,15 +3007,11 @@ public sealed class DefenderStateStore
             return;
         }
 
-        var commandGrace = TimeSpan.FromSeconds(Math.Max(15, options.CommandGraceSeconds));
-        var matchesPendingCommand = state.PendingCommandSetPointCelsius is { } pending
-            && state.PendingCommandAt is { } pendingAt
-            && now - pendingAt <= commandGrace
-            && Math.Abs(pending - reading.SetPointCelsius) <= 0.15;
-
-        if (matchesPendingCommand)
+        if (TryClassifyPendingThermostatCommandEcho(reading, now, out var pendingSource, out var pendingEchoDetail))
         {
-            ClearPendingSetpointEcho($"Home Assistant echoed {reading.SetPointCelsius:0.0} C from the defender command.");
+            AddEvent(
+                "info",
+                $"Known thermostat command echoed ({pendingSource.Label}): {previous:0.0} C to {reading.SetPointCelsius:0.0} C. {pendingEchoDetail}");
             return;
         }
 
@@ -2971,6 +3149,58 @@ public sealed class DefenderStateStore
             "unknown source",
             "Home Assistant did not include context on this climate state, so the source cannot be proven.",
             false);
+    }
+
+    private bool TryClassifyPendingThermostatCommandEcho(
+        ThermostatReading reading,
+        DateTimeOffset now,
+        out ChangeSourceClassification source,
+        out string detail)
+    {
+        source = new ChangeSourceClassification(
+            "unknown",
+            "unknown source",
+            "No pending AC Defender command matched this state.",
+            false);
+        detail = string.Empty;
+
+        if (state.PendingCommandAt is not { } pendingAt
+            || now - pendingAt > TimeSpan.FromSeconds(Math.Max(15, options.CommandGraceSeconds)))
+        {
+            return false;
+        }
+
+        var setpointEcho = state.PendingCommandSetPointCelsius is { } pendingSetPoint
+            && Math.Abs(pendingSetPoint - reading.SetPointCelsius) <= 0.15;
+        var modeEcho = !string.IsNullOrWhiteSpace(state.PendingCommandHvacMode)
+            && string.Equals(state.PendingCommandHvacMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase);
+        var fanEcho = !string.IsNullOrWhiteSpace(state.PendingCommandFanMode)
+            && string.Equals(state.PendingCommandFanMode, reading.FanMode, StringComparison.OrdinalIgnoreCase);
+
+        if (!setpointEcho && !modeEcho && !fanEcho)
+        {
+            return false;
+        }
+
+        var kind = string.IsNullOrWhiteSpace(state.PendingCommandSourceKind)
+            ? "website-command"
+            : state.PendingCommandSourceKind!;
+        var label = string.IsNullOrWhiteSpace(state.PendingCommandSourceLabel)
+            ? "Website command"
+            : state.PendingCommandSourceLabel!;
+        detail = string.IsNullOrWhiteSpace(state.PendingCommandSourceDetail)
+            ? $"{label} sent this command through AC Defender."
+            : state.PendingCommandSourceDetail!;
+        source = new ChangeSourceClassification(kind, label, detail, false);
+
+        var echoedParts = string.Join(", ", new[]
+        {
+            setpointEcho ? $"{reading.SetPointCelsius:0.0} C" : null,
+            modeEcho ? $"mode {reading.HvacMode}" : null,
+            fanEcho ? $"fan {reading.FanMode}" : null
+        }.Where(item => item is not null));
+        ClearPendingSetpointEcho($"Home Assistant echoed {echoedParts} from {label}.");
+        return true;
     }
 
     private void TrackSuperDefenderSource(ChangeSourceClassification source, DateTimeOffset now)
@@ -4395,6 +4625,9 @@ public sealed class DefenderStateStore
         saved.Settings.PeakPowerSaverFanMode = string.IsNullOrWhiteSpace(saved.Settings.PeakPowerSaverFanMode)
             ? "auto"
             : saved.Settings.PeakPowerSaverFanMode.Trim();
+        saved.Settings.FrontDoorPersonEntityIds = saved.Settings.FrontDoorPersonEntityIds?.Trim() ?? string.Empty;
+        saved.Settings.FrontDoorKillSwitchHoldMinutes = Math.Clamp(saved.Settings.FrontDoorKillSwitchHoldMinutes <= 0 ? 20 : saved.Settings.FrontDoorKillSwitchHoldMinutes, 1, 240);
+        saved.Settings.FrontDoorKillSwitchRefreshSeconds = Math.Clamp(saved.Settings.FrontDoorKillSwitchRefreshSeconds <= 0 ? 5 : saved.Settings.FrontDoorKillSwitchRefreshSeconds, 2, 300);
         saved.Settings.SuperDefenderRemoteChangeThreshold = Math.Clamp(saved.Settings.SuperDefenderRemoteChangeThreshold, 1, 20);
         saved.Settings.SuperDefenderWindowMinutes = Math.Clamp(saved.Settings.SuperDefenderWindowMinutes, 1, 1440);
         saved.Settings.SuperDefenderHoldMinutes = Math.Clamp(saved.Settings.SuperDefenderHoldMinutes, 0, 240);
@@ -4413,6 +4646,7 @@ public sealed class DefenderStateStore
         saved.DefenderCommandTimes ??= [];
         saved.VisibilityNoticeTimes ??= [];
         saved.RemoteChangeTimes ??= [];
+        saved.FrontDoorPersonReadings ??= [];
         PruneLoadedDefenderCommandTimes(saved);
         PruneLoadedVisibilityNoticeTimes(saved);
         PruneLoadedRemoteChangeTimes(saved);
@@ -4538,7 +4772,12 @@ public sealed class DefenderStateStore
             && DateTimeOffset.UtcNow - pendingAt > TimeSpan.FromSeconds(Math.Max(saved.Settings.SetpointEchoGraceSeconds, 300)))
         {
             saved.PendingCommandSetPointCelsius = null;
+            saved.PendingCommandHvacMode = null;
+            saved.PendingCommandFanMode = null;
             saved.PendingCommandAt = null;
+            saved.PendingCommandSourceKind = null;
+            saved.PendingCommandSourceLabel = null;
+            saved.PendingCommandSourceDetail = null;
             saved.SetpointEchoStatus = "Setpoint echo is watching.";
         }
         saved.SensorRhythmStatus = string.IsNullOrWhiteSpace(saved.SensorRhythmStatus)
@@ -4582,6 +4821,22 @@ public sealed class DefenderStateStore
         {
             saved.PeakPowerSaverUntil = null;
             saved.PeakPowerSaverStatus = "Alectra Peak Power Saver is watching usage sensors.";
+        }
+        saved.FrontDoorKillSwitchStatus = string.IsNullOrWhiteSpace(saved.FrontDoorKillSwitchStatus)
+            ? "Front-door guard post is armed."
+            : saved.FrontDoorKillSwitchStatus;
+        saved.FrontDoorKillSwitchLastDetector = string.IsNullOrWhiteSpace(saved.FrontDoorKillSwitchLastDetector)
+            ? "--"
+            : saved.FrontDoorKillSwitchLastDetector;
+        if (!saved.Settings.FrontDoorKillSwitchEnabled)
+        {
+            saved.FrontDoorKillSwitchUntil = null;
+            saved.FrontDoorKillSwitchStatus = "Front-door guard post is off. The little sentry went for juice.";
+        }
+        else if (saved.FrontDoorKillSwitchUntil is { } frontDoorUntil && frontDoorUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.FrontDoorKillSwitchUntil = null;
+            saved.FrontDoorKillSwitchStatus = "Front-door guard post is armed and clear.";
         }
         saved.SuperDefenderStatus = string.IsNullOrWhiteSpace(saved.SuperDefenderStatus)
             ? "Super Defender is watching for repeated phone or Home Assistant changes."
@@ -4654,6 +4909,14 @@ public sealed class DefenderStateStore
         {
             ClearEmergencyQuiet("Emergency quiet ended; normal defender rules can resume.");
         }
+        var frontDoorSeconds = state.FrontDoorKillSwitchUntil is { } frontDoorUntil && frontDoorUntil > now
+            ? (int)Math.Ceiling((frontDoorUntil - now).TotalSeconds)
+            : 0;
+        if (frontDoorSeconds == 0 && state.FrontDoorKillSwitchUntil is not null)
+        {
+            ClearFrontDoorKillSwitch("Front-door guard post is armed and clear.");
+        }
+        var frontDoorPersonDetected = state.FrontDoorPersonReadings.Any(item => item.PersonDetected);
         var holdSeconds = state.NaturalHoldUntil is { } holdUntil && holdUntil > now
             ? (int)Math.Ceiling((holdUntil - now).TotalSeconds)
             : 0;
@@ -4852,6 +5115,25 @@ public sealed class DefenderStateStore
                     ? "No emergency quiet mode active."
                     : state.EmergencyStatus,
                 emergencySeconds > 0 ? state.EmergencyQuietUntil : null),
+            new FrontDoorKillSwitchSnapshot(
+                state.Settings.FrontDoorKillSwitchEnabled,
+                frontDoorSeconds > 0,
+                frontDoorPersonDetected,
+                state.FrontDoorThermostatOffCommandedAt is { } offAt && now - offAt <= TimeSpan.FromSeconds(90),
+                frontDoorSeconds,
+                state.FrontDoorPersonReadings.Count,
+                string.IsNullOrWhiteSpace(state.Settings.FrontDoorPersonEntityIds)
+                    ? "auto-discover"
+                    : state.Settings.FrontDoorPersonEntityIds,
+                string.IsNullOrWhiteSpace(state.FrontDoorKillSwitchLastDetector)
+                    ? "--"
+                    : state.FrontDoorKillSwitchLastDetector,
+                string.IsNullOrWhiteSpace(state.FrontDoorKillSwitchStatus)
+                    ? "Front-door guard post is armed."
+                    : state.FrontDoorKillSwitchStatus,
+                frontDoorSeconds > 0 ? state.FrontDoorKillSwitchUntil : null,
+                state.FrontDoorKillSwitchUpdatedAt,
+                state.FrontDoorPersonReadings.ToArray()),
             new CoolModeRestoreSnapshot(
                 state.Settings.CoolModeRestoreDelayEnabled,
                 coolModeRestoreSeconds > 0,
@@ -5299,8 +5581,73 @@ public sealed class DefenderStateStore
     private void ClearPendingSetpointEcho(string status)
     {
         state.PendingCommandSetPointCelsius = null;
+        state.PendingCommandHvacMode = null;
+        state.PendingCommandFanMode = null;
         state.PendingCommandAt = null;
+        state.PendingCommandSourceKind = null;
+        state.PendingCommandSourceLabel = null;
+        state.PendingCommandSourceDetail = null;
         state.SetpointEchoStatus = status;
+    }
+
+    private void RecordPendingThermostatCommand(
+        double? commandedSetPointCelsius,
+        string? commandedHvacMode,
+        string? commandedFanMode,
+        string commandSourceKind,
+        string commandSourceLabel,
+        string commandSourceDetail)
+    {
+        var now = DateTimeOffset.UtcNow;
+        state.PendingCommandSetPointCelsius = commandedSetPointCelsius is { } requestedSetPoint
+            ? Math.Round(requestedSetPoint, 1)
+            : null;
+        state.PendingCommandHvacMode = string.IsNullOrWhiteSpace(commandedHvacMode)
+            ? null
+            : commandedHvacMode.Trim();
+        state.PendingCommandFanMode = string.IsNullOrWhiteSpace(commandedFanMode)
+            ? null
+            : commandedFanMode.Trim();
+        state.PendingCommandAt = now;
+        state.PendingCommandSourceKind = string.IsNullOrWhiteSpace(commandSourceKind)
+            ? "website-command"
+            : commandSourceKind.Trim();
+        state.PendingCommandSourceLabel = string.IsNullOrWhiteSpace(commandSourceLabel)
+            ? "Website command"
+            : commandSourceLabel.Trim();
+        state.PendingCommandSourceDetail = string.IsNullOrWhiteSpace(commandSourceDetail)
+            ? $"{state.PendingCommandSourceLabel} sent this command through AC Defender."
+            : commandSourceDetail.Trim();
+
+        if (commandedSetPointCelsius is { } setPoint)
+        {
+            state.SetpointEchoStatus = state.Settings.SetpointEchoGuardEnabled
+                ? $"Setpoint echo is waiting for Home Assistant to report {setPoint:0.0} C from {state.PendingCommandSourceLabel}."
+                : "Setpoint echo guard is off.";
+            state.LastDefenderCommandAt = now;
+            state.LastDefenderCommandSetPointCelsius = Math.Round(setPoint, 1);
+            state.DefenderCommandTimes.Add(now);
+            PruneDefenderCommandTimes(now);
+            state.RoutineTimingDueAt = null;
+            state.RoutineTimingStatus = "Routine timing used its comfort-check slot; watching for the next one.";
+            state.ComfortBudgetStatus = $"Comfort budget counted {state.DefenderCommandTimes.Count}/{state.Settings.ComfortBudgetMaxCommands} recent comfort adjustments.";
+            state.NaturalCadenceDueAt = null;
+            state.NaturalCadenceStatus = "Natural cadence used its quiet slot; watching for the next safe rhythm.";
+            ClearNaturalChangePlanner("Comfort Pace used its climate slot; watching for the next calm opening.");
+            ClearComfortEnvelope("Real comfort command sent; comfort envelope is watching again.");
+            ClearRepeatCommand("Repeat quiet used its slot; watching for identical follow-up commands.");
+        }
+        else
+        {
+            var expected = string.Join(", ", new[]
+            {
+                state.PendingCommandHvacMode is null ? null : $"mode {state.PendingCommandHvacMode}",
+                state.PendingCommandFanMode is null ? null : $"fan {state.PendingCommandFanMode}"
+            }.Where(item => item is not null));
+            state.SetpointEchoStatus = string.IsNullOrWhiteSpace(expected)
+                ? "Thermostat command echo is waiting for Home Assistant."
+                : $"Thermostat command echo is waiting for Home Assistant to report {expected} from {state.PendingCommandSourceLabel}.";
+        }
     }
 
     private void ClearSensorRhythm(string status)
@@ -5319,6 +5666,29 @@ public sealed class DefenderStateStore
     {
         state.PeakPowerSaverUntil = null;
         state.PeakPowerSaverStatus = status;
+    }
+
+    private void ClearFrontDoorKillSwitch(string status)
+    {
+        state.FrontDoorKillSwitchUntil = null;
+        state.FrontDoorKillSwitchStatus = status;
+    }
+
+    private bool IsFrontDoorKillSwitchActive(DateTimeOffset now)
+    {
+        if (!state.Settings.FrontDoorKillSwitchEnabled)
+        {
+            state.FrontDoorKillSwitchUntil = null;
+            return false;
+        }
+
+        if (state.FrontDoorKillSwitchUntil is not { } until || until <= now)
+        {
+            state.FrontDoorKillSwitchUntil = null;
+            return false;
+        }
+
+        return true;
     }
 
     private bool IsPeakPowerSaverActive(DateTimeOffset now)
@@ -5683,6 +6053,11 @@ public sealed class DefenderStateStore
             PeakPowerSaverSafetyBandCelsius = settings.PeakPowerSaverSafetyBandCelsius,
             PeakPowerSaverFanSaverEnabled = settings.PeakPowerSaverFanSaverEnabled,
             PeakPowerSaverFanMode = settings.PeakPowerSaverFanMode,
+            FrontDoorKillSwitchEnabled = settings.FrontDoorKillSwitchEnabled,
+            FrontDoorPersonEntityIds = settings.FrontDoorPersonEntityIds,
+            FrontDoorKillSwitchHoldMinutes = settings.FrontDoorKillSwitchHoldMinutes,
+            FrontDoorKillSwitchRefreshSeconds = settings.FrontDoorKillSwitchRefreshSeconds,
+            FrontDoorKillSwitchTurnsThermostatOff = settings.FrontDoorKillSwitchTurnsThermostatOff,
             SuperDefenderModeEnabled = settings.SuperDefenderModeEnabled,
             SuperDefenderRemoteChangeThreshold = settings.SuperDefenderRemoteChangeThreshold,
             SuperDefenderWindowMinutes = settings.SuperDefenderWindowMinutes,
@@ -5781,7 +6156,17 @@ public sealed class DefenderStateStore
 
         public double? PendingCommandSetPointCelsius { get; set; }
 
+        public string? PendingCommandHvacMode { get; set; }
+
+        public string? PendingCommandFanMode { get; set; }
+
         public DateTimeOffset? PendingCommandAt { get; set; }
+
+        public string? PendingCommandSourceKind { get; set; }
+
+        public string? PendingCommandSourceLabel { get; set; }
+
+        public string? PendingCommandSourceDetail { get; set; }
 
         public DateTimeOffset? WebsiteCommandDebounceUntil { get; set; }
 
@@ -5940,6 +6325,20 @@ public sealed class DefenderStateStore
         public DateTimeOffset? PeakPowerSaverUntil { get; set; }
 
         public string PeakPowerSaverStatus { get; set; } = "Alectra Peak Power Saver is watching usage sensors.";
+
+        public List<FrontDoorPersonReading> FrontDoorPersonReadings { get; set; } = [];
+
+        public DateTimeOffset? FrontDoorKillSwitchUntil { get; set; }
+
+        public DateTimeOffset? FrontDoorKillSwitchTriggeredAt { get; set; }
+
+        public DateTimeOffset? FrontDoorKillSwitchUpdatedAt { get; set; }
+
+        public DateTimeOffset? FrontDoorThermostatOffCommandedAt { get; set; }
+
+        public string FrontDoorKillSwitchStatus { get; set; } = "Front-door guard post is armed.";
+
+        public string FrontDoorKillSwitchLastDetector { get; set; } = "--";
 
         public DateTimeOffset? SuperDefenderUntil { get; set; }
 

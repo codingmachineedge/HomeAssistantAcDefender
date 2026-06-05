@@ -135,7 +135,7 @@ app.MapPost("/api/target", (TargetTemperatureRequest request, DefenderStateStore
 
 app.MapPost("/api/defender", (DefenderEnabledRequest request, DefenderStateStore store) =>
 {
-    var gate = store.TryBeginWebsiteCommand(request.Enabled ? "turn defender on" : "pause defender");
+    var gate = store.TryBeginWebsiteCommand(request.Enabled ? "turn defender on" : "pause defender", bypassDebounce: true);
     if (!gate.Accepted)
     {
         return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
@@ -147,7 +147,7 @@ app.MapPost("/api/defender", (DefenderEnabledRequest request, DefenderStateStore
 
 app.MapPost("/api/settings", (SettingsRequest request, DefenderStateStore store) =>
 {
-    var gate = store.TryBeginWebsiteCommand("save settings");
+    var gate = store.TryBeginWebsiteCommand("save settings", bypassDebounce: true);
     if (!gate.Accepted)
     {
         return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
@@ -161,7 +161,7 @@ app.MapPost("/api/thermostat/refresh", async (AcDefenderService defender, Defend
 {
     try
     {
-        var gate = store.TryBeginWebsiteCommand("refresh thermostat");
+        var gate = store.TryBeginWebsiteCommand("refresh thermostat", bypassDebounce: true);
         if (!gate.Accepted)
         {
             return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
@@ -261,7 +261,8 @@ app.MapPost("/api/emergency", async (EmergencyProtocolRequest request, AcDefende
 {
     try
     {
-        var gate = store.TryBeginWebsiteCommand($"emergency {request.Protocol}", bypassDebounce: true);
+        var emergencyChangesThermostat = string.Equals(request.Protocol, "too-cold", StringComparison.OrdinalIgnoreCase);
+        var gate = store.TryBeginWebsiteCommand($"emergency {request.Protocol}", bypassDebounce: !emergencyChangesThermostat);
         if (!gate.Accepted)
         {
             return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);

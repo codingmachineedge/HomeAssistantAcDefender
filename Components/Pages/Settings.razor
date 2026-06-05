@@ -388,6 +388,23 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("front door person detector kill switch guard post thermostat off visitor porch entry")) {
+                <MudExpansionPanel Text="Front-door kill switch" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Front-door guard" Value="_frontDoorKillSwitchEnabled" ValueChanged="@(v => SetDirty(v, x => _frontDoorKillSwitchEnabled = x))" Help="Pause the defender if a real front-door person detector trips." />
+                        <SettingSwitch Label="Turn thermostat off" Value="_frontDoorKillSwitchTurnsThermostatOff" ValueChanged="@(v => SetDirty(v, x => _frontDoorKillSwitchTurnsThermostatOff = x))" Help="Send thermostat OFF when the front-door guard fires." />
+                        <SettingInt Label="Guard hold" Unit="min" Value="_frontDoorKillSwitchHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _frontDoorKillSwitchHoldMinutes = x))" Min="1" Max="240" />
+                        <SettingInt Label="Detector refresh" Unit="s" Value="_frontDoorKillSwitchRefreshSeconds" ValueChanged="@(v => SetDirty(v, x => _frontDoorKillSwitchRefreshSeconds = x))" Min="2" Max="300" />
+                        <MudItem xs="12">
+                            <MudTextField T="string" Value="_frontDoorPersonEntityIds" ValueChanged="@(v => SetDirty(v, x => _frontDoorPersonEntityIds = x))"
+                                          Label="Front-door person entity IDs"
+                                          Placeholder="binary_sensor.front_door_person, binary_sensor.porch_person"
+                                          HelperText="Comma-separated. Leave blank to auto-discover likely front-door person sensors."
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("upstairs comfort temperature sensors boost")) {
                 <MudExpansionPanel Text="Upstairs comfort" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -664,6 +681,11 @@
     private double _peakPowerSaverSafetyBandCelsius = 1.0;
     private bool _peakPowerSaverFanSaverEnabled = true;
     private string _peakPowerSaverFanMode = "auto";
+    private bool _frontDoorKillSwitchEnabled = true;
+    private string _frontDoorPersonEntityIds = "";
+    private int _frontDoorKillSwitchHoldMinutes = 20;
+    private int _frontDoorKillSwitchRefreshSeconds = 5;
+    private bool _frontDoorKillSwitchTurnsThermostatOff = true;
     private bool _upstairsComfortEnabled = true;
     private string _upstairsTemperatureEntityIds = "";
     private double _upstairsMaxComfortCelsius = 24.0;
@@ -859,6 +881,11 @@
         _peakPowerSaverSafetyBandCelsius = settings.PeakPowerSaverSafetyBandCelsius;
         _peakPowerSaverFanSaverEnabled = settings.PeakPowerSaverFanSaverEnabled;
         _peakPowerSaverFanMode = settings.PeakPowerSaverFanMode;
+        _frontDoorKillSwitchEnabled = settings.FrontDoorKillSwitchEnabled;
+        _frontDoorPersonEntityIds = settings.FrontDoorPersonEntityIds;
+        _frontDoorKillSwitchHoldMinutes = settings.FrontDoorKillSwitchHoldMinutes;
+        _frontDoorKillSwitchRefreshSeconds = settings.FrontDoorKillSwitchRefreshSeconds;
+        _frontDoorKillSwitchTurnsThermostatOff = settings.FrontDoorKillSwitchTurnsThermostatOff;
         _upstairsComfortEnabled = settings.UpstairsComfortEnabled;
         _upstairsTemperatureEntityIds = settings.UpstairsTemperatureEntityIds;
         _upstairsMaxComfortCelsius = settings.UpstairsMaxComfortCelsius;
@@ -928,7 +955,7 @@
 
     private void SaveSettings()
     {
-        var gate = StateStore.TryBeginWebsiteCommand("save settings");
+        var gate = StateStore.TryBeginWebsiteCommand("save settings", bypassDebounce: true);
         if (!gate.Accepted)
         {
             _settingsStatus = $"Wait {gate.Snapshot.WebsiteCommandDebounce.SecondsRemaining}s";
@@ -1082,6 +1109,11 @@
             _peakPowerSaverSafetyBandCelsius,
             _peakPowerSaverFanSaverEnabled,
             _peakPowerSaverFanMode,
+            _frontDoorKillSwitchEnabled,
+            _frontDoorPersonEntityIds,
+            _frontDoorKillSwitchHoldMinutes,
+            _frontDoorKillSwitchRefreshSeconds,
+            _frontDoorKillSwitchTurnsThermostatOff,
             _superDefenderModeEnabled,
             _superDefenderRemoteChangeThreshold,
             _superDefenderWindowMinutes,

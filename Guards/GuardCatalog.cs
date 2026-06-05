@@ -520,6 +520,29 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Front-door Guard Post", GuardCategory.System,
+            "Pauses the defender and can turn the thermostat off when a real front-door person detector trips.",
+            "Configured or auto-discovered Home Assistant front-door person sensors.",
+            "The worker reads the configured entities, or auto-discovers likely front-door/porch/entry person sensors. If any detector reports a person, the defender pauses immediately, holds the guard window, and sends thermostat OFF if that setting is enabled. The source is recorded as the front-door guard post so it does not look like a wall touch.",
+            "Runs the kill switch, hides the live boards while paused, and records the source.",
+            ["FrontDoorKillSwitchEnabled", "FrontDoorPersonEntityIds", "FrontDoorKillSwitchHoldMinutes", "FrontDoorKillSwitchRefreshSeconds", "FrontDoorKillSwitchTurnsThermostatOff"],
+            s =>
+            {
+                var f = s.FrontDoorKillSwitch;
+                var tone = !f.Enabled ? GuardTone.Off
+                    : f.PersonDetected ? GuardTone.Alert
+                    : f.Active ? GuardTone.Warning : GuardTone.Calm;
+                var label = !f.Enabled ? "Off" : f.PersonDetected ? "Person" : f.Active ? "Holding" : "Watching";
+                return new GuardLiveView(f.Enabled, f.Active || f.PersonDetected, label, tone, f.Status,
+                [
+                    new("Detectors", f.Enabled ? f.DetectorCount.ToString() : "Off", f.EntityIds),
+                    new("Last sentry", f.LastDetectedBy, "The detector that last triggered the guard post."),
+                    new("Guard hold", f.Active ? $"{f.SecondsRemaining}s" : "Ready", "Time left before the guard window clears."),
+                    new("Thermostat off", f.ThermostatOffCommanded ? "Sent" : "Ready", "Whether the off command was recently sent."),
+                ]);
+            }),
+
+        new GuardInfo(
             "Emergency Protocols", GuardCategory.System,
             "One-tap stand-down modes for too-cold, someone-upset, and suspicion situations.",
             "The chosen protocol and its remaining window.",

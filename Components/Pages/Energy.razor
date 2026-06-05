@@ -1,24 +1,41 @@
 @page "/energy"
 @implements IDisposable
+@using System.Globalization
 @inject DefenderStateProvider State
 @inject HomeAssistantClient HomeAssistant
 
 <PageTitle>Energy - AC Defender</PageTitle>
 
 <MudStack Spacing="3">
-    <SectionCard Title="Energy Usage"
-                 Subtitle="Home Assistant live sensors"
-                 Help="Reads the configured usage sensors, such as the Alectra Hui power, energy, and cost entities.">
+    <SectionCard Title="Alectra Hui Command Tent"
+                 Subtitle="@AlectraStatusTitle"
+                 Help="Read-only energy intelligence from real Home Assistant Alectra Hui entities. The defender uses this to be more chill during expensive or high-load power periods.">
         <Actions>
-            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="RefreshNow" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="RefreshNow" StartIcon="@Icons.Material.Filled.Refresh">Refresh intel</MudButton>
         </Actions>
         <ChildContent>
-            <MudGrid Spacing="2" Class="mt-1">
-                @foreach (var metric in EnergyMetrics)
-                {
-                    <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                }
-            </MudGrid>
+            <div class="energy-banner">
+                <div class="energy-banner__icon">
+                    <MudIcon Icon="@Icons.Material.Filled.ElectricBolt" />
+                </div>
+                <div class="energy-banner__main">
+                    <MudText Typo="Typo.h5">@AlectraStatusTitle</MudText>
+                    <MudText Class="helper-text">@State.Snapshot.PeakPowerSaver.Status</MudText>
+                    <div class="energy-chip-row">
+                        <MudChip T="string" Color="@(State.Snapshot.PeakPowerSaver.Active ? Color.Warning : Color.Success)" Variant="Variant.Filled" Size="Size.Small">@AlectraGuardLabel</MudChip>
+                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">@AlectraHuiEntities.Count entities</MudChip>
+                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">Usage @Format.ShortTime(_usage?.UpdatedAt)</MudChip>
+                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">History @Format.ShortTime(_usageHistoryUpdatedAt)</MudChip>
+                    </div>
+                    <MudText Class="helper-text">Refresh intel asks Home Assistant for current usage and recorder history again. It does not touch the thermostat.</MudText>
+                </div>
+                <div class="energy-banner__meter">
+                    <MudText Typo="Typo.overline">Peak power meter</MudText>
+                    <MudProgressLinear Color="@PeakPowerColor" Value="@PeakPowerPercent" Rounded="true" Size="Size.Large" />
+                    <MudText Class="helper-text">@PeakPowerMeterText</MudText>
+                </div>
+            </div>
+
             @if (!string.IsNullOrWhiteSpace(_usageError))
             {
                 <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">@_usageError</MudAlert>
@@ -30,45 +47,259 @@
         </ChildContent>
     </SectionCard>
 
-    <SectionCard Title="Alectra Hui entities"
-                 Subtitle="@($"{AlectraHuiEntities.Count} entities")"
-                 Help="Every Home Assistant entity whose entity ID contains alectra_hui, including controls.">
-        <MudStack Spacing="1" Class="scroll-list">
-            @if (AlectraHuiEntities.Any())
-            {
-                @foreach (var entity in AlectraHuiEntities)
-                {
-                    <div class="data-row data-row--wide">
-                        <div>
-                            <div class="data-row__name">@entity.Name</div>
-                            <div class="helper-text data-row__sub">@entity.EntityId</div>
+    <MudTabs Rounded="true" Elevation="0" Class="ops-tabs">
+        <MudTabPanel Text="Overview" Icon="@Icons.Material.Filled.Dashboard">
+            <MudStack Spacing="3" Class="mt-3">
+                <SectionCard Title="Energy overview"
+                             Subtitle="Fast scan"
+                             Help="Main usage numbers, bill status, and Alectra guard status in one small dashboard.">
+                    <MudGrid Spacing="2" Class="mt-1">
+                        @foreach (var metric in EnergyMetrics)
+                        {
+                            <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
+                        }
+                    </MudGrid>
+                </SectionCard>
+
+                <SectionCard Title="Entity desks"
+                             Subtitle="What the Alectra Hui squad found"
+                             Help="Entities are grouped so the important power, bill, plan, and guard signals are not mixed into one giant pile.">
+                    @if (CategoryBreakdown.Count > 0)
+                    {
+                        <div class="energy-bar-chart">
+                            @foreach (var item in CategoryBreakdown)
+                            {
+                                <div class="energy-bar-row">
+                                    <div class="energy-bar-row__label">
+                                        <MudIcon Icon="@IconForCategory(item.Category)" Size="Size.Small" />
+                                        <span>@item.Category</span>
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@item.Count</MudChip>
+                                    </div>
+                                    <div class="energy-bar-track">
+                                        <div class="@($"energy-bar-fill energy-bar-fill--{CssClassForCategory(item.Category)}")" style="@PercentStyle(item.Percent)"></div>
+                                    </div>
+                                </div>
+                            }
                         </div>
-                        <div class="data-row__right">
-                            <div class="data-row__value">@Format.UsageValue(entity)</div>
-                            <div class="helper-text">@Format.ShortTime(entity.LastChanged)</div>
-                        </div>
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">No Alectra Hui entities found yet.</MudText>
+                    }
+                </SectionCard>
+            </MudStack>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Alectra Hui" Icon="@Icons.Material.Filled.Bolt">
+            <MudStack Spacing="3" Class="mt-3">
+                <SectionCard Title="Alectra Hui"
+                             Subtitle="Searchable power intelligence"
+                             Help="Use search and desk filters to find the exact Alectra Hui Home Assistant entity without scrolling through everything.">
+                    <MudGrid Spacing="2" Class="mt-1">
+                        <MudItem xs="12" md="7">
+                            <MudTextField @bind-Value="_alectraSearch"
+                                          Immediate="true"
+                                          Label="Search Alectra Hui"
+                                          HelperText="Type words like power, bill, price, plan, tou, sensor, switch, or the entity ID."
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Adornment="Adornment.Start"
+                                          AdornmentIcon="@Icons.Material.Filled.Search" />
+                        </MudItem>
+                        <MudItem xs="12" md="4">
+                            <MudSelect T="string" @bind-Value="_alectraCategory" Label="Desk filter" HelperText="Pick one desk to shrink the table." Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem T="string" Value="@("All")">All desks</MudSelectItem>
+                                @foreach (var category in AlectraCategories)
+                                {
+                                    <MudSelectItem T="string" Value="@category">@category</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="1" Class="energy-clear-cell">
+                            <MudIconButton Icon="@Icons.Material.Filled.Clear" Color="Color.Default" Disabled="@string.IsNullOrWhiteSpace(_alectraSearch)" OnClick="ClearAlectraSearch" />
+                            <MudText Class="helper-text">Clear search.</MudText>
+                        </MudItem>
+                    </MudGrid>
+
+                    <div class="energy-chip-row mt-2">
+                        <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small">@FilteredAlectraEntities.Count shown</MudChip>
+                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">@_alectraCategory desk</MudChip>
+                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">Updated @Format.ShortTime(_usage?.UpdatedAt)</MudChip>
                     </div>
+                </SectionCard>
+
+                @if (FilteredAlectraGroups.Count > 0)
+                {
+                    @foreach (var group in FilteredAlectraGroups)
+                    {
+                        <SectionCard Title="@group.Category"
+                                     Subtitle="@($"{group.Items.Count} entities")"
+                                     Help="@HelpForCategory(group.Category)">
+                            <MudStack Spacing="1" Class="scroll-list">
+                                @foreach (var entity in group.Items)
+                                {
+                                    <div class="@($"data-row data-row--wide energy-entity energy-entity--{CssClassForCategory(group.Category)}")">
+                                        <div>
+                                            <div class="data-row__name">
+                                                <MudIcon Icon="@IconForCategory(group.Category)" Size="Size.Small" />
+                                                @entity.Name
+                                            </div>
+                                            <div class="helper-text data-row__sub">@entity.EntityId</div>
+                                            <div class="helper-text data-row__sub">@group.Category / @Format.ShortTime(entity.LastChanged)</div>
+                                        </div>
+                                        <div class="data-row__right">
+                                            <div class="data-row__value">@Format.UsageValue(entity)</div>
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@ColorForCategory(group.Category)">@entity.Unit</MudChip>
+                                        </div>
+                                    </div>
+                                }
+                            </MudStack>
+                        </SectionCard>
+                    }
                 }
-            }
-            else
-            {
-                <MudText Class="helper-text">No Alectra Hui entities found in Home Assistant yet.</MudText>
-            }
-        </MudStack>
-    </SectionCard>
+                else
+                {
+                    <SectionCard Title="No matches"
+                                 Subtitle="Search party came back empty"
+                                 Help="Clear the search or pick All desks to see every Alectra Hui entity Home Assistant exposes.">
+                        <MudText Class="helper-text">No Alectra Hui entities match the current search and desk filter.</MudText>
+                    </SectionCard>
+                }
+            </MudStack>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Charts" Icon="@Icons.Material.Filled.ShowChart">
+            <MudStack Spacing="3" Class="mt-3">
+                <SectionCard Title="24-hour usage chart"
+                             Subtitle="@(_usageHistory?.Name ?? "Recorder history")"
+                             Help="This chart uses Home Assistant recorder history for the configured energy usage entity. Times are shown in Toronto 24-hour time.">
+                    @if (UsageHistorySeries.Count > 0)
+                    {
+                        <div class="energy-chart">
+                            <MudChart T="double" ChartType="ChartType.Line" ChartSeries="@UsageHistorySeries" ChartLabels="@UsageHistoryLabels" Width="100%" Height="280px" />
+                        </div>
+                        <MudGrid Spacing="2" Class="mt-2">
+                            @foreach (var metric in HistoryMetrics)
+                            {
+                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
+                            }
+                        </MudGrid>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No numeric 24-hour recorder samples are available for the configured energy entity yet.</MudAlert>
+                    }
+                </SectionCard>
+
+                <SectionCard Title="Desk count chart"
+                             Subtitle="Alectra Hui inventory"
+                             Help="A quick bar chart showing how the Home Assistant Alectra Hui entities are split across desks.">
+                    @if (CategoryBreakdown.Count > 0)
+                    {
+                        <div class="energy-bar-chart energy-bar-chart--large">
+                            @foreach (var item in CategoryBreakdown)
+                            {
+                                <div class="energy-bar-row">
+                                    <div class="energy-bar-row__label">
+                                        <MudIcon Icon="@IconForCategory(item.Category)" Size="Size.Small" />
+                                        <span>@item.Category</span>
+                                        <strong>@item.Count</strong>
+                                    </div>
+                                    <div class="energy-bar-track">
+                                        <div class="@($"energy-bar-fill energy-bar-fill--{CssClassForCategory(item.Category)}")" style="@PercentStyle(item.Percent)"></div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">No entities to chart yet.</MudText>
+                    }
+                </SectionCard>
+            </MudStack>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Entity Table" Icon="@Icons.Material.Filled.TableRows">
+            <MudStack Spacing="3" Class="mt-3">
+                <SectionCard Title="Alectra Hui entity table"
+                             Subtitle="@($"{FilteredAlectraEntities.Count} shown")"
+                             Help="The same filtered data in table form for fast scanning on desktop and compact stacked rows on mobile.">
+                    <MudTable Items="@FilteredAlectraEntities" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Class="energy-table">
+                        <HeaderContent>
+                            <MudTh>Desk</MudTh>
+                            <MudTh>Name</MudTh>
+                            <MudTh>Entity ID</MudTh>
+                            <MudTh>Value</MudTh>
+                            <MudTh>Updated</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="Desk">
+                                <MudChip T="string" Size="Size.Small" Color="@ColorForCategory(EntityCategory(context))" Variant="Variant.Outlined">@EntityCategory(context)</MudChip>
+                            </MudTd>
+                            <MudTd DataLabel="Name">@context.Name</MudTd>
+                            <MudTd DataLabel="Entity ID"><span class="energy-entity-id">@context.EntityId</span></MudTd>
+                            <MudTd DataLabel="Value"><strong>@Format.UsageValue(context)</strong></MudTd>
+                            <MudTd DataLabel="Updated">@Format.ShortTime(context.LastChanged)</MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText Class="helper-text">No Alectra Hui entities match the current search.</MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                </SectionCard>
+            </MudStack>
+        </MudTabPanel>
+    </MudTabs>
 </MudStack>
 
 @code {
+    private const string AllCategories = "All";
+
     private UsageLiveSnapshot? _usage;
     private UsageHistorySnapshot? _usageHistory;
     private DateTimeOffset? _usageHistoryUpdatedAt;
     private string? _usageError;
     private string? _usageHistoryError;
+    private string _alectraSearch = string.Empty;
+    private string _alectraCategory = AllCategories;
     private DateTimeOffset _nextUsageRefresh = DateTimeOffset.MinValue;
     private DateTimeOffset _nextUsageHistoryRefresh = DateTimeOffset.MinValue;
 
     private IReadOnlyList<UsageEntityReading> AlectraHuiEntities =>
         _usage?.AlectraHuiEntities ?? Array.Empty<UsageEntityReading>();
+
+    private PeakPowerSaverSnapshot PeakPower => State.Snapshot.PeakPowerSaver;
+
+    private string AlectraStatusTitle => PeakPower.Holding
+        ? "Alectra Hui says: hold the icy orders"
+        : PeakPower.Active
+            ? "Alectra Hui says: power is spicy"
+            : "Alectra Hui says: power looks calm";
+
+    private string AlectraGuardLabel => PeakPower.Holding
+        ? "Saver holding"
+        : PeakPower.Active
+            ? "Saver armed"
+            : PeakPower.Enabled ? "Saver watching" : "Saver off";
+
+    private Color PeakPowerColor => PeakPower.Active ? Color.Warning : Color.Success;
+
+    private double PeakPowerPercent
+    {
+        get
+        {
+            if (PeakPower.CurrentPowerKilowatts is null || PeakPower.PowerThresholdKilowatts <= 0)
+            {
+                return 0;
+            }
+
+            return Math.Clamp(PeakPower.CurrentPowerKilowatts.Value / PeakPower.PowerThresholdKilowatts * 100, 0, 100);
+        }
+    }
+
+    private string PeakPowerMeterText => PeakPower.CurrentPowerKilowatts is null
+        ? $"Waiting for current power. Threshold: {PeakPower.PowerThresholdKilowatts:0.##} kW."
+        : $"{PeakPower.CurrentPowerKilowatts.Value:0.###} kW of {PeakPower.PowerThresholdKilowatts:0.##} kW guard threshold.";
 
     private string UsageHistoryHelp => _usageHistory is null
         ? "Home Assistant recorder history for the configured energy sensor."
@@ -83,12 +314,115 @@
         new("Current bill", Format.UsageValue(_usage?.CurrentBill), Format.UsageHelp(_usage?.CurrentBill)),
         new("Bill due", Format.UsageValue(_usage?.CurrentBillDue), Format.UsageHelp(_usage?.CurrentBillDue)),
         new("Bill status", Format.UsageValue(_usage?.CurrentBillStatus), Format.UsageHelp(_usage?.CurrentBillStatus)),
+        new("TOU period", BlankDash(PeakPower.TouPeriod), "Alectra Hui current time-of-use period."),
+        new("Current plan", BlankDash(PeakPower.CurrentPlan), "Alectra Hui current billing plan."),
+        new("Current price", PeakPower.CurrentPriceCentsPerKwh is null ? "--" : $"{PeakPower.CurrentPriceCentsPerKwh.Value:0.###} c/kWh", $"Saver threshold is {PeakPower.PriceThresholdCentsPerKwh:0.###} c/kWh."),
+        new("Current power", PeakPower.CurrentPowerKilowatts is null ? "--" : $"{PeakPower.CurrentPowerKilowatts.Value:0.###} kW", $"Saver threshold is {PeakPower.PowerThresholdKilowatts:0.##} kW."),
         new("Usage updated", Format.ShortTime(_usage?.UpdatedAt), "When AC Defender last read usage sensors."),
+    ];
+
+    private IReadOnlyList<MetricItem> HistoryMetrics =>
+    [
         new("24h delta", Format.UsageHistoryValue(_usageHistory?.Delta, _usageHistory?.Unit), UsageHistoryHelp),
         new("24h max", Format.UsageHistoryValue(_usageHistory?.Max, _usageHistory?.Unit), UsageHistoryHelp),
-        new("24h samples", _usageHistory?.Count.ToString() ?? "--", UsageHistoryHelp),
+        new("24h min", Format.UsageHistoryValue(_usageHistory?.Min, _usageHistory?.Unit), UsageHistoryHelp),
+        new("24h samples", _usageHistory?.Count.ToString(CultureInfo.InvariantCulture) ?? "--", UsageHistoryHelp),
         new("History updated", Format.ShortTime(_usageHistoryUpdatedAt), "When AC Defender last checked recorder history."),
     ];
+
+    private IReadOnlyList<string> AlectraCategories =>
+        AlectraHuiEntities
+            .Select(EntityCategory)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(CategoryOrder)
+            .ThenBy(category => category, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private IReadOnlyList<UsageEntityReading> FilteredAlectraEntities =>
+        AlectraHuiEntities
+            .Where(entity => _alectraCategory == AllCategories || EntityCategory(entity).Equals(_alectraCategory, StringComparison.OrdinalIgnoreCase))
+            .Where(entity => Format.MatchesSearch(_alectraSearch, entity.Name, entity.EntityId, entity.State, entity.Unit, EntityCategory(entity)))
+            .OrderBy(entity => CategoryOrder(EntityCategory(entity)))
+            .ThenBy(entity => entity.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entity => entity.EntityId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private IReadOnlyList<AlectraEntityGroup> FilteredAlectraGroups =>
+        FilteredAlectraEntities
+            .GroupBy(EntityCategory)
+            .OrderBy(group => CategoryOrder(group.Key))
+            .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new AlectraEntityGroup(group.Key, group.ToArray()))
+            .ToArray();
+
+    private IReadOnlyList<CategoryMetric> CategoryBreakdown
+    {
+        get
+        {
+            var total = AlectraHuiEntities.Count;
+            if (total == 0)
+            {
+                return Array.Empty<CategoryMetric>();
+            }
+
+            return AlectraHuiEntities
+                .GroupBy(EntityCategory)
+                .OrderBy(group => CategoryOrder(group.Key))
+                .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new CategoryMetric(group.Key, group.Count(), group.Count() * 100.0 / total))
+                .ToArray();
+        }
+    }
+
+    private IReadOnlyList<UsageHistorySample> HistoryChartSamples
+    {
+        get
+        {
+            var samples = _usageHistory?.Samples
+                .Where(sample => sample.Value is not null)
+                .OrderBy(sample => sample.Timestamp)
+                .ToArray() ?? Array.Empty<UsageHistorySample>();
+            if (samples.Length <= 12)
+            {
+                return samples;
+            }
+
+            var picked = new List<UsageHistorySample>(12);
+            var step = (samples.Length - 1) / 11.0;
+            for (var i = 0; i < 12; i++)
+            {
+                picked.Add(samples[(int)Math.Round(i * step)]);
+            }
+
+            return picked;
+        }
+    }
+
+    private List<ChartSeries<double>> UsageHistorySeries
+    {
+        get
+        {
+            var samples = HistoryChartSamples;
+            if (samples.Count == 0)
+            {
+                return [];
+            }
+
+            return
+            [
+                new ChartSeries<double>
+                {
+                    Name = _usageHistory?.Name ?? "Usage",
+                    Data = samples.Select(sample => Math.Round(sample.Value!.Value, 3)).ToArray()
+                }
+            ];
+        }
+    }
+
+    private string[] UsageHistoryLabels =>
+        HistoryChartSamples
+            .Select(sample => Format.ToToronto(sample.Timestamp).ToString("HH:mm", CultureInfo.InvariantCulture))
+            .ToArray();
 
     protected override void OnInitialized()
     {
@@ -157,5 +491,91 @@
         }
     }
 
+    private void ClearAlectraSearch() => _alectraSearch = string.Empty;
+
+    private static string EntityCategory(UsageEntityReading entity)
+    {
+        var id = entity.EntityId.ToLowerInvariant();
+        var name = entity.Name.ToLowerInvariant();
+        var joined = $"{id} {name}";
+
+        if (joined.Contains("bill", StringComparison.Ordinal) || joined.Contains("due", StringComparison.Ordinal) || joined.Contains("balance", StringComparison.Ordinal))
+        {
+            return "Bill desk";
+        }
+
+        if (id.StartsWith("select.", StringComparison.Ordinal) || id.StartsWith("switch.", StringComparison.Ordinal) || id.StartsWith("number.", StringComparison.Ordinal)
+            || joined.Contains("plan", StringComparison.Ordinal) || joined.Contains("auto", StringComparison.Ordinal) || joined.Contains("poll", StringComparison.Ordinal))
+        {
+            return "Plan controls";
+        }
+
+        if (joined.Contains("tou", StringComparison.Ordinal) || joined.Contains("peak", StringComparison.Ordinal) || joined.Contains("price", StringComparison.Ordinal) || joined.Contains("rate", StringComparison.Ordinal))
+        {
+            return "Guard signals";
+        }
+
+        if (joined.Contains("power", StringComparison.Ordinal) || joined.Contains("energy", StringComparison.Ordinal) || joined.Contains("usage", StringComparison.Ordinal) || joined.Contains("cost", StringComparison.Ordinal))
+        {
+            return "Live usage";
+        }
+
+        return "Other signals";
+    }
+
+    private static int CategoryOrder(string category) => category switch
+    {
+        "Live usage" => 0,
+        "Guard signals" => 1,
+        "Bill desk" => 2,
+        "Plan controls" => 3,
+        _ => 4
+    };
+
+    private static string IconForCategory(string category) => category switch
+    {
+        "Live usage" => Icons.Material.Filled.Speed,
+        "Guard signals" => Icons.Material.Filled.Policy,
+        "Bill desk" => Icons.Material.Filled.ReceiptLong,
+        "Plan controls" => Icons.Material.Filled.Tune,
+        _ => Icons.Material.Filled.Sensors
+    };
+
+    private static Color ColorForCategory(string category) => category switch
+    {
+        "Live usage" => Color.Info,
+        "Guard signals" => Color.Warning,
+        "Bill desk" => Color.Success,
+        "Plan controls" => Color.Secondary,
+        _ => Color.Default
+    };
+
+    private static string CssClassForCategory(string category) => category switch
+    {
+        "Live usage" => "usage",
+        "Guard signals" => "guard",
+        "Bill desk" => "bill",
+        "Plan controls" => "controls",
+        _ => "other"
+    };
+
+    private static string HelpForCategory(string category) => category switch
+    {
+        "Live usage" => "Live power, energy, usage, and cost signals. The guard reads these before deciding whether safe cooling can wait.",
+        "Guard signals" => "TOU, price, rate, and peak hints. These tell the defender when electricity is the hot zone.",
+        "Bill desk" => "Bill, due-date, and balance style sensors. Useful for checking the wallet damage without leaving the guard post.",
+        "Plan controls" => "Alectra Hui controls and selectors exposed by Home Assistant. This page shows them but does not change them.",
+        _ => "Extra Alectra Hui entities that do not fit the main desks."
+    };
+
+    private static string PercentStyle(double percent) =>
+        $"width: {percent.ToString("0.##", CultureInfo.InvariantCulture)}%;";
+
+    private static string BlankDash(string? value) => string.IsNullOrWhiteSpace(value) || value == "--" ? "--" : value;
+
     public void Dispose() => State.Changed -= OnStateChanged;
+
+    private sealed record AlectraEntityGroup(string Category, IReadOnlyList<UsageEntityReading> Items);
+
+    private sealed record CategoryMetric(string Category, int Count, double Percent);
 }
