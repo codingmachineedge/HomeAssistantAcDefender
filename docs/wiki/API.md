@@ -5,6 +5,8 @@
 ```text
 GET /api/status
 GET /api/settings
+GET /api/usage/live
+GET /api/usage/history
 GET /api/status/stream
 ```
 
@@ -33,6 +35,18 @@ The status snapshot includes:
 - `thermostatChanges`: external thermostat touch audit log.
 - `comfort`: upstairs comfort and presence status.
 
+## Usage
+
+```text
+GET /api/usage/live
+GET /api/usage/history?hours=24
+GET /api/usage/history?entityId=sensor.alectra_hui_energy_today&from=2026-06-05T00:00:00Z&to=2026-06-05T23:59:59Z
+```
+
+`/api/usage/live` returns the configured Home Assistant usage sensors for current power, daily energy, and daily cost.
+
+`/api/usage/history` reads Home Assistant recorder history for the configured energy entity by default. Pass `entityId` to inspect another sensor, `hours` for a window ending now, or explicit `from` and `to` timestamps.
+
 ## Target And Defender
 
 ```text
@@ -54,3 +68,12 @@ POST /api/thermostat/fan
 ```
 
 All thermostat command endpoints act on the real configured Home Assistant climate entity.
+
+## CLI Usage
+
+```text
+dotnet run -- usage-live [--json]
+dotnet run -- usage-history [--entity sensor.name] [--hours 24] [--from timestamp] [--to timestamp] [--json]
+```
+
+CLI commands use the same Home Assistant base URL, token, and usage sensor configuration as the web app. They can be overridden with `--base-url`, `--token`, `--power`, `--energy`, `--cost`, and `--entity`.

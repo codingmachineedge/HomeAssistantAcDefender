@@ -14,6 +14,12 @@ public sealed class HomeAssistantOptions
 
     public string OutdoorTemperatureEntityId { get; set; } = "";
 
+    public string UsagePowerEntityId { get; set; } = "sensor.alectra_hui_current_power";
+
+    public string UsageEnergyEntityId { get; set; } = "sensor.alectra_hui_energy_today";
+
+    public string UsageCostEntityId { get; set; } = "sensor.alectra_hui_cost_today";
+
     public string? Username { get; set; }
 
     public string? Password { get; set; }

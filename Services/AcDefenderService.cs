@@ -166,6 +166,12 @@ public sealed class AcDefenderService
                 }
 
                 var commandSetPoint = stateStore.CalculateNaturalCommandSetPoint(reading, expectedSetPoint, comfort.BypassCooldown);
+                if (stateStore.TryRespectRepeatCommandGuard(reading, commandSetPoint, comfort.BypassCooldown, now, out var repeatUntil, out var repeatMessage))
+                {
+                    stateStore.SetNextAction(repeatMessage, repeatUntil);
+                    return;
+                }
+
                 stateStore.SetNextAction($"Setting real thermostat to {commandSetPoint:0.0} C from the current-room-minus-1 C defender target.", now);
                 await homeAssistantClient.SetCoolingAsync(reading.EntityId, commandSetPoint, cancellationToken);
                 stateStore.RecordCommand($"Home Assistant {reading.EntityId} set to {commandSetPoint:0.0} C from current-room-minus-1 C target {expectedSetPoint:0.0} C.", commandSetPoint);

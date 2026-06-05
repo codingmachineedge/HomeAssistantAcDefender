@@ -33,6 +33,8 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Prioritizes upstairs comfort when upstairs temperature sensors report hot rooms.
 - Can use Home Assistant presence entities so upstairs priority applies only while someone is home.
 - Exposes fan mode and can optionally move the fan to an energy-saving mode when the room is near target.
+- Reads optional Home Assistant usage sensors for live power, daily energy, daily cost, and 24-hour recorder history.
+- Includes CLI commands for live and historical usage checks without starting the web app.
 - Uses a MudBlazor front end with real-time dashboard polling and 24-hour time display, so the user does not need to refresh.
 
 There is no simulator or dummy thermostat. If Home Assistant is unavailable, the app shows the real error and does not fake state.
@@ -54,11 +56,18 @@ Optional environment variables:
 ```text
 HomeAssistant__WeatherEntityId=weather.home
 HomeAssistant__OutdoorTemperatureEntityId=sensor.outdoor_temperature
+HomeAssistant__UsagePowerEntityId=sensor.alectra_hui_current_power
+HomeAssistant__UsageEnergyEntityId=sensor.alectra_hui_energy_today
+HomeAssistant__UsageCostEntityId=sensor.alectra_hui_cost_today
 HomeAssistant__Username=optional-bookkeeping-only
 HomeAssistant__Password=optional-bookkeeping-only
 ```
 
 If `HomeAssistant__WeatherEntityId` is blank, the app discovers the first `weather.*` entity. If no weather entity exists, `HomeAssistant__OutdoorTemperatureEntityId` can provide only outdoor temperature.
+
+The usage entities are optional Home Assistant sensor IDs. `UsagePowerEntityId` is shown as current live power, `UsageEnergyEntityId` is used for daily energy and default history, and `UsageCostEntityId` is shown as current daily cost when available. Historical usage uses Home Assistant recorder history from `api/history/period`, so the entity must be recorded by Home Assistant.
+
+For Alectra readings, install the Alectra Hui Home Assistant integration first. It creates `sensor.alectra_hui_current_power`, `sensor.alectra_hui_energy_today`, and `sensor.alectra_hui_cost_today`; AC Defender only reads those entities after Home Assistant has created them.
 
 ## Defender Logic
 
@@ -327,6 +336,8 @@ This stream emits the full defender snapshot every second.
 ```text
 GET  /api/status
 GET  /api/settings
+GET  /api/usage/live
+GET  /api/usage/history?hours=24
 GET  /api/status/stream
 POST /api/target/generate
 POST /api/target
@@ -337,6 +348,19 @@ POST /api/thermostat/force-target
 POST /api/thermostat/force-boost
 POST /api/thermostat/fan
 ```
+
+## CLI
+
+Usage commands talk directly to Home Assistant and exit without starting the Blazor site.
+
+```powershell
+dotnet run -- usage-live
+dotnet run -- usage-live --json
+dotnet run -- usage-history --hours 24
+dotnet run -- usage-history --entity sensor.alectra_hui_energy_today --from 2026-06-05T00:00:00 --to 2026-06-05T23:59:59 --json
+```
+
+Each command reads `HomeAssistant__BaseUrl`, `HomeAssistant__AccessToken`, and the usage sensor settings from environment/config. You can override them with `--base-url`, `--token`, `--power`, `--energy`, `--cost`, and `--entity`.
 
 ## Docker
 

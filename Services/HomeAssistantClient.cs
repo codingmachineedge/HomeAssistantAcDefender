@@ -140,6 +140,56 @@ public sealed class HomeAssistantClient
             .ToArray();
     }
 
+    public async Task<UsageLiveSnapshot> GetLiveUsageAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new UsageLiveSnapshot(null, null, null, false, DateTimeOffset.UtcNow);
+        }
+
+        var current = options.CurrentValue;
+        var power = await TryGetUsageEntityAsync(current.UsagePowerEntityId, cancellationToken);
+        var energy = await TryGetUsageEntityAsync(current.UsageEnergyEntityId, cancellationToken);
+        var cost = await TryGetUsageEntityAsync(current.UsageCostEntityId, cancellationToken);
+
+        return new UsageLiveSnapshot(power, energy, cost, true, DateTimeOffset.UtcNow);
+    }
+
+    public async Task<UsageHistorySnapshot> GetUsageHistoryAsync(
+        string? entityId,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            throw new InvalidOperationException("Home Assistant token is not configured.");
+        }
+
+        var targetEntityId = string.IsNullOrWhiteSpace(entityId)
+            ? options.CurrentValue.UsageEnergyEntityId
+            : entityId.Trim();
+        if (string.IsNullOrWhiteSpace(targetEntityId))
+        {
+            throw new InvalidOperationException("Usage history entity is not configured.");
+        }
+
+        if (to <= from)
+        {
+            throw new InvalidOperationException("Usage history end time must be after start time.");
+        }
+
+        var path = $"api/history/period/{Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+            $"?filter_entity_id={Uri.EscapeDataString(targetEntityId)}" +
+            $"&end_time={Uri.EscapeDataString(to.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}";
+        using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return ParseUsageHistory(document.RootElement, targetEntityId, from, to);
+    }
+
     public async Task SetCoolingAsync(string entityId, double setPointCelsius, CancellationToken cancellationToken)
     {
         await SetHvacModeAsync(entityId, "cool", cancellationToken);
@@ -167,6 +217,25 @@ public sealed class HomeAssistantClient
             entity_id = entityId,
             fan_mode = fanMode
         }, cancellationToken);
+    }
+
+    private async Task<UsageEntityReading?> TryGetUsageEntityAsync(string? entityId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(entityId))
+        {
+            return null;
+        }
+
+        using var response = await SendAsync(HttpMethod.Get, $"api/states/{Uri.EscapeDataString(entityId.Trim())}", null, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return ParseUsageEntity(document.RootElement);
     }
 
     private async Task<TemperatureSensorReading?> TryGetTemperatureSensorAsync(string entityId, CancellationToken cancellationToken)
@@ -415,6 +484,76 @@ public sealed class HomeAssistantClient
             string.Equals(state, "home", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static UsageEntityReading ParseUsageEntity(JsonElement root)
+    {
+        var entityId = GetEntityId(root);
+        var name = TryGetAttributeString(root, "friendly_name") ?? entityId;
+        var unit = TryGetAttributeString(root, "unit_of_measurement") ?? string.Empty;
+        return new UsageEntityReading(
+            entityId,
+            name,
+            TryParseStateDouble(root),
+            unit,
+            TryGetState(root),
+            TryGetTimestamp(root, "last_changed") ?? TryGetTimestamp(root, "last_updated"));
+    }
+
+    private static UsageHistorySnapshot ParseUsageHistory(JsonElement root, string entityId, DateTimeOffset from, DateTimeOffset to)
+    {
+        var states = default(JsonElement);
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            var entities = root.EnumerateArray();
+            if (entities.MoveNext())
+            {
+                states = entities.Current;
+            }
+        }
+
+        var samples = new List<UsageHistorySample>();
+        var name = entityId;
+        var unit = string.Empty;
+
+        if (states.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var state in states.EnumerateArray())
+            {
+                if (state.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                name = TryGetAttributeString(state, "friendly_name") ?? name;
+                unit = TryGetAttributeString(state, "unit_of_measurement") ?? unit;
+                var timestamp = TryGetTimestamp(state, "last_changed")
+                    ?? TryGetTimestamp(state, "last_updated")
+                    ?? from;
+                samples.Add(new UsageHistorySample(timestamp, TryParseStateDouble(state), TryGetState(state)));
+            }
+        }
+
+        var values = samples
+            .Where(sample => sample.Value is not null)
+            .Select(sample => sample.Value!.Value)
+            .ToArray();
+        var first = values.FirstOrDefault();
+        var last = values.LastOrDefault();
+
+        return new UsageHistorySnapshot(
+            entityId,
+            name,
+            unit,
+            from,
+            to,
+            samples.Count,
+            values.Length == 0 ? null : first,
+            values.Length == 0 ? null : last,
+            values.Length == 0 ? null : values.Min(),
+            values.Length == 0 ? null : values.Max(),
+            values.Length == 0 ? null : last - first,
+            samples);
+    }
+
     private static string? TryGetAttributeString(JsonElement root, string name)
     {
         if (!root.TryGetProperty("attributes", out var attributes)
@@ -474,6 +613,19 @@ public sealed class HomeAssistantClient
         return root.TryGetProperty("state", out var stateElement)
             ? stateElement.GetString() ?? "unknown"
             : "unknown";
+    }
+
+    private static DateTimeOffset? TryGetTimestamp(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var value)
+            || value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var timestamp)
+            ? timestamp
+            : null;
     }
 
     private static IReadOnlyList<string> TryGetAttributeStringArray(JsonElement root, string name)

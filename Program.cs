@@ -7,6 +7,11 @@ using MudBlazor.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+if (await CliCommands.TryRunAsync(args, builder.Configuration))
+{
+    return;
+}
+
 builder.Services.Configure<HomeAssistantOptions>(builder.Configuration.GetSection(HomeAssistantOptions.SectionName));
 builder.Services.Configure<DefenderOptions>(builder.Configuration.GetSection(DefenderOptions.SectionName));
 builder.Services.AddSingleton<DefenderStateStore>();
@@ -37,6 +42,36 @@ app.MapRazorPages()
 
 app.MapGet("/api/status", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
 app.MapGet("/api/settings", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
+app.MapGet("/api/usage/live", async (HomeAssistantClient homeAssistantClient, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await homeAssistantClient.GetLiveUsageAsync(cancellationToken));
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+app.MapGet("/api/usage/history", async (
+    string? entityId,
+    DateTimeOffset? from,
+    DateTimeOffset? to,
+    double? hours,
+    HomeAssistantClient homeAssistantClient,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var end = to ?? DateTimeOffset.UtcNow;
+        var start = from ?? end.AddHours(-Math.Max(0.1, hours ?? 24));
+        return Results.Ok(await homeAssistantClient.GetUsageHistoryAsync(entityId, start, end, cancellationToken));
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
 
 app.MapGet("/api/status/stream", async (HttpContext context, DefenderStateStore store, CancellationToken cancellationToken) =>
 {

@@ -2,6 +2,7 @@
 @implements IDisposable
 @inject DefenderStateStore StateStore
 @inject AcDefenderService Defender
+@inject HomeAssistantClient HomeAssistant
 @inject ISnackbar Snackbar
 
 <PageTitle>Dashboard - Home Assistant AC Defender</PageTitle>
@@ -131,6 +132,41 @@
                     <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">@Snapshot.LastError</MudAlert>
                 }
                 <MudText Typo="Typo.caption" Class="helper-text">If something goes wrong, the problem shows here.</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudGrid Spacing="3">
+        <MudItem xs="12">
+            <MudPaper Class="panel-card">
+                <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
+                    <div>
+                        <MudText Typo="Typo.overline">Energy Usage</MudText>
+                        <MudText Typo="Typo.h5">Home Assistant live sensors</MudText>
+                        <MudText Typo="Typo.body2" Class="helper-text">Reads configured usage sensors, such as the Alectra Hui power, energy, and cost entities.</MudText>
+                    </div>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshUsageNow" StartIcon="@Icons.Material.Filled.Refresh">Refresh usage</MudButton>
+                </MudStack>
+
+                <MudGrid Spacing="2" Class="mt-2">
+                    <MetricCard Label="Power now" Value="@UsageValue(Usage?.Power)" Help="@UsageHelp(Usage?.Power)" />
+                    <MetricCard Label="Energy today" Value="@UsageValue(Usage?.Energy)" Help="@UsageHelp(Usage?.Energy)" />
+                    <MetricCard Label="Cost today" Value="@UsageValue(Usage?.Cost)" Help="@UsageHelp(Usage?.Cost)" />
+                    <MetricCard Label="Usage updated" Value="@ShortTime(Usage?.UpdatedAt)" Help="When AC Defender last read usage sensors." />
+                    <MetricCard Label="24h delta" Value="@UsageHistoryValue(UsageHistory?.Delta, UsageHistory?.Unit)" Help="@UsageHistoryHelp" />
+                    <MetricCard Label="24h max" Value="@UsageHistoryValue(UsageHistory?.Max, UsageHistory?.Unit)" Help="@UsageHistoryHelp" />
+                    <MetricCard Label="24h samples" Value="@(UsageHistory?.Count.ToString() ?? "--")" Help="@UsageHistoryHelp" />
+                    <MetricCard Label="History updated" Value="@ShortTime(UsageHistoryUpdatedAt)" Help="When AC Defender last checked recorder history." />
+                </MudGrid>
+
+                @if (!string.IsNullOrWhiteSpace(UsageError))
+                {
+                    <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">@UsageError</MudAlert>
+                }
+                @if (!string.IsNullOrWhiteSpace(UsageHistoryError))
+                {
+                    <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">@UsageHistoryError</MudAlert>
+                }
             </MudPaper>
         </MudItem>
     </MudGrid>
@@ -314,6 +350,13 @@
     private PeriodicTimer? timer;
     private CancellationTokenSource? timerCancellation;
     private DefenderSnapshot? Snapshot { get; set; }
+    private UsageLiveSnapshot? Usage { get; set; }
+    private UsageHistorySnapshot? UsageHistory { get; set; }
+    private DateTimeOffset? UsageHistoryUpdatedAt { get; set; }
+    private string? UsageError { get; set; }
+    private string? UsageHistoryError { get; set; }
+    private DateTimeOffset _nextUsageRefresh = DateTimeOffset.MinValue;
+    private DateTimeOffset _nextUsageHistoryRefresh = DateTimeOffset.MinValue;
     private double _targetInput = 22.0;
     private bool _targetDirty;
     private string? _fanMode;
@@ -390,6 +433,9 @@
     private string GuardText => Snapshot?.Comfort.UpstairsTooHot == true ? "Active" : Snapshot?.Comfort.UpstairsComfortEnabled == true ? "Watching" : "Off";
     private string PresenceRequiredText => Snapshot?.Comfort.HomePresenceRequired == true ? "Required" : "Optional";
     private string TouchCount => (Snapshot?.ThermostatChanges?.Count ?? 0).ToString();
+    private string UsageHistoryHelp => UsageHistory is null
+        ? "Home Assistant recorder history for the configured energy sensor."
+        : $"{UsageHistory.Name} / {UsageHistory.EntityId}";
     private Color ConnectionColor => Snapshot?.ConnectionState == "home-assistant" ? Color.Success : Color.Error;
     private Severity NaturalSeverity => Snapshot?.NaturalRecovery.Waiting == true
         ? Severity.Warning
@@ -471,6 +517,8 @@
     protected override void OnInitialized()
     {
         RefreshSnapshot(updateInputs: true);
+        _ = RefreshUsageAsync();
+        _ = RefreshUsageHistoryAsync();
         timerCancellation = new CancellationTokenSource();
         timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
         _ = PollAsync(timerCancellation.Token);
@@ -482,9 +530,11 @@
         {
             while (timer is not null && await timer.WaitForNextTickAsync(cancellationToken))
             {
-                await InvokeAsync(() =>
+                await InvokeAsync(async () =>
                 {
                     RefreshSnapshot(updateInputs: !_targetDirty);
+                    await RefreshUsageIfDueAsync();
+                    await RefreshUsageHistoryIfDueAsync();
                     StateHasChanged();
                 });
             }
@@ -510,6 +560,65 @@
         else if (string.IsNullOrWhiteSpace(_fanMode))
         {
             _fanMode = FanModes.FirstOrDefault();
+        }
+    }
+
+    private async Task RefreshUsageNow()
+    {
+        await RefreshUsageAsync();
+        await RefreshUsageHistoryAsync();
+        StateHasChanged();
+    }
+
+    private async Task RefreshUsageIfDueAsync()
+    {
+        if (DateTimeOffset.UtcNow < _nextUsageRefresh)
+        {
+            return;
+        }
+
+        await RefreshUsageAsync();
+    }
+
+    private async Task RefreshUsageHistoryIfDueAsync()
+    {
+        if (DateTimeOffset.UtcNow < _nextUsageHistoryRefresh)
+        {
+            return;
+        }
+
+        await RefreshUsageHistoryAsync();
+    }
+
+    private async Task RefreshUsageAsync()
+    {
+        try
+        {
+            _nextUsageRefresh = DateTimeOffset.UtcNow.AddSeconds(30);
+            Usage = await HomeAssistant.GetLiveUsageAsync(CancellationToken.None);
+            UsageError = null;
+        }
+        catch (Exception ex)
+        {
+            _nextUsageRefresh = DateTimeOffset.UtcNow.AddSeconds(30);
+            UsageError = $"Usage sensor error: {ex.Message}";
+        }
+    }
+
+    private async Task RefreshUsageHistoryAsync()
+    {
+        try
+        {
+            var end = DateTimeOffset.UtcNow;
+            _nextUsageHistoryRefresh = end.AddMinutes(10);
+            UsageHistory = await HomeAssistant.GetUsageHistoryAsync(null, end.AddHours(-24), end, CancellationToken.None);
+            UsageHistoryUpdatedAt = end;
+            UsageHistoryError = null;
+        }
+        catch (Exception ex)
+        {
+            _nextUsageHistoryRefresh = DateTimeOffset.UtcNow.AddMinutes(10);
+            UsageHistoryError = $"Usage history error: {ex.Message}";
         }
     }
 
@@ -582,6 +691,32 @@
     }
 
     private static string Temp(double? value) => value is null ? "--" : $"{value.Value:0.0} C";
+
+    private static string UsageValue(UsageEntityReading? reading)
+    {
+        if (reading?.Value is null)
+        {
+            return "--";
+        }
+
+        return string.IsNullOrWhiteSpace(reading.Unit)
+            ? $"{reading.Value.Value:0.###}"
+            : $"{reading.Value.Value:0.###} {reading.Unit}";
+    }
+
+    private static string UsageHelp(UsageEntityReading? reading)
+    {
+        return reading is null
+            ? "Usage entity is not configured or was not found."
+            : $"{reading.Name} / {reading.EntityId}";
+    }
+
+    private static string UsageHistoryValue(double? value, string? unit)
+    {
+        return value is null
+            ? "--"
+            : string.IsNullOrWhiteSpace(unit) ? $"{value.Value:0.###}" : $"{value.Value:0.###} {unit}";
+    }
 
     private static string ShortTime(DateTimeOffset? value) => value is null ? "--" : value.Value.ToLocalTime().ToString("HH:mm:ss");
 

@@ -194,6 +194,10 @@ public sealed class DefenderStateStore
             state.Settings.SetpointEchoGuardEnabled = request.SetpointEchoGuardEnabled;
             state.Settings.SetpointEchoGraceSeconds = Math.Clamp(request.SetpointEchoGraceSeconds, 5, 300);
             state.Settings.SetpointEchoSafetyBandCelsius = Math.Round(Math.Clamp(request.SetpointEchoSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.RepeatCommandGuardEnabled = request.RepeatCommandGuardEnabled;
+            state.Settings.RepeatCommandMinimumWaitSeconds = Math.Clamp(request.RepeatCommandMinimumWaitSeconds, 0, 1800);
+            state.Settings.RepeatCommandPressureExtraSeconds = Math.Clamp(request.RepeatCommandPressureExtraSeconds, 0, 3600);
+            state.Settings.RepeatCommandSafetyBandCelsius = Math.Round(Math.Clamp(request.RepeatCommandSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.SensorRhythmGuardEnabled = request.SensorRhythmGuardEnabled;
             state.Settings.SensorRhythmMinimumSamples = Math.Clamp(request.SensorRhythmMinimumSamples, 2, 60);
             state.Settings.SensorRhythmWindowMinutes = Math.Clamp(request.SensorRhythmWindowMinutes, 5, 1440);
@@ -346,6 +350,7 @@ public sealed class DefenderStateStore
                     ? $"Setpoint echo is waiting for Home Assistant to report {setPoint:0.0} C."
                     : "Setpoint echo guard is off.";
                 state.LastDefenderCommandAt = state.UpdatedAt;
+                state.LastDefenderCommandSetPointCelsius = Math.Round(setPoint, 1);
                 state.DefenderCommandTimes.Add(state.UpdatedAt);
                 PruneDefenderCommandTimes(state.UpdatedAt);
                 state.RoutineTimingDueAt = null;
@@ -353,6 +358,7 @@ public sealed class DefenderStateStore
                 state.ComfortBudgetStatus = $"Comfort budget counted {state.DefenderCommandTimes.Count}/{state.Settings.ComfortBudgetMaxCommands} recent comfort adjustments.";
                 state.NaturalCadenceDueAt = null;
                 state.NaturalCadenceStatus = "Natural cadence used its quiet slot; watching for the next safe rhythm.";
+                ClearRepeatCommand("Repeat quiet used its slot; watching for identical follow-up commands.");
             }
 
             AddEvent("info", message);
@@ -899,6 +905,90 @@ public sealed class DefenderStateStore
 
             message = $"Setpoint echo is waiting until {waitUntil.ToLocalTime():HH:mm:ss} for Home Assistant to report {pendingSetPoint:0.0} C before another safe command.";
             state.SetpointEchoStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
+    public bool TryRespectRepeatCommandGuard(
+        ThermostatReading reading,
+        double commandSetPointCelsius,
+        bool bypassRepeatGuard,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.RepeatCommandGuardEnabled)
+            {
+                ClearRepeatCommand("Repeat quiet is off.");
+                SaveState();
+                return false;
+            }
+
+            if (bypassRepeatGuard || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearRepeatCommand("Room comfort needs help now, so repeat quiet is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.RepeatCommandSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearRepeatCommand($"Room is above {allowedRoomTemperature:0.0} C, so repeat quiet is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            if (state.LastDefenderCommandAt is not { } lastCommandAt
+                || state.LastDefenderCommandSetPointCelsius is not { } lastSetPoint)
+            {
+                ClearRepeatCommand("Repeat quiet is watching for identical follow-up commands.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(commandSetPointCelsius - lastSetPoint) > 0.15)
+            {
+                ClearRepeatCommand($"Repeat quiet sees a new {commandSetPointCelsius:0.0} C setpoint, so no repeat hold is needed.");
+                SaveState();
+                return false;
+            }
+
+            if (state.RepeatCommandHoldUntil is { } holdUntil)
+            {
+                if (holdUntil > now)
+                {
+                    waitUntil = holdUntil;
+                    var pressure = CalculateRepeatCommandPressure(now);
+                    message = $"Repeat quiet is holding another {commandSetPointCelsius:0.0} C command until {holdUntil.ToLocalTime():HH:mm:ss} from repeat pressure {pressure}/100.";
+                    state.RepeatCommandStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearRepeatCommand("Repeat quiet slot arrived; the identical command can continue if still needed.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = CalculateRepeatCommandHoldUntil(lastCommandAt, now);
+            if (waitUntil <= now)
+            {
+                ClearRepeatCommand("Repeat quiet has enough spacing; no repeat hold is needed.");
+                SaveState();
+                return false;
+            }
+
+            state.RepeatCommandHoldUntil = waitUntil;
+            var repeatPressure = CalculateRepeatCommandPressure(now);
+            message = $"Repeat quiet is holding another {commandSetPointCelsius:0.0} C command until {waitUntil.ToLocalTime():HH:mm:ss} from repeat pressure {repeatPressure}/100.";
+            state.RepeatCommandStatus = message;
             SaveState();
             return true;
         }
@@ -1507,6 +1597,7 @@ public sealed class DefenderStateStore
                 && state.RoutineTimingDueAt is null
                 && state.ComfortBudgetHoldUntil is null
                 && state.NaturalCadenceDueAt is null
+                && state.RepeatCommandHoldUntil is null
                 && state.VisibilityGuardUntil is null
                 && state.SensorRhythmDueAt is null
                 && state.ConflictQuietUntil is null
@@ -1549,6 +1640,9 @@ public sealed class DefenderStateStore
             ClearNaturalCadence(state.Settings.NaturalCadenceEnabled
                 ? "Natural cadence is lined up; no quiet slot needed."
                 : "Natural cadence is off.");
+            ClearRepeatCommand(state.Settings.RepeatCommandGuardEnabled
+                ? "Repeat quiet is lined up; no identical command hold needed."
+                : "Repeat quiet is off.");
             ClearSensorRhythm(state.Settings.SensorRhythmGuardEnabled
                 ? "Sensor rhythm is lined up; no beat wait needed."
                 : "Sensor rhythm is off.");
@@ -1575,6 +1669,7 @@ public sealed class DefenderStateStore
                     state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
                     ResetCoolingDefenderStep();
                     ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
+                    ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
                     ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
                     AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C.");
                 }
@@ -1615,6 +1710,7 @@ public sealed class DefenderStateStore
                 state.TargetTemperatureCelsius = Math.Round(comfortTarget, 1);
                 state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
                 ClearNaturalCadence("Upstairs comfort changed the target, so natural cadence reset.");
+                ClearRepeatCommand("Upstairs comfort changed the target, so repeat quiet reset.");
                 ClearComfortCompromise("Upstairs comfort changed the target, so comfort compromise reset.");
                 AddEvent("warning", $"Upstairs comfort guard lowered target to {state.TargetTemperatureCelsius:0.0} C.");
             }
@@ -2345,6 +2441,26 @@ public sealed class DefenderStateStore
         return now.AddSeconds(delaySeconds);
     }
 
+    private DateTimeOffset CalculateRepeatCommandHoldUntil(DateTimeOffset lastCommandAt, DateTimeOffset now)
+    {
+        var baseSeconds = Math.Clamp(state.Settings.RepeatCommandMinimumWaitSeconds, 0, 1800);
+        var pressure = CalculateRepeatCommandPressure(now) / 100.0;
+        var extraSeconds = (int)Math.Round(Math.Clamp(state.Settings.RepeatCommandPressureExtraSeconds, 0, 3600) * pressure);
+        return lastCommandAt.AddSeconds(baseSeconds + extraSeconds);
+    }
+
+    private int CalculateRepeatCommandPressure(DateTimeOffset now)
+    {
+        PruneTouchTimes(now);
+        PruneDefenderCommandTimes(now);
+        var touchPressure = CalculateTouchSuspicionScore(now) / 100.0;
+        var commandPressure = Math.Clamp(
+            state.DefenderCommandTimes.Count / Math.Max(1.0, state.Settings.ComfortBudgetMaxCommands),
+            0.0,
+            1.0);
+        return (int)Math.Round(Math.Clamp(Math.Max(touchPressure, commandPressure), 0.0, 1.0) * 100);
+    }
+
     private DateTimeOffset CalculateVisibilityGuardUntil(DateTimeOffset now)
     {
         var minMinutes = Math.Clamp(state.Settings.VisibilityGuardMinimumHoldMinutes, 1, 240);
@@ -2896,6 +3012,9 @@ public sealed class DefenderStateStore
             && state.PendingCommandSetPointCelsius is not null
             ? (int)Math.Ceiling((echoUntil - now).TotalSeconds)
             : 0;
+        var repeatCommandSeconds = state.RepeatCommandHoldUntil is { } repeatUntil && repeatUntil > now
+            ? (int)Math.Ceiling((repeatUntil - now).TotalSeconds)
+            : 0;
         var routineTimingSeconds = state.RoutineTimingDueAt is { } routineDueAt && routineDueAt > now
             ? (int)Math.Ceiling((routineDueAt - now).TotalSeconds)
             : 0;
@@ -2913,6 +3032,7 @@ public sealed class DefenderStateStore
         var visibilityPressure = CalculateVisibilityPressure(now);
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         var naturalWalkbackScore = CalculateTouchSuspicionScore(now);
+        var repeatCommandPressure = CalculateRepeatCommandPressure(now);
         var naturalWalkbackStep = Math.Min(
             naturalPlan.StepCelsius,
             Math.Round(Math.Max(0.1, state.Settings.NaturalWalkbackStepCelsius), 1));
@@ -3090,6 +3210,16 @@ public sealed class DefenderStateStore
                     ? "Setpoint echo is watching."
                     : state.SetpointEchoStatus,
                 setpointEchoSeconds > 0 ? setpointEchoUntil : null),
+            new RepeatCommandSnapshot(
+                state.Settings.RepeatCommandGuardEnabled,
+                repeatCommandSeconds > 0,
+                repeatCommandSeconds,
+                repeatCommandPressure,
+                state.LastDefenderCommandSetPointCelsius,
+                string.IsNullOrWhiteSpace(state.RepeatCommandStatus)
+                    ? "Repeat quiet is watching for identical follow-up commands."
+                    : state.RepeatCommandStatus,
+                repeatCommandSeconds > 0 ? state.RepeatCommandHoldUntil : null),
             new SensorRhythmSnapshot(
                 state.Settings.SensorRhythmGuardEnabled,
                 sensorRhythmSeconds > 0,
@@ -3165,6 +3295,7 @@ public sealed class DefenderStateStore
         ClearRoutineTiming("Routine timing is watching.");
         ClearComfortBudget("Comfort budget is watching.");
         ClearNaturalCadence("Natural cadence is watching.");
+        ClearRepeatCommand("Repeat quiet is watching.");
         ClearSensorRhythm("Sensor rhythm is watching.");
         ClearComfortCompromise("Comfort compromise reset after website target change.");
         state.ComfortMemoryEffectiveTargetCelsius = null;
@@ -3206,6 +3337,12 @@ public sealed class DefenderStateStore
     {
         state.NaturalCadenceDueAt = null;
         state.NaturalCadenceStatus = status;
+    }
+
+    private void ClearRepeatCommand(string status)
+    {
+        state.RepeatCommandHoldUntil = null;
+        state.RepeatCommandStatus = status;
     }
 
     private void ClearVisibilityGuard(string status)
