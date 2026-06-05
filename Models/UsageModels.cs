@@ -20,6 +20,14 @@ public sealed record UsageLiveSnapshot(
     bool HomeAssistantConfigured,
     DateTimeOffset UpdatedAt);
 
+public sealed record AlectraPeakPowerReading(
+    bool HomeAssistantConfigured,
+    double? CurrentPowerKilowatts,
+    double? CurrentPriceCentsPerKwh,
+    string? TouPeriod,
+    string? CurrentPlan,
+    DateTimeOffset UpdatedAt);
+
 public sealed record UsageHistorySample(
     DateTimeOffset Timestamp,
     double? Value,

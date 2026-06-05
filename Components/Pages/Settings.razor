@@ -370,6 +370,24 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("alectra peak power saver on peak price kw resource saving chill")) {
+                <MudExpansionPanel Text="Alectra Peak Power Saver" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Peak power saver" Value="_peakPowerSaverEnabled" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverEnabled = x))" Help="Make safe cooling more chill when Alectra Hui says power is expensive or high." />
+                        <SettingSwitch Label="Use on-peak" Value="_peakPowerSaverOnPeakEnabled" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverOnPeakEnabled = x))" Help="Treat Alectra Hui On-peak as a saver trigger." />
+                        <SettingSwitch Label="Use high kW" Value="_peakPowerSaverHighPowerEnabled" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverHighPowerEnabled = x))" Help="Treat high current power as a saver trigger." />
+                        <SettingDouble Label="Power threshold" Unit="kW" Value="_peakPowerSaverPowerThresholdKilowatts" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverPowerThresholdKilowatts = x))" Min="0.1" Max="50" />
+                        <SettingDouble Label="Price threshold" Unit="c/kWh" Value="_peakPowerSaverPriceThresholdCentsPerKwh" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverPriceThresholdCentsPerKwh = x))" Min="0" Max="200" />
+                        <SettingInt Label="Saver hold" Unit="min" Value="_peakPowerSaverHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverHoldMinutes = x))" Min="1" Max="240" />
+                        <SettingInt Label="Refresh" Unit="s" Value="_peakPowerSaverRefreshSeconds" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverRefreshSeconds = x))" Min="30" Max="3600" />
+                        <SettingDouble Label="Safe band" Value="_peakPowerSaverSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverSafetyBandCelsius = x))" Min="0.1" Max="10" />
+                        <SettingSwitch Label="Saver fan mode" Value="_peakPowerSaverFanSaverEnabled" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverFanSaverEnabled = x))" Help="Set the fan to the saver mode while peak saver is active and the room is still safe." />
+                        <MudItem xs="12" sm="6">
+                            <MudTextField T="string" Value="_peakPowerSaverFanMode" ValueChanged="@(v => SetDirty(v, x => _peakPowerSaverFanMode = x))" Label="Peak fan mode" Placeholder="auto" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("upstairs comfort temperature sensors boost")) {
                 <MudExpansionPanel Text="Upstairs comfort" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -636,6 +654,16 @@
     private bool _fanEnergySaverEnabled;
     private double _fanEnergySaverThresholdCelsius = 0.6;
     private string _fanEnergySaverMode = "auto";
+    private bool _peakPowerSaverEnabled = true;
+    private bool _peakPowerSaverOnPeakEnabled = true;
+    private bool _peakPowerSaverHighPowerEnabled = true;
+    private double _peakPowerSaverPowerThresholdKilowatts = 2.5;
+    private double _peakPowerSaverPriceThresholdCentsPerKwh = 15.0;
+    private int _peakPowerSaverHoldMinutes = 20;
+    private int _peakPowerSaverRefreshSeconds = 120;
+    private double _peakPowerSaverSafetyBandCelsius = 1.0;
+    private bool _peakPowerSaverFanSaverEnabled = true;
+    private string _peakPowerSaverFanMode = "auto";
     private bool _upstairsComfortEnabled = true;
     private string _upstairsTemperatureEntityIds = "";
     private double _upstairsMaxComfortCelsius = 24.0;
@@ -821,6 +849,16 @@
         _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
         _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
         _fanEnergySaverMode = settings.FanEnergySaverMode;
+        _peakPowerSaverEnabled = settings.PeakPowerSaverEnabled;
+        _peakPowerSaverOnPeakEnabled = settings.PeakPowerSaverOnPeakEnabled;
+        _peakPowerSaverHighPowerEnabled = settings.PeakPowerSaverHighPowerEnabled;
+        _peakPowerSaverPowerThresholdKilowatts = settings.PeakPowerSaverPowerThresholdKilowatts;
+        _peakPowerSaverPriceThresholdCentsPerKwh = settings.PeakPowerSaverPriceThresholdCentsPerKwh;
+        _peakPowerSaverHoldMinutes = settings.PeakPowerSaverHoldMinutes;
+        _peakPowerSaverRefreshSeconds = settings.PeakPowerSaverRefreshSeconds;
+        _peakPowerSaverSafetyBandCelsius = settings.PeakPowerSaverSafetyBandCelsius;
+        _peakPowerSaverFanSaverEnabled = settings.PeakPowerSaverFanSaverEnabled;
+        _peakPowerSaverFanMode = settings.PeakPowerSaverFanMode;
         _upstairsComfortEnabled = settings.UpstairsComfortEnabled;
         _upstairsTemperatureEntityIds = settings.UpstairsTemperatureEntityIds;
         _upstairsMaxComfortCelsius = settings.UpstairsMaxComfortCelsius;
@@ -1034,6 +1072,16 @@
             _weatherDriftMinimumChangeCelsius,
             _weatherDriftHoldMinutes,
             _weatherDriftSafetyBandCelsius,
+            _peakPowerSaverEnabled,
+            _peakPowerSaverOnPeakEnabled,
+            _peakPowerSaverHighPowerEnabled,
+            _peakPowerSaverPowerThresholdKilowatts,
+            _peakPowerSaverPriceThresholdCentsPerKwh,
+            _peakPowerSaverHoldMinutes,
+            _peakPowerSaverRefreshSeconds,
+            _peakPowerSaverSafetyBandCelsius,
+            _peakPowerSaverFanSaverEnabled,
+            _peakPowerSaverFanMode,
             _superDefenderModeEnabled,
             _superDefenderRemoteChangeThreshold,
             _superDefenderWindowMinutes,

@@ -497,6 +497,29 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Alectra Peak Power Saver", GuardCategory.System,
+            "Makes the defender more chill and resource-saving when Alectra Hui reports on-peak, high price, or high power use.",
+            "Alectra Hui current TOU period, current price, current power, and current plan sensors from Home Assistant.",
+            "When enabled, On-peak TOU, price above the c/kWh threshold, or current power above the kW threshold arms a short saver window. During that window it holds only safe cooling commands that would demand more cooling, and it can set the configured fan saver mode if the room is still inside the safety band. If the room or upstairs gets too hot, or the command would save energy by warming the setpoint, it steps aside.",
+            "Holds safe cooling during expensive/high-load periods and prefers the saver fan mode.",
+            ["PeakPowerSaverEnabled", "PeakPowerSaverOnPeakEnabled", "PeakPowerSaverHighPowerEnabled", "PeakPowerSaverPowerThresholdKilowatts", "PeakPowerSaverPriceThresholdCentsPerKwh", "PeakPowerSaverHoldMinutes", "PeakPowerSaverSafetyBandCelsius", "PeakPowerSaverFanSaverEnabled", "PeakPowerSaverFanMode"],
+            s =>
+            {
+                var p = s.PeakPowerSaver;
+                var tone = !p.Enabled ? GuardTone.Off
+                    : p.Holding ? GuardTone.Holding
+                    : p.Active ? GuardTone.Warning : GuardTone.Calm;
+                var label = !p.Enabled ? "Off" : p.Holding ? "Holding" : p.Active ? "Peak" : "Watching";
+                return new GuardLiveView(p.Enabled, p.Active || p.Holding, label, tone, p.Status,
+                [
+                    new("Power", p.CurrentPowerKilowatts is { } kw ? $"{kw:0.00} kW" : "--", $"Threshold {p.PowerThresholdKilowatts:0.0} kW."),
+                    new("Price", p.CurrentPriceCentsPerKwh is { } cents ? $"{cents:0.0} c/kWh" : "--", $"Threshold {p.PriceThresholdCentsPerKwh:0.0} c/kWh."),
+                    new("TOU", p.TouPeriod, "Alectra Hui current TOU period."),
+                    new("Saver wait", p.Holding ? $"{p.SecondsRemaining}s" : p.Active ? "Armed" : "Ready", "Safe cooling hold window."),
+                ]);
+            }),
+
+        new GuardInfo(
             "Emergency Protocols", GuardCategory.System,
             "One-tap stand-down modes for too-cold, someone-upset, and suspicion situations.",
             "The chosen protocol and its remaining window.",

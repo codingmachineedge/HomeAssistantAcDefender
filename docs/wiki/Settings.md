@@ -142,6 +142,23 @@ The MudBlazor settings page controls defender behavior without editing configura
 
 When enabled, the app can set a configured Home Assistant fan mode when the room is close to target. This is optional and depends on the climate entity exposing supported `fan_modes`.
 
+## Alectra Peak Power Saver
+
+When enabled, the app uses real Alectra Hui sensors to hold only safe cooling during expensive or high-load power periods.
+
+Settings include:
+
+- Peak power saver
+- Use on-peak
+- Use high kW
+- Power threshold kW
+- Price threshold c/kWh
+- Saver hold minutes
+- Refresh seconds
+- Safe band C
+- Saver fan mode
+- Peak fan mode
+
 ## Upstairs Comfort
 
 Settings include:

@@ -20,6 +20,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Room Trend Guard so the defender keeps observing when the room is stable or cooling after a wall change, and resumes when it starts warming.
 - Adds Thermal Momentum so the defender can wait when the room is already cooling fast enough to reach target soon.
 - Adds Weather Drift Timing so safe corrections can wait for real outdoor weather movement instead of happening immediately.
+- Adds Alectra Peak Power Saver so safe cooling corrections get more chill during On-peak, high-price, or high-power periods.
 - Adds Natural Walkback so safe-band recovery moves get smaller and less predictable after repeated wall thermostat touches.
 - Adds Touch Signature so safe nudges can match the size of recent real wall thermostat steps.
 - Adds Visibility Guard so safe nudges slow down when a wall touch happens soon after a defender command.
@@ -117,9 +118,10 @@ Every cycle:
 25. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
 26. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
 27. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-28. Optionally set fan saver mode when near target.
-29. Correct the thermostat setpoint when it does not match the defender decision.
-30. Update the real-time dashboard status.
+28. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
+29. Optionally set fan saver mode when near target.
+30. Correct the thermostat setpoint when it does not match the defender decision.
+31. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -283,6 +285,16 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `WeatherDriftMinimumChangeCelsius`: outdoor warming needed before a safe correction can continue as weather-driven.
 - `WeatherDriftHoldMinutes`: how long to wait for the weather slot while room comfort is still safe.
 - `WeatherDriftSafetyBandCelsius`: extra room warmth allowed before Weather Drift stops waiting.
+- `PeakPowerSaverEnabled`: makes safe cooling more relaxed when Alectra Hui reports peak/high-cost/high-load usage.
+- `PeakPowerSaverOnPeakEnabled`: treats Alectra Hui `On-peak` TOU period as a saver trigger.
+- `PeakPowerSaverHighPowerEnabled`: treats current power above the configured kW threshold as a saver trigger.
+- `PeakPowerSaverPowerThresholdKilowatts`: current power threshold for high-load saving.
+- `PeakPowerSaverPriceThresholdCentsPerKwh`: current price threshold for high-price saving.
+- `PeakPowerSaverHoldMinutes`: how long to keep the saver window after the latest peak signal.
+- `PeakPowerSaverRefreshSeconds`: how often the worker refreshes Alectra Hui usage sensors.
+- `PeakPowerSaverSafetyBandCelsius`: extra room warmth allowed before comfort overrides peak saving.
+- `PeakPowerSaverFanSaverEnabled`: sets the configured fan saver mode during peak saving when the room is still safe.
+- `PeakPowerSaverFanMode`: fan mode used during peak saving, usually `auto`.
 - `SuperDefenderModeEnabled`: watches repeated Home Assistant user/phone or automation changes and can arm strict timing.
 - `SuperDefenderRemoteChangeThreshold`: remote-style changes needed before Super Defender arms.
 - `SuperDefenderWindowMinutes`: time window used to count remote-style changes.
@@ -339,6 +351,8 @@ Room Trend Guard uses real Home Assistant room-temperature readings. It compares
 Thermal Momentum also uses real Home Assistant room-temperature readings. After a recent wall touch, it estimates cooling speed and minutes to target. If the room is already cooling fast enough and the target looks close, it holds briefly so the room can keep cooling without another obvious thermostat command.
 
 Weather Drift Timing uses real Home Assistant outdoor temperature readings. After a recent wall touch, if the room is still inside the weather safe band and outdoor temperature is stable or cooling, it can hold a safe correction for a short configured window. If the outdoor temperature has genuinely warmed enough, the hold clears so the next correction can line up with real weather movement. If the room gets too warm, it clears immediately.
+
+Alectra Peak Power Saver uses real Alectra Hui Home Assistant usage sensors. It watches `sensor.alectra_hui_current_tou_period`, `sensor.alectra_hui_current_price`, `sensor.alectra_hui_current_power`, and the current plan entity when present. If Alectra reports On-peak, price above the configured threshold, or power above the configured kW threshold, it holds only safe cooling commands that would demand more cooling. If the room or upstairs gets too hot, or the command would save energy by raising the setpoint, it steps aside. It can also set the fan to the configured saver mode while the room remains inside the safe band.
 
 ## Schedule And Weather Rules
 

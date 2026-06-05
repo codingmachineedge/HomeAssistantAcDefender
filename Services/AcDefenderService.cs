@@ -42,6 +42,7 @@ public sealed class AcDefenderService
             {
                 return;
             }
+            await RefreshPeakPowerStatusIfDueAsync(cancellationToken);
 
             var emergencyNow = DateTimeOffset.UtcNow;
             if (stateStore.TryRespectEmergencyQuiet(emergencyNow, out var emergencyUntil, out var emergencyMessage))
@@ -136,7 +137,13 @@ public sealed class AcDefenderService
                 stateStore.SetNextAction("Super Defender detected repeated phone/Home Assistant changes; bypassing quiet waits while cooling is needed.", quietBypassNow);
             }
 
-            if (stateStore.ShouldUseFanSaver(reading))
+            if (stateStore.ShouldUsePeakPowerFanSaver(reading))
+            {
+                var fanMode = stateStore.GetPeakPowerFanSaverMode();
+                await homeAssistantClient.SetFanModeAsync(reading.EntityId, fanMode, cancellationToken);
+                stateStore.RecordCommand($"Home Assistant {reading.EntityId} fan set to {fanMode} for Alectra Peak Power Saver.");
+            }
+            else if (stateStore.ShouldUseFanSaver(reading))
             {
                 var fanMode = stateStore.GetFanSaverMode();
                 await homeAssistantClient.SetFanModeAsync(reading.EntityId, fanMode, cancellationToken);
@@ -149,6 +156,12 @@ public sealed class AcDefenderService
             if (changed)
             {
                 var now = DateTimeOffset.UtcNow;
+                if (stateStore.TryRespectPeakPowerSaver(reading, expectedSetPoint, bypassQuietTiming, now, out var peakUntil, out var peakMessage))
+                {
+                    stateStore.SetNextAction(peakMessage, peakUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectComfortEnvelope(reading, expectedSetPoint, bypassQuietTiming, now, out var envelopeUntil, out var envelopeMessage))
                 {
                     stateStore.SetNextAction(envelopeMessage, envelopeUntil);
@@ -250,6 +263,25 @@ public sealed class AcDefenderService
         {
             logger.LogWarning(ex, "Defender cycle failed");
             stateStore.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+        }
+    }
+
+    private async Task RefreshPeakPowerStatusIfDueAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (!stateStore.ShouldRefreshPeakPowerSaver(now))
+        {
+            return;
+        }
+
+        try
+        {
+            stateStore.RecordAlectraPeakPowerReading(await homeAssistantClient.GetAlectraPeakPowerAsync(cancellationToken));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Alectra peak power status refresh failed");
+            stateStore.RecordAlectraPeakPowerUnavailable(ex.Message);
         }
     }
 

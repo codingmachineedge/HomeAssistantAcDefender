@@ -187,6 +187,30 @@ public sealed class HomeAssistantClient
             .ToArray();
     }
 
+    public async Task<AlectraPeakPowerReading> GetAlectraPeakPowerAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return new AlectraPeakPowerReading(false, null, null, null, null, DateTimeOffset.UtcNow);
+        }
+
+        var current = options.CurrentValue;
+        var entities = await GetAlectraHuiEntitiesAsync(cancellationToken);
+        var power = FindUsageEntity(entities, current.UsagePowerEntityId, "current_power");
+        var price = FindUsageEntity(entities, null, "current_price");
+        var touPeriod = FindUsageEntity(entities, null, "current_tou_period");
+        var currentPlan = FindUsageEntity(entities, "select.alectra_hui_current_plan", "current_plan")
+            ?? FindUsageEntity(entities, "sensor.alectra_hui_current_plan", "current_plan");
+
+        return new AlectraPeakPowerReading(
+            true,
+            NormalizePowerKilowatts(power),
+            NormalizePriceCentsPerKwh(price),
+            NormalizeBlank(touPeriod?.State),
+            NormalizeBlank(currentPlan?.State),
+            DateTimeOffset.UtcNow);
+    }
+
     public async Task<UsageHistorySnapshot> GetUsageHistoryAsync(
         string? entityId,
         DateTimeOffset from,
@@ -547,6 +571,69 @@ public sealed class HomeAssistantClient
             unit,
             TryGetState(root),
             TryGetTimestamp(root, "last_changed") ?? TryGetTimestamp(root, "last_updated"));
+    }
+
+    private static UsageEntityReading? FindUsageEntity(
+        IReadOnlyList<UsageEntityReading> entities,
+        string? exactEntityId,
+        string entityIdNeedle)
+    {
+        if (!string.IsNullOrWhiteSpace(exactEntityId))
+        {
+            var exact = entities.FirstOrDefault(entity =>
+                string.Equals(entity.EntityId, exactEntityId.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (exact is not null)
+            {
+                return exact;
+            }
+        }
+
+        return entities.FirstOrDefault(entity =>
+            entity.EntityId.Contains(entityIdNeedle, StringComparison.OrdinalIgnoreCase)
+            || entity.Name.Contains(entityIdNeedle.Replace('_', ' '), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static double? NormalizePowerKilowatts(UsageEntityReading? reading)
+    {
+        if (reading?.Value is not { } value)
+        {
+            return null;
+        }
+
+        var unit = reading.Unit.Trim();
+        if (unit.Equals("W", StringComparison.OrdinalIgnoreCase))
+        {
+            return Math.Round(value / 1000.0, 3);
+        }
+
+        if (unit.Equals("MW", StringComparison.OrdinalIgnoreCase))
+        {
+            return Math.Round(value * 1000.0, 3);
+        }
+
+        return Math.Round(value, 3);
+    }
+
+    private static double? NormalizePriceCentsPerKwh(UsageEntityReading? reading)
+    {
+        if (reading?.Value is not { } value)
+        {
+            return null;
+        }
+
+        var unit = reading.Unit.Trim();
+        if (unit.Contains("$", StringComparison.OrdinalIgnoreCase)
+            || unit.Contains("CAD", StringComparison.OrdinalIgnoreCase))
+        {
+            return Math.Round(value * 100.0, 2);
+        }
+
+        return Math.Round(value, 2);
+    }
+
+    private static string? NormalizeBlank(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private static UsageHistorySnapshot ParseUsageHistory(JsonElement root, string entityId, DateTimeOffset from, DateTimeOffset to)

@@ -25,6 +25,7 @@ tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 tests.ComfortPaceWaitsAfterFrequentWallTouchesButBypassesHotRoom();
 tests.ComfortEnvelopeObservesSmallSafeWallPreferenceButBypassesHotRoom();
+tests.PeakPowerSaverHoldsSafeCoolingDuringAlectraOnPeakButBypassesHotRoom();
 tests.SuperDefenderClassifiesRemoteHomeAssistantChangesAndBypassesQuietTiming();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
@@ -930,6 +931,91 @@ internal sealed class DefenderSetPointRegressionTests
         if (nearTargetBypass)
         {
             throw new InvalidOperationException("Super Defender should not bypass quiet timing when the room is already at target.");
+        }
+    }
+
+    public void PeakPowerSaverHoldsSafeCoolingDuringAlectraOnPeakButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.PeakPowerSaverEnabled = true;
+        settings.PeakPowerSaverOnPeakEnabled = true;
+        settings.PeakPowerSaverHighPowerEnabled = true;
+        settings.PeakPowerSaverPowerThresholdKilowatts = 2.5;
+        settings.PeakPowerSaverPriceThresholdCentsPerKwh = 15.0;
+        settings.PeakPowerSaverHoldMinutes = 20;
+        settings.PeakPowerSaverRefreshSeconds = 120;
+        settings.PeakPowerSaverSafetyBandCelsius = 1.0;
+        settings.PeakPowerSaverFanSaverEnabled = true;
+        settings.PeakPowerSaverFanMode = "auto";
+        SetRuntimeProperty(store, "Settings", settings);
+
+        store.RecordAlectraPeakPowerReading(new AlectraPeakPowerReading(
+            true,
+            1.8,
+            15.8,
+            "On-peak",
+            "TIERED",
+            DateTimeOffset.UtcNow));
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.6,
+            24.0,
+            "cool",
+            "idle",
+            "on",
+            ["auto", "on"]);
+
+        if (!store.ShouldUsePeakPowerFanSaver(safeReading))
+        {
+            throw new InvalidOperationException("Peak Power Saver should prefer the saver fan mode while the room is inside the safety band.");
+        }
+
+        var holdsSafeCooling = store.TryRespectPeakPowerSaver(
+            safeReading,
+            22.0,
+            false,
+            DateTimeOffset.UtcNow,
+            out var holdUntil,
+            out var holdMessage);
+        if (!holdsSafeCooling || holdUntil is null || !holdMessage.Contains("Alectra Peak Power Saver", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Peak Power Saver should hold a safe cooling command during On-peak/high-price usage.");
+        }
+
+        var hotRoomBypass = store.TryRespectPeakPowerSaver(
+            safeReading with { CurrentTemperatureCelsius = 23.4 },
+            22.0,
+            false,
+            DateTimeOffset.UtcNow,
+            out _,
+            out _);
+        if (hotRoomBypass)
+        {
+            throw new InvalidOperationException("Peak Power Saver must step aside when the room exceeds the configured safety band.");
+        }
+
+        var energySavingCommandBypass = store.TryRespectPeakPowerSaver(
+            safeReading,
+            25.0,
+            false,
+            DateTimeOffset.UtcNow,
+            out _,
+            out _);
+        if (energySavingCommandBypass)
+        {
+            throw new InvalidOperationException("Peak Power Saver should allow a command that does not demand more cooling.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.PeakPowerSaver.Active
+            || snapshot.PeakPowerSaver.CurrentPriceCentsPerKwh != 15.8
+            || snapshot.PeakPowerSaver.TouPeriod != "On-peak")
+        {
+            throw new InvalidOperationException("Peak Power Saver status should expose the live Alectra price and TOU period.");
         }
     }
 

@@ -41,6 +41,7 @@ public sealed record DefenderSnapshot(
     RoomTrendSnapshot RoomTrend,
     ThermalMomentumSnapshot ThermalMomentum,
     WeatherDriftSnapshot WeatherDrift,
+    PeakPowerSaverSnapshot PeakPowerSaver,
     SuperDefenderSnapshot SuperDefender,
     CoolingFailureSnapshot CoolingFailure,
     ComfortSnapshot Comfort,
@@ -338,6 +339,22 @@ public sealed record WeatherDriftSnapshot(
     int SampleCount,
     string Status,
     DateTimeOffset? Until);
+
+public sealed record PeakPowerSaverSnapshot(
+    bool Enabled,
+    bool Active,
+    bool Holding,
+    bool FanSaverEnabled,
+    int SecondsRemaining,
+    double? CurrentPowerKilowatts,
+    double PowerThresholdKilowatts,
+    double? CurrentPriceCentsPerKwh,
+    double PriceThresholdCentsPerKwh,
+    string TouPeriod,
+    string CurrentPlan,
+    string Status,
+    DateTimeOffset? Until,
+    DateTimeOffset? UpdatedAt);
 
 public sealed record SuperDefenderSnapshot(
     bool Enabled,
@@ -659,6 +676,26 @@ public sealed class DefenderSettings
     public int WeatherDriftHoldMinutes { get; set; } = 7;
 
     public double WeatherDriftSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool PeakPowerSaverEnabled { get; set; } = true;
+
+    public bool PeakPowerSaverOnPeakEnabled { get; set; } = true;
+
+    public bool PeakPowerSaverHighPowerEnabled { get; set; } = true;
+
+    public double PeakPowerSaverPowerThresholdKilowatts { get; set; } = 2.5;
+
+    public double PeakPowerSaverPriceThresholdCentsPerKwh { get; set; } = 15.0;
+
+    public int PeakPowerSaverHoldMinutes { get; set; } = 20;
+
+    public int PeakPowerSaverRefreshSeconds { get; set; } = 120;
+
+    public double PeakPowerSaverSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool PeakPowerSaverFanSaverEnabled { get; set; } = true;
+
+    public string PeakPowerSaverFanMode { get; set; } = "auto";
 
     public bool SuperDefenderModeEnabled { get; set; } = true;
 

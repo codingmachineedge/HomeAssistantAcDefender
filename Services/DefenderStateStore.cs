@@ -278,6 +278,22 @@ public sealed class DefenderStateStore
             state.Settings.WeatherDriftMinimumChangeCelsius = Math.Round(Math.Clamp(request.WeatherDriftMinimumChangeCelsius, 0.1, 5.0), 1);
             state.Settings.WeatherDriftHoldMinutes = Math.Clamp(request.WeatherDriftHoldMinutes, 1, 120);
             state.Settings.WeatherDriftSafetyBandCelsius = Math.Round(Math.Clamp(request.WeatherDriftSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.PeakPowerSaverEnabled = request.PeakPowerSaverEnabled;
+            state.Settings.PeakPowerSaverOnPeakEnabled = request.PeakPowerSaverOnPeakEnabled;
+            state.Settings.PeakPowerSaverHighPowerEnabled = request.PeakPowerSaverHighPowerEnabled;
+            state.Settings.PeakPowerSaverPowerThresholdKilowatts = Math.Round(Math.Clamp(request.PeakPowerSaverPowerThresholdKilowatts, 0.1, 50.0), 1);
+            state.Settings.PeakPowerSaverPriceThresholdCentsPerKwh = Math.Round(Math.Clamp(request.PeakPowerSaverPriceThresholdCentsPerKwh, 0.0, 200.0), 1);
+            state.Settings.PeakPowerSaverHoldMinutes = Math.Clamp(request.PeakPowerSaverHoldMinutes, 1, 240);
+            state.Settings.PeakPowerSaverRefreshSeconds = Math.Clamp(request.PeakPowerSaverRefreshSeconds, 30, 3600);
+            state.Settings.PeakPowerSaverSafetyBandCelsius = Math.Round(Math.Clamp(request.PeakPowerSaverSafetyBandCelsius, 0.1, 10.0), 1);
+            state.Settings.PeakPowerSaverFanSaverEnabled = request.PeakPowerSaverFanSaverEnabled;
+            state.Settings.PeakPowerSaverFanMode = string.IsNullOrWhiteSpace(request.PeakPowerSaverFanMode)
+                ? "auto"
+                : request.PeakPowerSaverFanMode.Trim();
+            if (!state.Settings.PeakPowerSaverEnabled)
+            {
+                ClearPeakPowerSaver("Alectra Peak Power Saver is off.");
+            }
             state.Settings.SuperDefenderModeEnabled = request.SuperDefenderModeEnabled;
             state.Settings.SuperDefenderRemoteChangeThreshold = Math.Clamp(request.SuperDefenderRemoteChangeThreshold, 1, 20);
             state.Settings.SuperDefenderWindowMinutes = Math.Clamp(request.SuperDefenderWindowMinutes, 1, 1440);
@@ -328,6 +344,74 @@ public sealed class DefenderStateStore
                 RecordWeatherSample(reading, state.Weather.UpdatedAt);
             }
 
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    public bool ShouldRefreshPeakPowerSaver(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (!state.Settings.PeakPowerSaverEnabled)
+            {
+                ClearPeakPowerSaver("Alectra Peak Power Saver is off.");
+                return false;
+            }
+
+            if (state.AlectraPeakPower is null)
+            {
+                return true;
+            }
+
+            var refreshSeconds = Math.Clamp(state.Settings.PeakPowerSaverRefreshSeconds, 30, 3600);
+            return now - state.AlectraPeakPower.UpdatedAt >= TimeSpan.FromSeconds(refreshSeconds);
+        }
+    }
+
+    public DefenderSnapshot RecordAlectraPeakPowerReading(AlectraPeakPowerReading reading)
+    {
+        lock (gate)
+        {
+            state.AlectraPeakPower = reading;
+            if (!state.Settings.PeakPowerSaverEnabled)
+            {
+                ClearPeakPowerSaver("Alectra Peak Power Saver is off.");
+                state.UpdatedAt = DateTimeOffset.UtcNow;
+                SaveState();
+                return CreateSnapshot();
+            }
+
+            if (BuildPeakPowerReasons(reading).Count > 0)
+            {
+                var wasActive = IsPeakPowerSaverActive(DateTimeOffset.UtcNow);
+                state.PeakPowerSaverUntil = DateTimeOffset.UtcNow.AddMinutes(Math.Max(1, state.Settings.PeakPowerSaverHoldMinutes));
+                state.PeakPowerSaverStatus = $"Alectra Peak Power Saver active: {BuildPeakPowerSummary(reading)}.";
+                if (!wasActive)
+                {
+                    AddEvent("warning", $"Alectra Peak Power Saver active: {BuildPeakPowerSummary(reading)}.");
+                }
+            }
+            else
+            {
+                state.PeakPowerSaverUntil = null;
+                state.PeakPowerSaverStatus = $"Alectra power is normal: {BuildPeakPowerSummary(reading)}.";
+            }
+
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    public DefenderSnapshot RecordAlectraPeakPowerUnavailable(string message)
+    {
+        lock (gate)
+        {
+            state.AlectraPeakPower = null;
+            state.PeakPowerSaverUntil = null;
+            state.PeakPowerSaverStatus = $"Alectra Peak Power Saver could not read usage sensors: {message}";
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
             return CreateSnapshot();
@@ -2559,11 +2643,89 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool ShouldUsePeakPowerFanSaver(ThermostatReading reading)
+    {
+        lock (gate)
+        {
+            return state.Settings.PeakPowerSaverEnabled
+                && state.Settings.PeakPowerSaverFanSaverEnabled
+                && IsPeakPowerSaverActive(DateTimeOffset.UtcNow)
+                && !string.IsNullOrWhiteSpace(state.Settings.PeakPowerSaverFanMode)
+                && reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + state.Settings.PeakPowerSaverSafetyBandCelsius
+                && !string.Equals(reading.FanMode, state.Settings.PeakPowerSaverFanMode, StringComparison.OrdinalIgnoreCase)
+                && (reading.AvailableFanModes.Count == 0
+                    || reading.AvailableFanModes.Contains(state.Settings.PeakPowerSaverFanMode, StringComparer.OrdinalIgnoreCase));
+        }
+    }
+
     public string GetFanSaverMode()
     {
         lock (gate)
         {
             return state.Settings.FanEnergySaverMode;
+        }
+    }
+
+    public string GetPeakPowerFanSaverMode()
+    {
+        lock (gate)
+        {
+            return string.IsNullOrWhiteSpace(state.Settings.PeakPowerSaverFanMode)
+                ? "auto"
+                : state.Settings.PeakPowerSaverFanMode;
+        }
+    }
+
+    public bool TryRespectPeakPowerSaver(
+        ThermostatReading reading,
+        double expectedSetPoint,
+        bool bypassQuietTiming,
+        DateTimeOffset now,
+        out DateTimeOffset? until,
+        out string message)
+    {
+        lock (gate)
+        {
+            until = null;
+            message = string.Empty;
+            if (!state.Settings.PeakPowerSaverEnabled)
+            {
+                state.PeakPowerSaverStatus = "Alectra Peak Power Saver is off.";
+                return false;
+            }
+
+            if (!IsPeakPowerSaverActive(now))
+            {
+                state.PeakPowerSaverStatus = state.AlectraPeakPower is null
+                    ? "Alectra Peak Power Saver is waiting for usage data."
+                    : $"Alectra power is normal: {BuildPeakPowerSummary(state.AlectraPeakPower)}.";
+                return false;
+            }
+
+            if (bypassQuietTiming)
+            {
+                state.PeakPowerSaverStatus = "Alectra Peak Power Saver is stepping aside because comfort safety is bypassing quiet timing.";
+                return false;
+            }
+
+            if (expectedSetPoint >= reading.SetPointCelsius - 0.05)
+            {
+                state.PeakPowerSaverStatus = "Alectra Peak Power Saver is allowing this command because it will not demand more cooling.";
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.PeakPowerSaverSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature
+                || reading.CurrentTemperatureCelsius >= state.TargetTemperatureCelsius + state.Settings.NaturalSafetyOverrideCelsius)
+            {
+                state.PeakPowerSaverStatus = $"Room is {reading.CurrentTemperatureCelsius:0.0} C, above the peak-power safe band {allowedRoomTemperature:0.0} C, so comfort wins.";
+                return false;
+            }
+
+            until = state.PeakPowerSaverUntil ?? now.AddMinutes(Math.Max(1, state.Settings.PeakPowerSaverHoldMinutes));
+            message = $"Alectra Peak Power Saver is holding safe cooling until {until.Value.ToLocalTime():HH:mm:ss}: {BuildPeakPowerSummary(state.AlectraPeakPower)}.";
+            state.PeakPowerSaverStatus = message;
+            return true;
         }
     }
 
@@ -4225,6 +4387,14 @@ public sealed class DefenderStateStore
         saved.Settings.WeatherDriftMinimumChangeCelsius = Math.Round(Math.Clamp(saved.Settings.WeatherDriftMinimumChangeCelsius, 0.1, 5.0), 1);
         saved.Settings.WeatherDriftHoldMinutes = Math.Clamp(saved.Settings.WeatherDriftHoldMinutes, 1, 120);
         saved.Settings.WeatherDriftSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.WeatherDriftSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.PeakPowerSaverPowerThresholdKilowatts = Math.Round(Math.Clamp(saved.Settings.PeakPowerSaverPowerThresholdKilowatts <= 0 ? 2.5 : saved.Settings.PeakPowerSaverPowerThresholdKilowatts, 0.1, 50.0), 1);
+        saved.Settings.PeakPowerSaverPriceThresholdCentsPerKwh = Math.Round(Math.Clamp(saved.Settings.PeakPowerSaverPriceThresholdCentsPerKwh < 0 ? 15.0 : saved.Settings.PeakPowerSaverPriceThresholdCentsPerKwh, 0.0, 200.0), 1);
+        saved.Settings.PeakPowerSaverHoldMinutes = Math.Clamp(saved.Settings.PeakPowerSaverHoldMinutes <= 0 ? 20 : saved.Settings.PeakPowerSaverHoldMinutes, 1, 240);
+        saved.Settings.PeakPowerSaverRefreshSeconds = Math.Clamp(saved.Settings.PeakPowerSaverRefreshSeconds <= 0 ? 120 : saved.Settings.PeakPowerSaverRefreshSeconds, 30, 3600);
+        saved.Settings.PeakPowerSaverSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.PeakPowerSaverSafetyBandCelsius <= 0 ? 1.0 : saved.Settings.PeakPowerSaverSafetyBandCelsius, 0.1, 10.0), 1);
+        saved.Settings.PeakPowerSaverFanMode = string.IsNullOrWhiteSpace(saved.Settings.PeakPowerSaverFanMode)
+            ? "auto"
+            : saved.Settings.PeakPowerSaverFanMode.Trim();
         saved.Settings.SuperDefenderRemoteChangeThreshold = Math.Clamp(saved.Settings.SuperDefenderRemoteChangeThreshold, 1, 20);
         saved.Settings.SuperDefenderWindowMinutes = Math.Clamp(saved.Settings.SuperDefenderWindowMinutes, 1, 1440);
         saved.Settings.SuperDefenderHoldMinutes = Math.Clamp(saved.Settings.SuperDefenderHoldMinutes, 0, 240);
@@ -4400,6 +4570,19 @@ public sealed class DefenderStateStore
             saved.WeatherDriftHoldUntil = null;
             saved.WeatherDriftStatus = "Weather drift guard is watching.";
         }
+        saved.PeakPowerSaverStatus = string.IsNullOrWhiteSpace(saved.PeakPowerSaverStatus)
+            ? "Alectra Peak Power Saver is watching usage sensors."
+            : saved.PeakPowerSaverStatus;
+        if (!saved.Settings.PeakPowerSaverEnabled)
+        {
+            saved.PeakPowerSaverUntil = null;
+            saved.PeakPowerSaverStatus = "Alectra Peak Power Saver is off.";
+        }
+        else if (saved.PeakPowerSaverUntil is { } peakUntil && peakUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.PeakPowerSaverUntil = null;
+            saved.PeakPowerSaverStatus = "Alectra Peak Power Saver is watching usage sensors.";
+        }
         saved.SuperDefenderStatus = string.IsNullOrWhiteSpace(saved.SuperDefenderStatus)
             ? "Super Defender is watching for repeated phone or Home Assistant changes."
             : saved.SuperDefenderStatus;
@@ -4506,6 +4689,17 @@ public sealed class DefenderStateStore
         var weatherDriftSeconds = state.WeatherDriftHoldUntil is { } weatherDriftUntil && weatherDriftUntil > now
             ? (int)Math.Ceiling((weatherDriftUntil - now).TotalSeconds)
             : 0;
+        var peakPowerSaverSeconds = state.PeakPowerSaverUntil is { } peakUntil && peakUntil > now
+            ? (int)Math.Ceiling((peakUntil - now).TotalSeconds)
+            : 0;
+        if (peakPowerSaverSeconds == 0 && state.PeakPowerSaverUntil is not null)
+        {
+            ClearPeakPowerSaver("Alectra Peak Power Saver is watching usage sensors.");
+        }
+        var peakPowerReasons = BuildPeakPowerReasons(state.AlectraPeakPower);
+        var peakPowerActive = state.Settings.PeakPowerSaverEnabled
+            && peakPowerSaverSeconds > 0
+            && peakPowerReasons.Count > 0;
         PruneRemoteChangeTimes(now);
         var superDefenderSeconds = state.SuperDefenderUntil is { } superUntil && superUntil > now
             ? (int)Math.Ceiling((superUntil - now).TotalSeconds)
@@ -4898,6 +5092,23 @@ public sealed class DefenderStateStore
                     ? "Weather drift guard is watching."
                     : state.WeatherDriftStatus,
                 weatherDriftSeconds > 0 ? state.WeatherDriftHoldUntil : null),
+            new PeakPowerSaverSnapshot(
+                state.Settings.PeakPowerSaverEnabled,
+                peakPowerActive,
+                peakPowerActive && !string.IsNullOrWhiteSpace(state.PeakPowerSaverStatus) && state.PeakPowerSaverStatus.Contains("holding", StringComparison.OrdinalIgnoreCase),
+                state.Settings.PeakPowerSaverFanSaverEnabled,
+                peakPowerSaverSeconds,
+                state.AlectraPeakPower?.CurrentPowerKilowatts,
+                state.Settings.PeakPowerSaverPowerThresholdKilowatts,
+                state.AlectraPeakPower?.CurrentPriceCentsPerKwh,
+                state.Settings.PeakPowerSaverPriceThresholdCentsPerKwh,
+                string.IsNullOrWhiteSpace(state.AlectraPeakPower?.TouPeriod) ? "--" : state.AlectraPeakPower!.TouPeriod!,
+                string.IsNullOrWhiteSpace(state.AlectraPeakPower?.CurrentPlan) ? "--" : state.AlectraPeakPower!.CurrentPlan!,
+                string.IsNullOrWhiteSpace(state.PeakPowerSaverStatus)
+                    ? "Alectra Peak Power Saver is watching usage sensors."
+                    : state.PeakPowerSaverStatus,
+                peakPowerSaverSeconds > 0 ? state.PeakPowerSaverUntil : null,
+                state.AlectraPeakPower?.UpdatedAt),
             new SuperDefenderSnapshot(
                 state.Settings.SuperDefenderModeEnabled,
                 superDefenderSeconds > 0,
@@ -5102,6 +5313,96 @@ public sealed class DefenderStateStore
     {
         state.WeatherDriftHoldUntil = null;
         state.WeatherDriftStatus = status;
+    }
+
+    private void ClearPeakPowerSaver(string status)
+    {
+        state.PeakPowerSaverUntil = null;
+        state.PeakPowerSaverStatus = status;
+    }
+
+    private bool IsPeakPowerSaverActive(DateTimeOffset now)
+    {
+        if (!state.Settings.PeakPowerSaverEnabled)
+        {
+            state.PeakPowerSaverUntil = null;
+            return false;
+        }
+
+        if (state.PeakPowerSaverUntil is not { } until || until <= now)
+        {
+            state.PeakPowerSaverUntil = null;
+            return false;
+        }
+
+        return true;
+    }
+
+    private List<string> BuildPeakPowerReasons(AlectraPeakPowerReading? reading)
+    {
+        var reasons = new List<string>();
+        if (reading is null || !reading.HomeAssistantConfigured)
+        {
+            return reasons;
+        }
+
+        if (state.Settings.PeakPowerSaverOnPeakEnabled
+            && IsOnPeakPeriod(reading.TouPeriod))
+        {
+            reasons.Add($"TOU {reading.TouPeriod}");
+        }
+
+        if (state.Settings.PeakPowerSaverPriceThresholdCentsPerKwh > 0
+            && reading.CurrentPriceCentsPerKwh is { } price
+            && price >= state.Settings.PeakPowerSaverPriceThresholdCentsPerKwh)
+        {
+            reasons.Add($"{price:0.0} c/kWh");
+        }
+
+        if (state.Settings.PeakPowerSaverHighPowerEnabled
+            && reading.CurrentPowerKilowatts is { } power
+            && power >= state.Settings.PeakPowerSaverPowerThresholdKilowatts)
+        {
+            reasons.Add($"{power:0.0} kW");
+        }
+
+        return reasons;
+    }
+
+    private string BuildPeakPowerSummary(AlectraPeakPowerReading? reading)
+    {
+        if (reading is null)
+        {
+            return "waiting for Alectra Hui usage sensors";
+        }
+
+        if (!reading.HomeAssistantConfigured)
+        {
+            return "Home Assistant usage sensors are not configured";
+        }
+
+        var reasons = BuildPeakPowerReasons(reading);
+        var trigger = reasons.Count == 0 ? "no peak trigger" : string.Join(", ", reasons);
+        var power = reading.CurrentPowerKilowatts is { } kw ? $"{kw:0.00} kW" : "-- kW";
+        var price = reading.CurrentPriceCentsPerKwh is { } cents ? $"{cents:0.0} c/kWh" : "-- c/kWh";
+        var period = string.IsNullOrWhiteSpace(reading.TouPeriod) ? "TOU --" : reading.TouPeriod;
+        var plan = string.IsNullOrWhiteSpace(reading.CurrentPlan) ? "plan --" : reading.CurrentPlan;
+        return $"{trigger}; {power}; {price}; {period}; {plan}";
+    }
+
+    private static bool IsOnPeakPeriod(string? touPeriod)
+    {
+        if (string.IsNullOrWhiteSpace(touPeriod))
+        {
+            return false;
+        }
+
+        var normalized = touPeriod.Trim().ToLowerInvariant();
+        return normalized.Contains("on-peak", StringComparison.Ordinal)
+            || normalized.Contains("on peak", StringComparison.Ordinal)
+            || (normalized.Contains("peak", StringComparison.Ordinal)
+                && !normalized.Contains("off", StringComparison.Ordinal)
+                && !normalized.Contains("mid", StringComparison.Ordinal));
     }
 
     private void ClearSuperDefender(string status)
@@ -5372,6 +5673,16 @@ public sealed class DefenderStateStore
             WeatherDriftMinimumChangeCelsius = settings.WeatherDriftMinimumChangeCelsius,
             WeatherDriftHoldMinutes = settings.WeatherDriftHoldMinutes,
             WeatherDriftSafetyBandCelsius = settings.WeatherDriftSafetyBandCelsius,
+            PeakPowerSaverEnabled = settings.PeakPowerSaverEnabled,
+            PeakPowerSaverOnPeakEnabled = settings.PeakPowerSaverOnPeakEnabled,
+            PeakPowerSaverHighPowerEnabled = settings.PeakPowerSaverHighPowerEnabled,
+            PeakPowerSaverPowerThresholdKilowatts = settings.PeakPowerSaverPowerThresholdKilowatts,
+            PeakPowerSaverPriceThresholdCentsPerKwh = settings.PeakPowerSaverPriceThresholdCentsPerKwh,
+            PeakPowerSaverHoldMinutes = settings.PeakPowerSaverHoldMinutes,
+            PeakPowerSaverRefreshSeconds = settings.PeakPowerSaverRefreshSeconds,
+            PeakPowerSaverSafetyBandCelsius = settings.PeakPowerSaverSafetyBandCelsius,
+            PeakPowerSaverFanSaverEnabled = settings.PeakPowerSaverFanSaverEnabled,
+            PeakPowerSaverFanMode = settings.PeakPowerSaverFanMode,
             SuperDefenderModeEnabled = settings.SuperDefenderModeEnabled,
             SuperDefenderRemoteChangeThreshold = settings.SuperDefenderRemoteChangeThreshold,
             SuperDefenderWindowMinutes = settings.SuperDefenderWindowMinutes,
@@ -5623,6 +5934,12 @@ public sealed class DefenderStateStore
         public DateTimeOffset? WeatherDriftHoldUntil { get; set; }
 
         public string WeatherDriftStatus { get; set; } = "Weather drift guard is watching.";
+
+        public AlectraPeakPowerReading? AlectraPeakPower { get; set; }
+
+        public DateTimeOffset? PeakPowerSaverUntil { get; set; }
+
+        public string PeakPowerSaverStatus { get; set; } = "Alectra Peak Power Saver is watching usage sensors.";
 
         public DateTimeOffset? SuperDefenderUntil { get; set; }
 

@@ -42,6 +42,24 @@
         </ChildContent>
     </SectionCard>
 
+    <SectionCard Title="Alectra Peak Power Saver"
+                 Subtitle="@(Snapshot?.PeakPowerSaver.Active == true ? "Saving" : "Watching")"
+                 Help="Uses real Alectra Hui power, price, and TOU sensors to hold only safe cooling during peak or high-load periods.">
+        <Actions>
+            <MudChip T="string" Color="@(Snapshot?.PeakPowerSaver.Holding == true ? Color.Warning : Snapshot?.PeakPowerSaver.Active == true ? Color.Info : Color.Default)" Variant="Variant.Outlined" Size="Size.Small">
+                @(Snapshot?.PeakPowerSaver.Holding == true ? "Holding" : Snapshot?.PeakPowerSaver.Active == true ? "Peak" : "Ready")
+            </MudChip>
+        </Actions>
+        <ChildContent>
+            <MudText Typo="Typo.body2">@Snapshot?.PeakPowerSaver.Status</MudText>
+            <MudText Typo="Typo.caption" Class="helper-text">
+                Power @(Snapshot?.PeakPowerSaver.CurrentPowerKilowatts?.ToString("0.00") ?? "--") kW ·
+                Price @(Snapshot?.PeakPowerSaver.CurrentPriceCentsPerKwh?.ToString("0.0") ?? "--") c/kWh ·
+                TOU @(Snapshot?.PeakPowerSaver.TouPeriod ?? "--")
+            </MudText>
+        </ChildContent>
+    </SectionCard>
+
     <MudGrid Spacing="3">
         <MudItem xs="12" md="6">
             <SectionCard Title="Target" Help="The cool number the defender keeps.">

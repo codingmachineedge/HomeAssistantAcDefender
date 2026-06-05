@@ -22,14 +22,15 @@ sequence. The first guard that wants to wait stops the cycle and reports its nex
 7. **Upstairs Comfort Guard** — lower the target and add boost when upstairs is hot.
 8. Decide whether **severe upstairs heat**, **Cooler Intent Fast Lane**, or **Super Defender** should bypass quiet timing.
 9. **Wall Settling**, **Conflict Quiet**, **Manual Comfort Grace**, and **Dynamic Cooldown** may each hold.
-10. **Fan Energy Saver** — move the fan to a saver mode when near target.
-11. Compute the **expected setpoint** (1 °C below room when the room is warm — see below).
-12. If the setpoint needs to change, walk the timing guards in order: **Comfort Envelope → Room Trend →
+10. **Alectra Peak Power Saver** — make safe cooling more chill during On-peak/high-price/high-power usage.
+11. **Fan Energy Saver** — move the fan to a saver mode when near target.
+12. Compute the **expected setpoint** (1 °C below room when the room is warm — see below).
+13. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver → Comfort Envelope → Room Trend →
     Thermal Momentum → Weather Drift → Setpoint Echo → Cooling Runway → Sensor Rhythm → Comfort Sync →
     Comfort Pace → Routine Timing → Comfort Budget → Visibility Guard → Natural Cadence**.
-13. Shape the command size with **Natural Walkback** and **Touch Signature**, then **Repeat Quiet**.
-14. Send the corrected setpoint to Home Assistant.
-15. **Cooling Failure Watch** runs alongside and raises a mega-alert if cooling is demanded but not real.
+14. Shape the command size with **Natural Walkback** and **Touch Signature**, then **Repeat Quiet**.
+15. Send the corrected setpoint to Home Assistant.
+16. **Cooling Failure Watch** runs alongside and raises a mega-alert if cooling is demanded but not real.
 
 ## Warm-room cooling — the "1 °C below room" rule
 
@@ -224,6 +225,11 @@ A frequency-based quiet period after a manual thermostat change.
 Optionally moves the fan to an energy-saving mode when the room is near target.
 - **Logic:** when enabled and the room is within the threshold of target, if the configured fan mode exists on the device it calls `climate.set_fan_mode`.
 - **Settings:** `FanEnergySaverEnabled`, `FanEnergySaverThresholdCelsius`, `FanEnergySaverMode`.
+
+### Alectra Peak Power Saver
+Makes safe cooling more chill and resource-saving when Alectra Hui says power is expensive or high.
+- **Logic:** the worker refreshes Alectra Hui usage sensors on the configured interval. On-peak TOU, current price at or above the c/kWh threshold, or current power at or above the kW threshold arms the saver window. While active, it holds only safe commands that would demand more cooling, and can set the configured fan saver mode. If the room or upstairs gets too hot, or the command would save energy by raising the setpoint, it steps aside.
+- **Settings:** `PeakPowerSaverEnabled`, `PeakPowerSaverOnPeakEnabled`, `PeakPowerSaverHighPowerEnabled`, `PeakPowerSaverPowerThresholdKilowatts`, `PeakPowerSaverPriceThresholdCentsPerKwh`, `PeakPowerSaverHoldMinutes`, `PeakPowerSaverRefreshSeconds`, `PeakPowerSaverSafetyBandCelsius`, `PeakPowerSaverFanSaverEnabled`, `PeakPowerSaverFanMode`.
 
 ### Upstairs Comfort Guard
 Prioritizes cooling when upstairs rooms get hot while someone is home.
