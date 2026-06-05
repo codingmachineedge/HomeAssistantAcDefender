@@ -133,6 +133,12 @@ public sealed class DefenderStateStore
             state.Settings.NaturalWalkbackStepCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackStepCelsius, 0.1, 5.0), 1);
             state.Settings.NaturalWalkbackJitterCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackJitterCelsius, 0.0, 0.5), 1);
             state.Settings.NaturalWalkbackSafetyBandCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.ComfortCompromiseEnabled = request.ComfortCompromiseEnabled;
+            state.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(request.ComfortCompromiseTriggerTouches, 1, 20);
+            state.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(request.ComfortCompromiseHoldMinutes, 0, 240);
+            state.Settings.ComfortCompromiseDecayMinutes = Math.Clamp(request.ComfortCompromiseDecayMinutes, 1, 240);
+            state.Settings.ComfortCompromiseMaxOffsetCelsius = Math.Round(Math.Clamp(request.ComfortCompromiseMaxOffsetCelsius, 0.1, 5.0), 1);
+            state.Settings.ComfortCompromiseSafetyBandCelsius = Math.Round(Math.Clamp(request.ComfortCompromiseSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.ManualComfortGraceEnabled = request.ManualComfortGraceEnabled;
             state.Settings.ManualComfortGraceMinutes = Math.Clamp(request.ManualComfortGraceMinutes, 0, 240);
             state.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(request.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
@@ -911,6 +917,7 @@ public sealed class DefenderStateStore
                 {
                     state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
                     state.BoostOffsetCelsius = 0.0;
+                    ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
                     AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C.");
                 }
             }
@@ -949,6 +956,7 @@ public sealed class DefenderStateStore
             {
                 state.TargetTemperatureCelsius = Math.Round(comfortTarget, 1);
                 state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
+                ClearComfortCompromise("Upstairs comfort changed the target, so comfort compromise reset.");
                 AddEvent("warning", $"Upstairs comfort guard lowered target to {state.TargetTemperatureCelsius:0.0} C.");
             }
             else
@@ -985,7 +993,8 @@ public sealed class DefenderStateStore
     {
         lock (gate)
         {
-            var target = state.TargetTemperatureCelsius;
+            var now = DateTimeOffset.UtcNow;
+            var target = CalculateComfortCompromiseTarget(currentTemperatureCelsius, now);
             if (currentTemperatureCelsius <= target + options.TemperatureToleranceCelsius)
             {
                 state.BoostOffsetCelsius = 0.0;
@@ -1031,6 +1040,52 @@ public sealed class DefenderStateStore
         {
             return state.Settings.FanEnergySaverMode;
         }
+    }
+
+    private double CalculateComfortCompromiseTarget(double currentTemperatureCelsius, DateTimeOffset now)
+    {
+        var target = state.TargetTemperatureCelsius;
+        if (!state.Settings.ComfortCompromiseEnabled)
+        {
+            ClearComfortCompromise("Comfort compromise is off.");
+            return target;
+        }
+
+        if (state.ComfortCompromiseUntil is not { } until
+            || state.ComfortCompromiseStartedAt is not { } startedAt
+            || state.ComfortCompromisePreferredSetPointCelsius is not { } preferredSetPoint)
+        {
+            state.ComfortCompromiseStatus = "Comfort compromise is watching for repeated wall changes.";
+            return target;
+        }
+
+        if (until <= now)
+        {
+            ClearComfortCompromise("Comfort compromise finished; easing back to the website target.");
+            return target;
+        }
+
+        var allowedRoomTemperature = target + state.Settings.ComfortCompromiseSafetyBandCelsius;
+        if (currentTemperatureCelsius > allowedRoomTemperature || currentTemperatureCelsius >= target + state.Settings.NaturalSafetyOverrideCelsius)
+        {
+            ClearComfortCompromise($"Room rose above {allowedRoomTemperature:0.0} C, so comfort compromise stepped aside.");
+            return target;
+        }
+
+        var maxOffset = Math.Max(0.1, state.Settings.ComfortCompromiseMaxOffsetCelsius);
+        var boundedPreference = Math.Round(Math.Clamp(preferredSetPoint, target - maxOffset, target + maxOffset), 1);
+        var holdUntil = startedAt.AddMinutes(Math.Max(0, state.Settings.ComfortCompromiseHoldMinutes));
+        var factor = 1.0;
+        if (now > holdUntil)
+        {
+            var decayMinutes = Math.Max(1, state.Settings.ComfortCompromiseDecayMinutes);
+            factor = Math.Clamp(1.0 - ((now - holdUntil).TotalMinutes / decayMinutes), 0.0, 1.0);
+        }
+
+        var effectiveTarget = Math.Round(target + (boundedPreference - target) * factor, 1);
+        state.ComfortCompromiseEffectiveTargetCelsius = effectiveTarget;
+        state.ComfortCompromiseStatus = $"Comfort compromise is easing from {boundedPreference:0.0} C toward {target:0.0} C; effective target is {effectiveTarget:0.0} C.";
+        return effectiveTarget;
     }
 
     private void DetectExternalSetPointChange(ThermostatReading reading, DateTimeOffset now)
@@ -1088,6 +1143,7 @@ public sealed class DefenderStateStore
         state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
             ? $"Manual touch score is {touchScore}/100; natural walkback will use small safe-band nudges if correction is needed."
             : "Natural walkback is off.";
+        TryStartComfortCompromise(reading, now);
 
         var audit = new ThermostatChangeAudit(
             now,
@@ -1106,6 +1162,49 @@ public sealed class DefenderStateStore
 
         AddEvent("warning",
             $"External thermostat change: {previous:0.0} C to {reading.SetPointCelsius:0.0} C at {now:yyyy-MM-dd HH:mm:ss}.");
+    }
+
+    private void TryStartComfortCompromise(ThermostatReading reading, DateTimeOffset now)
+    {
+        if (!state.Settings.ComfortCompromiseEnabled)
+        {
+            ClearComfortCompromise("Comfort compromise is off.");
+            return;
+        }
+
+        PruneTouchTimes(now);
+        var triggerTouches = Math.Max(1, state.Settings.ComfortCompromiseTriggerTouches);
+        if (state.ExternalTouchTimes.Count < triggerTouches)
+        {
+            state.ComfortCompromiseStatus = $"Comfort compromise is watching wall changes ({state.ExternalTouchTimes.Count}/{triggerTouches}).";
+            return;
+        }
+
+        var target = state.TargetTemperatureCelsius;
+        var allowedRoomTemperature = target + state.Settings.ComfortCompromiseSafetyBandCelsius;
+        if (reading.CurrentTemperatureCelsius > allowedRoomTemperature || ShouldBypassNaturalRecovery(reading))
+        {
+            ClearComfortCompromise($"Room is above {allowedRoomTemperature:0.0} C, so comfort compromise will not hold the warmer wall setting.");
+            return;
+        }
+
+        if (Math.Abs(reading.SetPointCelsius - target) <= 0.05)
+        {
+            ClearComfortCompromise("Wall setting already matches the website target.");
+            return;
+        }
+
+        state.ComfortCompromiseStartedAt = now;
+        state.ComfortCompromiseUntil = now.AddMinutes(
+            Math.Max(0, state.Settings.ComfortCompromiseHoldMinutes)
+            + Math.Max(1, state.Settings.ComfortCompromiseDecayMinutes));
+        state.ComfortCompromisePreferredSetPointCelsius = Math.Round(reading.SetPointCelsius, 1);
+        var maxOffset = Math.Max(0.1, state.Settings.ComfortCompromiseMaxOffsetCelsius);
+        state.ComfortCompromiseEffectiveTargetCelsius = Math.Round(Math.Clamp(
+            reading.SetPointCelsius,
+            target - maxOffset,
+            target + maxOffset), 1);
+        state.ComfortCompromiseStatus = $"Comfort compromise accepted {reading.SetPointCelsius:0.0} C temporarily and will fade back by {state.ComfortCompromiseUntil.Value.ToLocalTime():HH:mm:ss}.";
     }
 
     private int CalculateDynamicCooldownSeconds(DateTimeOffset now)
@@ -1413,6 +1512,11 @@ public sealed class DefenderStateStore
         saved.Settings.NaturalWalkbackStepCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackStepCelsius, 0.1, 5.0), 1);
         saved.Settings.NaturalWalkbackJitterCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackJitterCelsius, 0.0, 0.5), 1);
         saved.Settings.NaturalWalkbackSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(saved.Settings.ComfortCompromiseTriggerTouches, 1, 20);
+        saved.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(saved.Settings.ComfortCompromiseHoldMinutes, 0, 240);
+        saved.Settings.ComfortCompromiseDecayMinutes = Math.Clamp(saved.Settings.ComfortCompromiseDecayMinutes, 1, 240);
+        saved.Settings.ComfortCompromiseMaxOffsetCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortCompromiseMaxOffsetCelsius, 0.1, 5.0), 1);
+        saved.Settings.ComfortCompromiseSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortCompromiseSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.CoolModeRestoreMinimumDelaySeconds = Math.Clamp(saved.Settings.CoolModeRestoreMinimumDelaySeconds, 0, 3600);
         saved.Settings.CoolModeRestoreMaximumDelaySeconds = Math.Clamp(
             saved.Settings.CoolModeRestoreMaximumDelaySeconds,
@@ -1444,6 +1548,9 @@ public sealed class DefenderStateStore
         saved.NaturalWalkbackStatus = string.IsNullOrWhiteSpace(saved.NaturalWalkbackStatus)
             ? "Natural walkback is watching."
             : saved.NaturalWalkbackStatus;
+        saved.ComfortCompromiseStatus = string.IsNullOrWhiteSpace(saved.ComfortCompromiseStatus)
+            ? "Comfort compromise is watching for repeated wall changes."
+            : saved.ComfortCompromiseStatus;
         saved.CoolModeRestoreStatus = string.IsNullOrWhiteSpace(saved.CoolModeRestoreStatus)
             ? "Cool mode restore is watching."
             : saved.CoolModeRestoreStatus;
@@ -1479,6 +1586,9 @@ public sealed class DefenderStateStore
         var naturalSeconds = Math.Max(cooldownSeconds, holdSeconds);
         var coolModeRestoreSeconds = state.CoolModeRestoreDueAt is { } coolModeDueAt && coolModeDueAt > now
             ? (int)Math.Ceiling((coolModeDueAt - now).TotalSeconds)
+            : 0;
+        var comfortCompromiseSeconds = state.ComfortCompromiseUntil is { } compromiseUntil && compromiseUntil > now
+            ? (int)Math.Ceiling((compromiseUntil - now).TotalSeconds)
             : 0;
         var conflictQuietSeconds = state.ConflictQuietUntil is { } conflictUntil && conflictUntil > now
             ? (int)Math.Ceiling((conflictUntil - now).TotalSeconds)
@@ -1556,6 +1666,16 @@ public sealed class DefenderStateStore
                 string.IsNullOrWhiteSpace(state.NaturalWalkbackStatus)
                     ? "Natural walkback is watching."
                     : state.NaturalWalkbackStatus),
+            new ComfortCompromiseSnapshot(
+                state.Settings.ComfortCompromiseEnabled,
+                comfortCompromiseSeconds > 0,
+                comfortCompromiseSeconds,
+                state.ComfortCompromisePreferredSetPointCelsius,
+                state.ComfortCompromiseEffectiveTargetCelsius,
+                string.IsNullOrWhiteSpace(state.ComfortCompromiseStatus)
+                    ? "Comfort compromise is watching for repeated wall changes."
+                    : state.ComfortCompromiseStatus,
+                comfortCompromiseSeconds > 0 ? state.ComfortCompromiseUntil : null),
             new ConflictQuietSnapshot(
                 state.Settings.ConflictQuietModeEnabled,
                 conflictQuietSeconds > 0,
@@ -1635,6 +1755,7 @@ public sealed class DefenderStateStore
         state.NaturalHoldCount = 0;
         state.NaturalRecoveryStatus = status;
         state.NaturalWalkbackStatus = "Natural walkback is watching.";
+        ClearComfortCompromise("Comfort compromise reset after website target change.");
         state.CoolModeRestoreDueAt = null;
         state.CoolModeRestoreCommandedAt = null;
         state.CoolModeRestoreStatus = "Cool mode restore is watching.";
@@ -1652,6 +1773,15 @@ public sealed class DefenderStateStore
         state.ManualComfortGraceUntil = null;
         state.ManualComfortGraceSetPointCelsius = null;
         state.ManualComfortGraceStatus = "No wall-change grace active.";
+    }
+
+    private void ClearComfortCompromise(string status)
+    {
+        state.ComfortCompromiseStartedAt = null;
+        state.ComfortCompromiseUntil = null;
+        state.ComfortCompromisePreferredSetPointCelsius = null;
+        state.ComfortCompromiseEffectiveTargetCelsius = null;
+        state.ComfortCompromiseStatus = status;
     }
 
     private void SaveState()
@@ -1777,6 +1907,12 @@ public sealed class DefenderStateStore
             NaturalWalkbackStepCelsius = settings.NaturalWalkbackStepCelsius,
             NaturalWalkbackJitterCelsius = settings.NaturalWalkbackJitterCelsius,
             NaturalWalkbackSafetyBandCelsius = settings.NaturalWalkbackSafetyBandCelsius,
+            ComfortCompromiseEnabled = settings.ComfortCompromiseEnabled,
+            ComfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches,
+            ComfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes,
+            ComfortCompromiseDecayMinutes = settings.ComfortCompromiseDecayMinutes,
+            ComfortCompromiseMaxOffsetCelsius = settings.ComfortCompromiseMaxOffsetCelsius,
+            ComfortCompromiseSafetyBandCelsius = settings.ComfortCompromiseSafetyBandCelsius,
             ManualComfortGraceEnabled = settings.ManualComfortGraceEnabled,
             ManualComfortGraceMinutes = settings.ManualComfortGraceMinutes,
             ManualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius,
@@ -1889,6 +2025,16 @@ public sealed class DefenderStateStore
         public string NaturalRecoveryStatus { get; set; } = "Comfort sync is ready.";
 
         public string NaturalWalkbackStatus { get; set; } = "Natural walkback is watching.";
+
+        public DateTimeOffset? ComfortCompromiseStartedAt { get; set; }
+
+        public DateTimeOffset? ComfortCompromiseUntil { get; set; }
+
+        public double? ComfortCompromisePreferredSetPointCelsius { get; set; }
+
+        public double? ComfortCompromiseEffectiveTargetCelsius { get; set; }
+
+        public string ComfortCompromiseStatus { get; set; } = "Comfort compromise is watching for repeated wall changes.";
 
         public DateTimeOffset? CoolModeRestoreDueAt { get; set; }
 

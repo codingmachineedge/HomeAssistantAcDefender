@@ -17,9 +17,10 @@ Every cycle performs these steps:
 13. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
 14. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
 15. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
-16. Apply fan energy saver when enabled and near target.
-17. Correct the real thermostat setpoint when needed.
-18. Update the next-action status label.
+16. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+17. Apply fan energy saver when enabled and near target.
+18. Correct the real thermostat setpoint when needed.
+19. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -75,6 +76,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Sends warm-room corrections to the room-temperature defender target instead of walking down from the wall setpoint.
 - Automatically changes quiet level when repeated wall touches happen, shrinking nudge size and increasing wait/hold/command spacing.
 - Uses Natural Walkback for small safe-band setpoint steps when repeated wall touches make a direct correction too obvious.
+- Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
 Quiet recovery does not fake thermostat state and does not run a simulator. It only changes the timing and selected command target sent to the real Home Assistant climate entity.
@@ -98,6 +100,18 @@ targetTemperature + naturalWalkbackSafetyBandCelsius
 the next safe-band correction walks toward the website target in smaller nudges. A tiny optional variation changes the nudge size so every correction is not identical.
 
 Natural Walkback never changes the warm-room defender rule. If the room needs active cooling, the command still starts one degree below current room temperature and continues down toward the website target. If the room crosses the safety band, the normal direct comfort correction path wins.
+
+## Comfort Compromise
+
+Comfort Compromise creates a temporary effective target after repeated wall changes. It starts only when the touch trigger is reached and the real room temperature is still inside:
+
+```text
+targetTemperature + comfortCompromiseSafetyBandCelsius
+```
+
+The preferred wall setpoint is capped by `comfortCompromiseMaxOffsetCelsius`, held for the configured hold minutes, and then faded back toward the website target across the decay window.
+
+If the room rises above the safety band, the compromise is cleared immediately. Schedule changes, website target changes, and upstairs comfort target changes also clear it.
 
 ## Manual Comfort Grace
 

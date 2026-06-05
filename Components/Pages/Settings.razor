@@ -351,6 +351,69 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_comfortCompromiseEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _comfortCompromiseEnabled = v))"
+                           Label="Comfort compromise"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Lets repeated wall choices rest briefly while the room is still safe.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_comfortCompromiseTriggerTouches"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortCompromiseTriggerTouches = value))"
+                                         Label="Compromise touches"
+                                         HelperText="How many touches start the temporary blend."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_comfortCompromiseHoldMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortCompromiseHoldMinutes = value))"
+                                         Label="Compromise hold minutes"
+                                         HelperText="How long the wall choice can rest."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_comfortCompromiseDecayMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortCompromiseDecayMinutes = value))"
+                                         Label="Fade-back minutes"
+                                         HelperText="How slowly it eases back."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_comfortCompromiseMaxOffsetCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortCompromiseMaxOffsetCelsius = value))"
+                                         Label="Max compromise C"
+                                         HelperText="Biggest temporary difference from target."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudNumericField T="double"
+                                         Value="_comfortCompromiseSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortCompromiseSafetyBandCelsius = value))"
+                                         Label="Compromise safe band C"
+                                         HelperText="Stop compromise if room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_manualComfortGraceEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _manualComfortGraceEnabled = v))"
                            Label="Respect wall changes"
@@ -761,6 +824,12 @@
     private double _naturalWalkbackStepCelsius = 0.5;
     private double _naturalWalkbackJitterCelsius = 0.1;
     private double _naturalWalkbackSafetyBandCelsius = 1.0;
+    private bool _comfortCompromiseEnabled = true;
+    private int _comfortCompromiseTriggerTouches = 2;
+    private int _comfortCompromiseHoldMinutes = 20;
+    private int _comfortCompromiseDecayMinutes = 30;
+    private double _comfortCompromiseMaxOffsetCelsius = 1.0;
+    private double _comfortCompromiseSafetyBandCelsius = 1.0;
     private bool _manualComfortGraceEnabled = true;
     private int _manualComfortGraceMinutes = 20;
     private double _manualComfortGraceBandCelsius = 0.8;
@@ -830,6 +899,12 @@
         _naturalWalkbackStepCelsius = settings.NaturalWalkbackStepCelsius;
         _naturalWalkbackJitterCelsius = settings.NaturalWalkbackJitterCelsius;
         _naturalWalkbackSafetyBandCelsius = settings.NaturalWalkbackSafetyBandCelsius;
+        _comfortCompromiseEnabled = settings.ComfortCompromiseEnabled;
+        _comfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches;
+        _comfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes;
+        _comfortCompromiseDecayMinutes = settings.ComfortCompromiseDecayMinutes;
+        _comfortCompromiseMaxOffsetCelsius = settings.ComfortCompromiseMaxOffsetCelsius;
+        _comfortCompromiseSafetyBandCelsius = settings.ComfortCompromiseSafetyBandCelsius;
         _manualComfortGraceEnabled = settings.ManualComfortGraceEnabled;
         _manualComfortGraceMinutes = settings.ManualComfortGraceMinutes;
         _manualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius;
@@ -946,6 +1021,12 @@
             _naturalWalkbackStepCelsius,
             _naturalWalkbackJitterCelsius,
             _naturalWalkbackSafetyBandCelsius,
+            _comfortCompromiseEnabled,
+            _comfortCompromiseTriggerTouches,
+            _comfortCompromiseHoldMinutes,
+            _comfortCompromiseDecayMinutes,
+            _comfortCompromiseMaxOffsetCelsius,
+            _comfortCompromiseSafetyBandCelsius,
             _manualComfortGraceEnabled,
             _manualComfortGraceMinutes,
             _manualComfortGraceBandCelsius,

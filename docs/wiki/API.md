@@ -16,6 +16,7 @@ The status snapshot includes:
 - `coolModeRestore`: cool-mode restore delay status, remaining seconds, and due time.
 - `naturalRecovery`: quiet recovery status, quiet level, wait seconds, recent touch count, base/effective nudge size, base/effective hold chance, and effective command gap.
 - `naturalWalkback`: safe-band walkback status, active flag, touch score, and current walkback step.
+- `comfortCompromise`: temporary blended target status, preferred wall setpoint, effective target, remaining seconds, and expiry time.
 - `conflictQuiet`: repeated-touch stand-down status, remaining seconds, trigger touch count, comfort band, and expiry time.
 - `manualComfortGrace`: wall-change grace status, remaining seconds, comfort band, and expiry time.
 - `roomTrend`: real room trend direction, delta, sample count, hold status, and remaining hold seconds.

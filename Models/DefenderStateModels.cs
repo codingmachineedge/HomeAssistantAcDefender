@@ -18,6 +18,7 @@ public sealed record DefenderSnapshot(
     CoolModeRestoreSnapshot CoolModeRestore,
     NaturalRecoverySnapshot NaturalRecovery,
     NaturalWalkbackSnapshot NaturalWalkback,
+    ComfortCompromiseSnapshot ComfortCompromise,
     ConflictQuietSnapshot ConflictQuiet,
     ManualComfortGraceSnapshot ManualComfortGrace,
     RoomTrendSnapshot RoomTrend,
@@ -101,6 +102,15 @@ public sealed record NaturalWalkbackSnapshot(
     int SuspicionScore,
     double StepCelsius,
     string Status);
+
+public sealed record ComfortCompromiseSnapshot(
+    bool Enabled,
+    bool Active,
+    int SecondsRemaining,
+    double? PreferredSetPointCelsius,
+    double? EffectiveTargetCelsius,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record ConflictQuietSnapshot(
     bool Enabled,
@@ -221,6 +231,18 @@ public sealed class DefenderSettings
     public double NaturalWalkbackJitterCelsius { get; set; } = 0.1;
 
     public double NaturalWalkbackSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool ComfortCompromiseEnabled { get; set; } = true;
+
+    public int ComfortCompromiseTriggerTouches { get; set; } = 2;
+
+    public int ComfortCompromiseHoldMinutes { get; set; } = 20;
+
+    public int ComfortCompromiseDecayMinutes { get; set; } = 30;
+
+    public double ComfortCompromiseMaxOffsetCelsius { get; set; } = 1.0;
+
+    public double ComfortCompromiseSafetyBandCelsius { get; set; } = 1.0;
 
     public bool ManualComfortGraceEnabled { get; set; } = true;
 
