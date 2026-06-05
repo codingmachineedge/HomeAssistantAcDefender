@@ -185,6 +185,12 @@ public sealed class DefenderStateStore
             state.Settings.ManualComfortGraceEnabled = request.ManualComfortGraceEnabled;
             state.Settings.ManualComfortGraceMinutes = Math.Clamp(request.ManualComfortGraceMinutes, 0, 240);
             state.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(request.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
+            state.Settings.TouchIntentEnabled = request.TouchIntentEnabled;
+            state.Settings.TouchIntentMinimumTouches = Math.Clamp(request.TouchIntentMinimumTouches, 1, 20);
+            state.Settings.TouchIntentWindowMinutes = Math.Clamp(request.TouchIntentWindowMinutes, 1, 1440);
+            state.Settings.TouchIntentNetWarmThresholdCelsius = Math.Round(Math.Clamp(request.TouchIntentNetWarmThresholdCelsius, 0.1, 5.0), 1);
+            state.Settings.TouchIntentExtraGraceMinutes = Math.Clamp(request.TouchIntentExtraGraceMinutes, 0, 240);
+            state.Settings.TouchIntentSafetyBandCelsius = Math.Round(Math.Clamp(request.TouchIntentSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.RoomTrendGuardEnabled = request.RoomTrendGuardEnabled;
             state.Settings.RoomTrendWindowMinutes = Math.Clamp(request.RoomTrendWindowMinutes, 2, 240);
             state.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(request.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
@@ -535,7 +541,19 @@ public sealed class DefenderStateStore
                 return false;
             }
 
+            var intent = BuildTouchIntentAnalysis(now);
+            var warmerIntentActive = state.Settings.TouchIntentEnabled
+                && intent.Active
+                && intent.Direction == "warmer";
             var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.ManualComfortGraceBandCelsius;
+            if (warmerIntentActive)
+            {
+                allowedRoomTemperature = Math.Max(
+                    allowedRoomTemperature,
+                    state.TargetTemperatureCelsius + state.Settings.TouchIntentSafetyBandCelsius);
+                state.TouchIntentStatus = intent.Status;
+            }
+
             if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
             {
                 state.ManualComfortGraceStatus = $"Room rose above {allowedRoomTemperature:0.0} C, so wall-change grace ended.";
@@ -545,7 +563,8 @@ public sealed class DefenderStateStore
             }
 
             waitUntil = graceUntil;
-            message = $"Room is still comfortable after wall change; holding until {graceUntil.ToLocalTime():HH:mm:ss} unless room rises above {allowedRoomTemperature:0.0} C.";
+            var intentText = warmerIntentActive ? " with warmer touch intent" : string.Empty;
+            message = $"Room is still comfortable after wall change{intentText}; holding until {graceUntil.ToLocalTime():HH:mm:ss} unless room rises above {allowedRoomTemperature:0.0} C.";
             state.ManualComfortGraceStatus = message;
             SaveState();
             return true;
@@ -1697,8 +1716,6 @@ public sealed class DefenderStateStore
         state.VisibilityGuardStatus = state.Settings.VisibilityGuardEnabled
             ? $"Visibility guard has {state.VisibilityNoticeTimes.Count} noticed correction signal(s)."
             : "Visibility guard is off.";
-        TryUpdateComfortMemory(reading, now);
-        TryStartComfortCompromise(reading, now);
 
         var audit = new ThermostatChangeAudit(
             now,
@@ -1715,8 +1732,124 @@ public sealed class DefenderStateStore
             state.ThermostatChanges.RemoveRange(100, state.ThermostatChanges.Count - 100);
         }
 
+        ApplyTouchIntentGrace(reading, now);
+        TryUpdateComfortMemory(reading, now);
+        TryStartComfortCompromise(reading, now);
+
         AddEvent("warning",
             $"External thermostat change: {previous:0.0} C to {reading.SetPointCelsius:0.0} C at {now:yyyy-MM-dd HH:mm:ss}.");
+    }
+
+    private void ApplyTouchIntentGrace(ThermostatReading reading, DateTimeOffset now)
+    {
+        var intent = BuildTouchIntentAnalysis(now);
+        state.TouchIntentStatus = intent.Status;
+        if (!state.Settings.TouchIntentEnabled)
+        {
+            return;
+        }
+
+        if (!intent.Active || intent.Direction != "warmer")
+        {
+            return;
+        }
+
+        var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.TouchIntentSafetyBandCelsius;
+        if (reading.CurrentTemperatureCelsius > allowedRoomTemperature || ShouldBypassNaturalRecovery(reading))
+        {
+            state.TouchIntentStatus = $"Touch intent sees warmer wall choices, but room is above {allowedRoomTemperature:0.0} C so comfort wins.";
+            return;
+        }
+
+        if (state.ManualComfortGraceUntil is not { } graceUntil)
+        {
+            state.TouchIntentStatus = "Touch intent sees warmer wall choices, but wall-change grace is off.";
+            return;
+        }
+
+        var extraMinutes = Math.Max(0, state.Settings.TouchIntentExtraGraceMinutes);
+        if (extraMinutes <= 0)
+        {
+            state.TouchIntentStatus = "Touch intent sees warmer wall choices, but extra grace is set to 0 min.";
+            return;
+        }
+
+        var desiredUntil = now.AddMinutes(Math.Max(0, state.Settings.ManualComfortGraceMinutes) + extraMinutes);
+        if (desiredUntil > graceUntil)
+        {
+            state.ManualComfortGraceUntil = desiredUntil;
+            state.ManualComfortGraceStatus = $"Warmer wall intent is consistent, so grace extends until {desiredUntil.ToLocalTime():HH:mm:ss} while room stays below {allowedRoomTemperature:0.0} C.";
+        }
+
+        state.TouchIntentStatus = $"Touch intent reads {intent.RecentTouchCount} warmer wall choices ({intent.NetChangeCelsius:+0.0;-0.0;0.0} C net); safe grace can use +{extraMinutes} min.";
+    }
+
+    private TouchIntentAnalysis BuildTouchIntentAnalysis(DateTimeOffset now)
+    {
+        if (!state.Settings.TouchIntentEnabled)
+        {
+            return new TouchIntentAnalysis(false, false, 0, "off", 0.0, 0, "Touch intent is off.");
+        }
+
+        var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.TouchIntentWindowMinutes));
+        var recent = state.ThermostatChanges
+            .Where(change => now - change.Timestamp <= window)
+            .Take(50)
+            .ToList();
+        var count = recent.Count;
+        var extraMinutes = Math.Max(0, state.Settings.TouchIntentExtraGraceMinutes);
+        if (count == 0)
+        {
+            return new TouchIntentAnalysis(true, false, 0, "watching", 0.0, extraMinutes, "Touch intent is watching for wall choices.");
+        }
+
+        var netChange = Math.Round(recent.Sum(change => change.NewSetPointCelsius - change.PreviousSetPointCelsius), 1);
+        var triggerTouches = Math.Max(1, state.Settings.TouchIntentMinimumTouches);
+        if (count < triggerTouches)
+        {
+            return new TouchIntentAnalysis(
+                true,
+                false,
+                count,
+                "learning",
+                netChange,
+                extraMinutes,
+                $"Touch intent is learning wall choices ({count}/{triggerTouches}, {netChange:+0.0;-0.0;0.0} C net).");
+        }
+
+        var threshold = Math.Max(0.1, state.Settings.TouchIntentNetWarmThresholdCelsius);
+        if (netChange >= threshold)
+        {
+            return new TouchIntentAnalysis(
+                true,
+                true,
+                count,
+                "warmer",
+                netChange,
+                extraMinutes,
+                $"Touch intent sees a warmer pattern ({netChange:+0.0;-0.0;0.0} C net from {count} touches).");
+        }
+
+        if (netChange <= -threshold)
+        {
+            return new TouchIntentAnalysis(
+                true,
+                true,
+                count,
+                "cooler",
+                netChange,
+                extraMinutes,
+                $"Touch intent sees a cooler pattern ({netChange:+0.0;-0.0;0.0} C net), so it will not add warm grace.");
+        }
+
+        return new TouchIntentAnalysis(
+            true,
+            false,
+            count,
+            "mixed",
+            netChange,
+            extraMinutes,
+            $"Touch intent sees mixed wall choices ({netChange:+0.0;-0.0;0.0} C net).");
     }
 
     private void TryStartComfortCompromise(ThermostatReading reading, DateTimeOffset now)
@@ -2377,6 +2510,11 @@ public sealed class DefenderStateStore
         saved.Settings.ConflictQuietComfortBandCelsius = Math.Round(Math.Clamp(saved.Settings.ConflictQuietComfortBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ManualComfortGraceMinutes = Math.Clamp(saved.Settings.ManualComfortGraceMinutes, 0, 240);
         saved.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(saved.Settings.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.TouchIntentMinimumTouches = Math.Clamp(saved.Settings.TouchIntentMinimumTouches, 1, 20);
+        saved.Settings.TouchIntentWindowMinutes = Math.Clamp(saved.Settings.TouchIntentWindowMinutes, 1, 1440);
+        saved.Settings.TouchIntentNetWarmThresholdCelsius = Math.Round(Math.Clamp(saved.Settings.TouchIntentNetWarmThresholdCelsius, 0.1, 5.0), 1);
+        saved.Settings.TouchIntentExtraGraceMinutes = Math.Clamp(saved.Settings.TouchIntentExtraGraceMinutes, 0, 240);
+        saved.Settings.TouchIntentSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TouchIntentSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.RoomTrendWindowMinutes = Math.Clamp(saved.Settings.RoomTrendWindowMinutes, 2, 240);
         saved.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(saved.Settings.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
         saved.Settings.RoomTrendHoldMinutes = Math.Clamp(saved.Settings.RoomTrendHoldMinutes, 1, 120);
@@ -2436,6 +2574,9 @@ public sealed class DefenderStateStore
         saved.ManualComfortGraceStatus = string.IsNullOrWhiteSpace(saved.ManualComfortGraceStatus)
             ? "No wall-change grace active."
             : saved.ManualComfortGraceStatus;
+        saved.TouchIntentStatus = string.IsNullOrWhiteSpace(saved.TouchIntentStatus)
+            ? "Touch intent is watching."
+            : saved.TouchIntentStatus;
         saved.RoomTrendStatus = string.IsNullOrWhiteSpace(saved.RoomTrendStatus)
             ? "Room trend guard is watching."
             : saved.RoomTrendStatus;
@@ -2516,6 +2657,7 @@ public sealed class DefenderStateStore
         var touchSignature = BuildTouchSignatureAnalysis(currentReading, naturalWalkbackStep, now);
         var roomTrend = BuildRoomTrend(now);
         var thermalMomentum = BuildThermalMomentum(now, state.HomeAssistantThermostat?.CurrentTemperatureCelsius);
+        var touchIntent = BuildTouchIntentAnalysis(now);
         PruneComfortMemory(now);
         var memorySlot = FindComfortMemorySlot(now);
         var memoryActive = state.Settings.ComfortMemoryEnabled
@@ -2651,6 +2793,16 @@ public sealed class DefenderStateStore
                     : state.ManualComfortGraceStatus,
                 state.Settings.ManualComfortGraceBandCelsius,
                 manualGraceSeconds > 0 ? state.ManualComfortGraceUntil : null),
+            new TouchIntentSnapshot(
+                touchIntent.Enabled,
+                touchIntent.Active,
+                touchIntent.RecentTouchCount,
+                touchIntent.Direction,
+                touchIntent.NetChangeCelsius,
+                touchIntent.ExtraGraceMinutes,
+                string.IsNullOrWhiteSpace(state.TouchIntentStatus)
+                    ? touchIntent.Status
+                    : state.TouchIntentStatus),
             new RoomTrendSnapshot(
                 state.Settings.RoomTrendGuardEnabled,
                 roomTrendSeconds > 0,
@@ -2725,6 +2877,7 @@ public sealed class DefenderStateStore
         state.ConflictQuietUntil = null;
         state.ConflictQuietStatus = "Conflict quiet is watching.";
         ClearManualComfortGrace();
+        state.TouchIntentStatus = "Touch intent is watching.";
         state.RoomTrendHoldUntil = null;
         state.RoomTrendStatus = "Room trend guard is watching.";
         state.ThermalMomentumHoldUntil = null;
@@ -2944,6 +3097,12 @@ public sealed class DefenderStateStore
             ManualComfortGraceEnabled = settings.ManualComfortGraceEnabled,
             ManualComfortGraceMinutes = settings.ManualComfortGraceMinutes,
             ManualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius,
+            TouchIntentEnabled = settings.TouchIntentEnabled,
+            TouchIntentMinimumTouches = settings.TouchIntentMinimumTouches,
+            TouchIntentWindowMinutes = settings.TouchIntentWindowMinutes,
+            TouchIntentNetWarmThresholdCelsius = settings.TouchIntentNetWarmThresholdCelsius,
+            TouchIntentExtraGraceMinutes = settings.TouchIntentExtraGraceMinutes,
+            TouchIntentSafetyBandCelsius = settings.TouchIntentSafetyBandCelsius,
             RoomTrendGuardEnabled = settings.RoomTrendGuardEnabled,
             RoomTrendWindowMinutes = settings.RoomTrendWindowMinutes,
             RoomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius,
@@ -3112,6 +3271,8 @@ public sealed class DefenderStateStore
 
         public string ManualComfortGraceStatus { get; set; } = "No wall-change grace active.";
 
+        public string TouchIntentStatus { get; set; } = "Touch intent is watching.";
+
         public DateTimeOffset? RoomTrendHoldUntil { get; set; }
 
         public string RoomTrendStatus { get; set; } = "Room trend guard is watching.";
@@ -3165,6 +3326,15 @@ public sealed class DefenderStateStore
         int SampleCount,
         double? LearnedStepCelsius,
         double EffectiveStepCelsius,
+        string Status);
+
+    private sealed record TouchIntentAnalysis(
+        bool Enabled,
+        bool Active,
+        int RecentTouchCount,
+        string Direction,
+        double NetChangeCelsius,
+        int ExtraGraceMinutes,
         string Status);
 
     private sealed record RoomTemperatureSample(

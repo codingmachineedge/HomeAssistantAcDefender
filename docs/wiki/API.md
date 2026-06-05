@@ -25,6 +25,7 @@ The status snapshot includes:
 - `comfortMemory`: learned time-window status, active flag, sample count, learned offset, and effective target.
 - `conflictQuiet`: repeated-touch stand-down status, remaining seconds, trigger touch count, comfort band, and expiry time.
 - `manualComfortGrace`: wall-change grace status, remaining seconds, comfort band, and expiry time.
+- `touchIntent`: wall-choice intent status, active flag, direction, recent touch count, net change, and extra grace minutes.
 - `roomTrend`: real room trend direction, delta, sample count, hold status, and remaining hold seconds.
 - `thermalMomentum`: real cooling rate, estimated minutes to target, hold status, and remaining hold seconds.
 - `thermostatChanges`: external thermostat touch audit log.

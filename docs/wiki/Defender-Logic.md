@@ -24,9 +24,10 @@ Every cycle performs these steps:
 20. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
 21. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
 22. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-23. Apply fan energy saver when enabled and near target.
-24. Correct the real thermostat setpoint when needed.
-25. Update the next-action status label.
+23. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+24. Apply fan energy saver when enabled and near target.
+25. Correct the real thermostat setpoint when needed.
+26. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -89,6 +90,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Uses Natural Cadence so repeated safe corrections wait for a variable future slot based on touch pressure and recent command pressure.
 - Uses Comfort Memory to remember a tiny expiring time-of-day preference after repeated safe wall choices.
 - Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
+- Uses Touch Intent to classify recent wall choices and extend safe grace only when warmer intent is clear.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
 Quiet recovery does not fake thermostat state and does not run a simulator. It only changes the timing and selected command target sent to the real Home Assistant climate entity.
@@ -208,6 +210,22 @@ targetTemperature + manualComfortGraceBandCelsius
 ```
 
 Grace ends when the configured grace time expires, the room rises above the band, upstairs severe heat bypasses quiet timing, or the room crosses the safety override. This reduces obvious back-and-forth while still restoring comfort before the room gets too warm.
+
+## Touch Intent
+
+Touch Intent classifies recent real wall thermostat changes inside its configured window:
+
+```text
+netChange = sum(newSetPoint - previousSetPoint)
+```
+
+When enough touches exist and the net change is at or above `touchIntentNetWarmThresholdCelsius`, the pattern is treated as warmer intent. If the real room remains inside:
+
+```text
+targetTemperature + touchIntentSafetyBandCelsius
+```
+
+Manual Comfort Grace can extend by `touchIntentExtraGraceMinutes`. Cooler and mixed patterns do not add warmer grace. If the room crosses the safety band, the normal safety override is reached, or upstairs heat bypasses quiet timing, Touch Intent steps aside and the direct correction path continues.
 
 ## Room Trend Guard
 

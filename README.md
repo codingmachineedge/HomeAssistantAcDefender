@@ -26,6 +26,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Natural Cadence so repeated safe corrections wait for a variable future slot based on wall-touch pressure.
 - Adds Comfort Compromise so repeated wall choices can influence a temporary safe target that fades back naturally.
 - Adds Comfort Memory so repeated safe wall choices can teach a small time-of-day bias that expires automatically.
+- Adds Touch Intent so clear warmer wall-choice patterns can get extra safe grace instead of an obvious immediate fight-back.
 - Shows the next defender action in a live status label.
 - Supports a custom schedule for target temperatures.
 - Supports weather-based activation rules.
@@ -84,9 +85,10 @@ Every cycle:
 19. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
 20. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
 21. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-22. Optionally set fan saver mode when near target.
-23. Correct the thermostat setpoint when it does not match the defender decision.
-24. Update the real-time dashboard status.
+22. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+23. Optionally set fan saver mode when near target.
+24. Correct the thermostat setpoint when it does not match the defender decision.
+25. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -188,6 +190,12 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `ManualComfortGraceEnabled`: lets a wall thermostat change rest while the room is still comfortable.
 - `ManualComfortGraceMinutes`: maximum time to leave that wall change alone.
 - `ManualComfortGraceBandCelsius`: extra room warmth allowed above target before the defender resumes.
+- `TouchIntentEnabled`: learns whether recent wall changes are warmer, cooler, or mixed.
+- `TouchIntentMinimumTouches`: wall choices needed before the intent is trusted.
+- `TouchIntentWindowMinutes`: how long wall choices remain part of the intent pattern.
+- `TouchIntentNetWarmThresholdCelsius`: net warmer movement needed before extra grace is allowed.
+- `TouchIntentExtraGraceMinutes`: extra safe grace added for clear warmer intent.
+- `TouchIntentSafetyBandCelsius`: extra room warmth allowed before Touch Intent stops extending grace.
 - `RoomTrendGuardEnabled`: lets the defender observe real room temperature trend before nudging.
 - `RoomTrendWindowMinutes`: how far back real room-temperature samples are compared.
 - `RoomTrendStableToleranceCelsius`: small temperature changes counted as stable.
@@ -224,6 +232,8 @@ Comfort Compromise is a temporary effective target. If wall changes repeat and t
 Comfort Memory is slower than Comfort Compromise. It learns a small offset for the current hour after repeated safe wall choices, then applies that offset on later checks in the same time window. Learned memory expires after the configured retention hours and is skipped when the room is warm, the safety override is crossed, or upstairs is already hot and the memory would relax cooling.
 
 Manual Comfort Grace is different from cooldown. Cooldown waits after a manual touch. Manual Comfort Grace can keep waiting after cooldown if the room is still within the comfort band. If the room rises above the band, the HVAC mode changes away from `cool`, or upstairs becomes severely hot, grace ends and the real thermostat correction path resumes.
+
+Touch Intent watches recent real wall changes and classifies the pattern as warmer, cooler, mixed, or learning. If the pattern is clearly warmer and the real room is still inside the intent safe band, it can extend Manual Comfort Grace by the configured extra minutes. If the room gets too warm or upstairs heat needs direct cooling, Touch Intent steps aside immediately.
 
 Room Trend Guard uses real Home Assistant room-temperature readings. It compares the oldest and newest room samples inside the configured trend window. If the room is stable or cooling after a wall change, it can keep observing before sending a nudge. If the room is warming, above the grace band, or beyond the safety override, it lets the real correction continue.
 
