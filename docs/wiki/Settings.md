@@ -26,6 +26,9 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Max holds: maximum number of extra pauses before a correction must continue.
 - Command gap seconds: minimum time between automatic setpoint commands.
 - Too-hot override C: if the room is this far above target, skip quiet waits and prioritize comfort.
+- Respect wall changes: leaves a wall thermostat change alone while the room is still okay.
+- Grace minutes: maximum time that wall change can rest.
+- Grace room band C: extra warmth allowed above target before the defender resumes.
 
 ## Weather Rules
 

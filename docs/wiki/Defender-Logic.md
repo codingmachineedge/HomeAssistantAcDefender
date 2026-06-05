@@ -11,10 +11,11 @@ Every cycle performs these steps:
 7. Evaluate the weather activation rule.
 8. Apply upstairs comfort rules.
 9. Respect dynamic cooldown after external changes unless severe upstairs heat bypasses it.
-10. Apply Comfort Sync quiet recovery timing and one-step nudge sizing unless comfort is too warm.
-11. Apply fan energy saver when enabled and near target.
-12. Correct the real thermostat setpoint when needed.
-13. Update the next-action status label.
+10. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
+11. Apply Comfort Sync quiet recovery timing and one-step nudge sizing unless comfort is too warm.
+12. Apply fan energy saver when enabled and near target.
+13. Correct the real thermostat setpoint when needed.
+14. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -55,6 +56,16 @@ Adaptive quiet levels:
 - `Quiet`: repeated touches crossed the configured threshold.
 - `Extra quiet`: repeated touches are continuing.
 - `Softest`: maximum adaptive quietness before safety override wins.
+
+## Manual Comfort Grace
+
+Manual Comfort Grace starts after an external wall thermostat setpoint change. While grace is active, the defender can leave the wall change alone if the room is still at or below:
+
+```text
+targetTemperature + manualComfortGraceBandCelsius
+```
+
+Grace ends when the configured grace time expires, the room rises above the band, upstairs severe heat bypasses quiet timing, or the room crosses the safety override. This reduces obvious back-and-forth while still restoring comfort before the room gets too warm.
 
 ## Upstairs Comfort
 

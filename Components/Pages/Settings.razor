@@ -210,6 +210,38 @@
                                          Step="0.1" />
                     </MudItem>
                 </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
+                           Value="_manualComfortGraceEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _manualComfortGraceEnabled = v))"
+                           Label="Respect wall changes"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Leaves a wall change alone while the room still feels okay.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_manualComfortGraceMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _manualComfortGraceMinutes = value))"
+                                         Label="Grace minutes"
+                                         HelperText="How long a wall change can rest."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_manualComfortGraceBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _manualComfortGraceBandCelsius = value))"
+                                         Label="Grace room band C"
+                                         HelperText="Extra warmth allowed before fixing."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
             </MudPaper>
         </MudItem>
 
@@ -494,6 +526,9 @@
     private int _maxNaturalHolds = 2;
     private int _minimumCommandGapSeconds = 30;
     private double _naturalSafetyOverrideCelsius = 2.0;
+    private bool _manualComfortGraceEnabled = true;
+    private int _manualComfortGraceMinutes = 20;
+    private double _manualComfortGraceBandCelsius = 0.8;
     private bool _fanEnergySaverEnabled;
     private double _fanEnergySaverThresholdCelsius = 0.6;
     private string _fanEnergySaverMode = "auto";
@@ -539,6 +574,9 @@
         _maxNaturalHolds = settings.MaxNaturalHolds;
         _minimumCommandGapSeconds = settings.MinimumCommandGapSeconds;
         _naturalSafetyOverrideCelsius = settings.NaturalSafetyOverrideCelsius;
+        _manualComfortGraceEnabled = settings.ManualComfortGraceEnabled;
+        _manualComfortGraceMinutes = settings.ManualComfortGraceMinutes;
+        _manualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius;
         _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
         _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
         _fanEnergySaverMode = settings.FanEnergySaverMode;
@@ -631,6 +669,9 @@
             _maxNaturalHolds,
             _minimumCommandGapSeconds,
             _naturalSafetyOverrideCelsius,
+            _manualComfortGraceEnabled,
+            _manualComfortGraceMinutes,
+            _manualComfortGraceBandCelsius,
             _fanEnergySaverEnabled,
             _fanEnergySaverThresholdCelsius,
             _fanEnergySaverMode,

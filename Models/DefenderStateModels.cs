@@ -16,6 +16,7 @@ public sealed record DefenderSnapshot(
     DateTimeOffset? NextActionAt,
     int CooldownSeconds,
     NaturalRecoverySnapshot NaturalRecovery,
+    ManualComfortGraceSnapshot ManualComfortGrace,
     ComfortSnapshot Comfort,
     DefenderSettings Settings,
     IReadOnlyList<ScheduleEntry> Schedule,
@@ -82,6 +83,14 @@ public sealed record NaturalRecoverySnapshot(
     int EffectiveHoldChancePercent,
     int EffectiveCommandGapSeconds);
 
+public sealed record ManualComfortGraceSnapshot(
+    bool Enabled,
+    bool Active,
+    int SecondsRemaining,
+    string Status,
+    double ComfortBandCelsius,
+    DateTimeOffset? Until);
+
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,
     bool HomePresenceRequired,
@@ -141,6 +150,12 @@ public sealed class DefenderSettings
     public int MinimumCommandGapSeconds { get; set; } = 30;
 
     public double NaturalSafetyOverrideCelsius { get; set; } = 2.0;
+
+    public bool ManualComfortGraceEnabled { get; set; } = true;
+
+    public int ManualComfortGraceMinutes { get; set; } = 20;
+
+    public double ManualComfortGraceBandCelsius { get; set; } = 0.8;
 
     public bool FanEnergySaverEnabled { get; set; }
 

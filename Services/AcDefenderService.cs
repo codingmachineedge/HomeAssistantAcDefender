@@ -58,6 +58,17 @@ public sealed class AcDefenderService
                 return;
             }
 
+            if (!comfort.BypassCooldown
+                && stateStore.TryRespectManualComfortGrace(reading, false, DateTimeOffset.UtcNow, out var graceUntil, out var graceMessage))
+            {
+                stateStore.SetNextAction(graceMessage, graceUntil);
+                return;
+            }
+            else if (comfort.BypassCooldown)
+            {
+                stateStore.TryRespectManualComfortGrace(reading, true, DateTimeOffset.UtcNow, out _, out _);
+            }
+
             if (!comfort.BypassCooldown && stateStore.TryGetCooldown(DateTimeOffset.UtcNow, out var cooldownUntil))
             {
                 stateStore.SetNextAction($"Cooldown active after manual thermostat change; next correction after {cooldownUntil:yyyy-MM-dd HH:mm:ss}.", cooldownUntil);

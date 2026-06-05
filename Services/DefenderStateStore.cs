@@ -117,6 +117,9 @@ public sealed class DefenderStateStore
                 state.Settings.MinimumCommandGapSeconds,
                 state.Settings.MaximumAdaptiveCommandGapSeconds);
             state.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(request.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
+            state.Settings.ManualComfortGraceEnabled = request.ManualComfortGraceEnabled;
+            state.Settings.ManualComfortGraceMinutes = Math.Clamp(request.ManualComfortGraceMinutes, 0, 240);
+            state.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(request.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
             state.Settings.FanEnergySaverEnabled = request.FanEnergySaverEnabled;
             state.Settings.FanEnergySaverThresholdCelsius = Math.Clamp(request.FanEnergySaverThresholdCelsius, 0.1, 5.0);
             state.Settings.FanEnergySaverMode = string.IsNullOrWhiteSpace(request.FanEnergySaverMode)
@@ -268,6 +271,51 @@ public sealed class DefenderStateStore
         {
             cooldownUntil = state.CooldownUntil ?? DateTimeOffset.MinValue;
             return state.CooldownUntil is { } until && until > now;
+        }
+    }
+
+    public bool TryRespectManualComfortGrace(
+        ThermostatReading reading,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.ManualComfortGraceEnabled
+                || state.ManualComfortGraceUntil is not { } graceUntil
+                || graceUntil <= now)
+            {
+                ClearManualComfortGrace();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                state.ManualComfortGraceStatus = "Room comfort needs help now, so wall-change grace is stepping aside.";
+                state.ManualComfortGraceUntil = null;
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.ManualComfortGraceBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                state.ManualComfortGraceStatus = $"Room rose above {allowedRoomTemperature:0.0} C, so wall-change grace ended.";
+                state.ManualComfortGraceUntil = null;
+                SaveState();
+                return false;
+            }
+
+            waitUntil = graceUntil;
+            message = $"Room is still comfortable after wall change; holding until {graceUntil.ToLocalTime():HH:mm:ss} unless room rises above {allowedRoomTemperature:0.0} C.";
+            state.ManualComfortGraceStatus = message;
+            SaveState();
+            return true;
         }
     }
 
@@ -560,6 +608,17 @@ public sealed class DefenderStateStore
         state.BoostOffsetCelsius = 0.0;
         state.NaturalHoldUntil = null;
         state.NaturalHoldCount = 0;
+        if (state.Settings.ManualComfortGraceEnabled && state.Settings.ManualComfortGraceMinutes > 0)
+        {
+            state.ManualComfortGraceUntil = now.AddMinutes(state.Settings.ManualComfortGraceMinutes);
+            state.ManualComfortGraceSetPointCelsius = reading.SetPointCelsius;
+            state.ManualComfortGraceStatus = $"Wall change noticed; room gets a comfort grace window until {state.ManualComfortGraceUntil.Value.ToLocalTime():HH:mm:ss}.";
+        }
+        else
+        {
+            ClearManualComfortGrace();
+        }
+
         var plan = BuildNaturalRecoveryPlan(now);
         var cooldownSeconds = CalculateDynamicCooldownSeconds(now) + CalculateNaturalDelaySeconds(now);
         if (cooldownSeconds > 0)
@@ -783,6 +842,8 @@ public sealed class DefenderStateStore
             saved.Settings.MinimumCommandGapSeconds,
             saved.Settings.MaximumAdaptiveCommandGapSeconds);
         saved.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
+        saved.Settings.ManualComfortGraceMinutes = Math.Clamp(saved.Settings.ManualComfortGraceMinutes, 0, 240);
+        saved.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(saved.Settings.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
         saved.Settings.DefenderRunsContinuously = true;
         saved.Schedule ??= [];
         saved.Events ??= [];
@@ -793,6 +854,9 @@ public sealed class DefenderStateStore
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
+        saved.ManualComfortGraceStatus = string.IsNullOrWhiteSpace(saved.ManualComfortGraceStatus)
+            ? "No wall-change grace active."
+            : saved.ManualComfortGraceStatus;
         saved.ComfortStatus = string.IsNullOrWhiteSpace(saved.ComfortStatus)
             ? "Waiting for upstairs comfort readings."
             : saved.ComfortStatus;
@@ -811,6 +875,9 @@ public sealed class DefenderStateStore
             ? (int)Math.Ceiling((holdUntil - now).TotalSeconds)
             : 0;
         var naturalSeconds = Math.Max(cooldownSeconds, holdSeconds);
+        var manualGraceSeconds = state.ManualComfortGraceUntil is { } graceUntil && graceUntil > now
+            ? (int)Math.Ceiling((graceUntil - now).TotalSeconds)
+            : 0;
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         return new DefenderSnapshot(
             state.TargetTemperatureCelsius,
@@ -841,6 +908,15 @@ public sealed class DefenderStateStore
                 state.Settings.NaturalHoldChancePercent,
                 naturalPlan.HoldChancePercent,
                 naturalPlan.CommandGapSeconds),
+            new ManualComfortGraceSnapshot(
+                state.Settings.ManualComfortGraceEnabled,
+                manualGraceSeconds > 0,
+                manualGraceSeconds,
+                string.IsNullOrWhiteSpace(state.ManualComfortGraceStatus)
+                    ? "No wall-change grace active."
+                    : state.ManualComfortGraceStatus,
+                state.Settings.ManualComfortGraceBandCelsius,
+                manualGraceSeconds > 0 ? state.ManualComfortGraceUntil : null),
             new ComfortSnapshot(
                 state.Settings.UpstairsComfortEnabled,
                 state.Settings.HomePresenceRequired,
@@ -881,6 +957,14 @@ public sealed class DefenderStateStore
         state.NaturalHoldUntil = null;
         state.NaturalHoldCount = 0;
         state.NaturalRecoveryStatus = status;
+        ClearManualComfortGrace();
+    }
+
+    private void ClearManualComfortGrace()
+    {
+        state.ManualComfortGraceUntil = null;
+        state.ManualComfortGraceSetPointCelsius = null;
+        state.ManualComfortGraceStatus = "No wall-change grace active.";
     }
 
     private void SaveState()
@@ -993,6 +1077,9 @@ public sealed class DefenderStateStore
             MaxNaturalHolds = settings.MaxNaturalHolds,
             MinimumCommandGapSeconds = settings.MinimumCommandGapSeconds,
             NaturalSafetyOverrideCelsius = settings.NaturalSafetyOverrideCelsius,
+            ManualComfortGraceEnabled = settings.ManualComfortGraceEnabled,
+            ManualComfortGraceMinutes = settings.ManualComfortGraceMinutes,
+            ManualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius,
             FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
             FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
             FanEnergySaverMode = settings.FanEnergySaverMode,
@@ -1092,6 +1179,12 @@ public sealed class DefenderStateStore
         public DateTimeOffset? LastDefenderCommandAt { get; set; }
 
         public string NaturalRecoveryStatus { get; set; } = "Comfort sync is ready.";
+
+        public DateTimeOffset? ManualComfortGraceUntil { get; set; }
+
+        public double? ManualComfortGraceSetPointCelsius { get; set; }
+
+        public string ManualComfortGraceStatus { get; set; } = "No wall-change grace active.";
 
         public DefenderSettings Settings { get; set; } = new();
 

@@ -75,6 +75,9 @@
                 <MudAlert Class="mt-2" Severity="@NaturalSeverity" Variant="Variant.Outlined">@NaturalRecoveryText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if comfort sync is waiting, nudging, or skipping quiet waits because it is too warm.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@ManualGraceSeverity" Variant="Variant.Outlined">@ManualGraceText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if a wall thermostat change is being left alone while the room still feels okay.</MudText>
+
                 <MudText Typo="Typo.subtitle2" Class="mt-3">@LastCommandText</MudText>
                 <MudText Typo="Typo.caption" Class="helper-text">This shows the last command the website sent to Home Assistant.</MudText>
 
@@ -138,6 +141,7 @@
                     <MetricCard Label="Nudge size" Value="@NaturalStepText" Help="The biggest gentle thermostat move right now." />
                     <MetricCard Label="Hold chance" Value="@HoldChanceText" Help="Chance it waits one more beat." />
                     <MetricCard Label="Command gap" Value="@CommandGapText" Help="Space between automatic nudges." />
+                    <MetricCard Label="Wall grace" Value="@ManualGraceWaitText" Help="How long a wall change can rest." />
                     <MetricCard Label="Updated" Value="@ShortTime(Snapshot?.HomeAssistantThermostat?.UpdatedAt)" Help="When this thermostat data was seen." />
                     <MetricCard Label="Entity" Value="@(Snapshot?.HomeAssistantEntityId ?? "--")" Help="The Home Assistant thermostat name." />
                 </MudGrid>
@@ -253,6 +257,8 @@
     private string NaturalStepText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveStepCelsius:0.0} C" : "Off";
     private string HoldChanceText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveHoldChancePercent}%" : "Off";
     private string CommandGapText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveCommandGapSeconds}s" : "Off";
+    private string ManualGraceText => Snapshot?.ManualComfortGrace.Status ?? "No wall-change grace active.";
+    private string ManualGraceWaitText => Snapshot?.ManualComfortGrace.Active == true ? $"{Snapshot.ManualComfortGrace.SecondsRemaining}s" : "Ready";
     private string LastCommandText => Snapshot?.LastCommand ?? "No commands yet";
     private string HomePresenceText => Snapshot?.Comfort.IsHome == true ? "Home" : "Away";
     private string GuardText => Snapshot?.Comfort.UpstairsTooHot == true ? "Active" : Snapshot?.Comfort.UpstairsComfortEnabled == true ? "Watching" : "Off";
@@ -262,6 +268,9 @@
     private Severity NaturalSeverity => Snapshot?.NaturalRecovery.Waiting == true
         ? Severity.Warning
         : Snapshot?.NaturalRecovery.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity ManualGraceSeverity => Snapshot?.ManualComfortGrace.Active == true
+        ? Severity.Warning
+        : Snapshot?.ManualComfortGrace.Enabled == true ? Severity.Info : Severity.Normal;
 
     private IReadOnlyList<string> FanModes
     {
