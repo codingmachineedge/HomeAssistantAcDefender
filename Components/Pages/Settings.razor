@@ -415,6 +415,78 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_visibilityGuardEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _visibilityGuardEnabled = v))"
+                           Label="Visibility guard"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Slows only safe corrections when a wall touch happens right after a helper command.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_visibilityGuardTriggerNotices"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardTriggerNotices = value))"
+                                         Label="Notice trigger"
+                                         HelperText="How many noticed touches start the hold."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_visibilityGuardNoticeWindowMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardNoticeWindowMinutes = value))"
+                                         Label="Notice window minutes"
+                                         HelperText="How long noticed touches count."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="1440" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_visibilityGuardAfterCommandSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardAfterCommandSeconds = value))"
+                                         Label="After-command seconds"
+                                         HelperText="How soon after a helper command a wall touch counts."
+                                         Variant="Variant.Outlined"
+                                         Min="15"
+                                         Max="3600" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_visibilityGuardMinimumHoldMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardMinimumHoldMinutes = value))"
+                                         Label="Min visibility hold"
+                                         HelperText="Shortest quiet hold after noticed activity."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_visibilityGuardMaximumHoldMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardMaximumHoldMinutes = value))"
+                                         Label="Max visibility hold"
+                                         HelperText="Longest quiet hold after noticed activity."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="480" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_visibilityGuardSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _visibilityGuardSafetyBandCelsius = value))"
+                                         Label="Visibility safe band C"
+                                         HelperText="Skip visibility holds if room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_routineTimingEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _routineTimingEnabled = v))"
                            Label="Routine timing"
@@ -1113,6 +1185,13 @@
     private double _touchSignatureMinimumStepCelsius = 0.3;
     private double _touchSignatureMaximumStepCelsius = 1.0;
     private double _touchSignatureSafetyBandCelsius = 1.0;
+    private bool _visibilityGuardEnabled = true;
+    private int _visibilityGuardTriggerNotices = 1;
+    private int _visibilityGuardNoticeWindowMinutes = 45;
+    private int _visibilityGuardAfterCommandSeconds = 180;
+    private int _visibilityGuardMinimumHoldMinutes = 8;
+    private int _visibilityGuardMaximumHoldMinutes = 35;
+    private double _visibilityGuardSafetyBandCelsius = 1.0;
     private bool _routineTimingEnabled = true;
     private int _routineTimingTriggerTouches = 2;
     private int _routineTimingIntervalMinutes = 5;
@@ -1215,6 +1294,13 @@
         _touchSignatureMinimumStepCelsius = settings.TouchSignatureMinimumStepCelsius;
         _touchSignatureMaximumStepCelsius = settings.TouchSignatureMaximumStepCelsius;
         _touchSignatureSafetyBandCelsius = settings.TouchSignatureSafetyBandCelsius;
+        _visibilityGuardEnabled = settings.VisibilityGuardEnabled;
+        _visibilityGuardTriggerNotices = settings.VisibilityGuardTriggerNotices;
+        _visibilityGuardNoticeWindowMinutes = settings.VisibilityGuardNoticeWindowMinutes;
+        _visibilityGuardAfterCommandSeconds = settings.VisibilityGuardAfterCommandSeconds;
+        _visibilityGuardMinimumHoldMinutes = settings.VisibilityGuardMinimumHoldMinutes;
+        _visibilityGuardMaximumHoldMinutes = settings.VisibilityGuardMaximumHoldMinutes;
+        _visibilityGuardSafetyBandCelsius = settings.VisibilityGuardSafetyBandCelsius;
         _routineTimingEnabled = settings.RoutineTimingEnabled;
         _routineTimingTriggerTouches = settings.RoutineTimingTriggerTouches;
         _routineTimingIntervalMinutes = settings.RoutineTimingIntervalMinutes;
@@ -1364,6 +1450,13 @@
             _touchSignatureMinimumStepCelsius,
             _touchSignatureMaximumStepCelsius,
             _touchSignatureSafetyBandCelsius,
+            _visibilityGuardEnabled,
+            _visibilityGuardTriggerNotices,
+            _visibilityGuardNoticeWindowMinutes,
+            _visibilityGuardAfterCommandSeconds,
+            _visibilityGuardMinimumHoldMinutes,
+            _visibilityGuardMaximumHoldMinutes,
+            _visibilityGuardSafetyBandCelsius,
             _routineTimingEnabled,
             _routineTimingTriggerTouches,
             _routineTimingIntervalMinutes,

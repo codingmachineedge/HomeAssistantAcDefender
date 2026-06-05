@@ -81,6 +81,9 @@
                 <MudAlert Class="mt-2" Severity="@TouchSignatureSeverity" Variant="Variant.Outlined">@TouchSignatureText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if safe nudges are matching the way the wall thermostat was changed.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@VisibilityGuardSeverity" Variant="Variant.Outlined">@VisibilityGuardText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if a wall touch happened soon after a helper command and safe nudges are slowing down.</MudText>
+
                 <MudAlert Class="mt-2" Severity="@RoutineTimingSeverity" Variant="Variant.Outlined">@RoutineTimingText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if a safe adjustment is waiting for a normal comfort-check rhythm.</MudText>
 
@@ -176,6 +179,8 @@
                     <MetricCard Label="Walk step" Value="@NaturalWalkbackStepText" Help="Safe-band nudge size after repeated touches." />
                     <MetricCard Label="Touch step" Value="@TouchSignatureStepText" Help="Learned wall-step size for safe nudges." />
                     <MetricCard Label="Touch samples" Value="@TouchSignatureSamplesText" Help="Recent wall steps used by signature learning." />
+                    <MetricCard Label="Visibility wait" Value="@VisibilityGuardWaitText" Help="Hold time after noticed corrections." />
+                    <MetricCard Label="Visibility pressure" Value="@VisibilityGuardPressureText" Help="How strongly noticed corrections affect timing." />
                     <MetricCard Label="Routine wait" Value="@RoutineTimingWaitText" Help="Wait for a normal-looking comfort check." />
                     <MetricCard Label="Routine rhythm" Value="@RoutineTimingRhythmText" Help="Minute rhythm with small wiggle time." />
                     <MetricCard Label="Budget wait" Value="@ComfortBudgetWaitText" Help="Rest after repeated safe adjustments." />
@@ -310,6 +315,9 @@
     private string TouchSignatureText => Snapshot?.TouchSignature.Status ?? "Touch signature is watching.";
     private string TouchSignatureStepText => Snapshot?.TouchSignature.LearnedStepCelsius is { } step ? $"{step:0.0} C" : Snapshot?.TouchSignature.Enabled == true ? "--" : "Off";
     private string TouchSignatureSamplesText => Snapshot?.TouchSignature.Enabled == true ? Snapshot.TouchSignature.SampleCount.ToString() : "Off";
+    private string VisibilityGuardText => Snapshot?.VisibilityGuard.Status ?? "Visibility guard is watching.";
+    private string VisibilityGuardWaitText => Snapshot?.VisibilityGuard.Active == true ? $"{Snapshot.VisibilityGuard.SecondsRemaining}s" : "Ready";
+    private string VisibilityGuardPressureText => Snapshot?.VisibilityGuard.Enabled == true ? $"{Snapshot.VisibilityGuard.Pressure}/100" : "Off";
     private string RoutineTimingText => Snapshot?.RoutineTiming.Status ?? "Routine timing is watching.";
     private string RoutineTimingWaitText => Snapshot?.RoutineTiming.Waiting == true ? $"{Snapshot.RoutineTiming.SecondsRemaining}s" : "Ready";
     private string RoutineTimingRhythmText => Snapshot?.RoutineTiming.Enabled == true ? $"{Snapshot.RoutineTiming.IntervalMinutes}+{Snapshot.RoutineTiming.JitterMinutes} min" : "Off";
@@ -366,6 +374,9 @@
     private Severity TouchSignatureSeverity => Snapshot?.TouchSignature.Active == true
         ? Severity.Warning
         : Snapshot?.TouchSignature.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity VisibilityGuardSeverity => Snapshot?.VisibilityGuard.Active == true
+        ? Severity.Warning
+        : Snapshot?.VisibilityGuard.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity RoutineTimingSeverity => Snapshot?.RoutineTiming.Waiting == true
         ? Severity.Warning
         : Snapshot?.RoutineTiming.Enabled == true ? Severity.Info : Severity.Normal;

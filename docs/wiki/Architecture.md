@@ -27,6 +27,8 @@ Natural Walkback is part of that same state-store command selection path. It cal
 
 Touch Signature is another command-shaping layer in `DefenderStateStore`. It reads recent real external thermostat audit entries, learns a bounded wall-step size, and applies that size only to safe nudges. It does not invent state and it is skipped when direct comfort correction is needed.
 
+Visibility Guard is a persisted safe-correction hold in `DefenderStateStore`. It records wall touches that happen soon after defender commands, then lets `AcDefenderService` delay only safe follow-up corrections. It clears when direct room comfort correction is needed.
+
 Routine Timing is another `DefenderStateStore` timing guard consumed by `AcDefenderService`. It can hold a safe correction until a normal-looking minute rhythm after repeated wall touches, then clears before the real Home Assistant command is sent. It is skipped when room comfort needs direct correction.
 
 Comfort Budget is stored in `DefenderStateStore` as recent real setpoint command timestamps. `AcDefenderService` checks it before sending another safe correction. It limits only safe repeated commands and clears when comfort safety requires direct correction.

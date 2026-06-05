@@ -41,7 +41,7 @@ public sealed class DefenderStateStore
             var step = options.GeneratedTargetStepCelsius <= 0 ? 0.5 : options.GeneratedTargetStepCelsius;
             var steps = Math.Max(0, (int)Math.Round((max - min) / step));
             state.TargetTemperatureCelsius = Math.Round(min + random.Next(steps + 1) * step, 1);
-            state.BoostOffsetCelsius = 0.0;
+            ResetCoolingDefenderStep();
             ResetNaturalRecovery("Website generated a target; comfort sync is ready.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", $"Generated target {state.TargetTemperatureCelsius:0.0} C.");
@@ -55,7 +55,7 @@ public sealed class DefenderStateStore
         lock (gate)
         {
             state.TargetTemperatureCelsius = Math.Round(temperatureCelsius, 1);
-            state.BoostOffsetCelsius = 0.0;
+            ResetCoolingDefenderStep();
             ResetNaturalRecovery("Website target changed; comfort sync is ready.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", $"Target set to {state.TargetTemperatureCelsius:0.0} C.");
@@ -142,6 +142,16 @@ public sealed class DefenderStateStore
                 state.Settings.TouchSignatureMinimumStepCelsius,
                 5.0), 1);
             state.Settings.TouchSignatureSafetyBandCelsius = Math.Round(Math.Clamp(request.TouchSignatureSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.VisibilityGuardEnabled = request.VisibilityGuardEnabled;
+            state.Settings.VisibilityGuardTriggerNotices = Math.Clamp(request.VisibilityGuardTriggerNotices, 1, 20);
+            state.Settings.VisibilityGuardNoticeWindowMinutes = Math.Clamp(request.VisibilityGuardNoticeWindowMinutes, 1, 1440);
+            state.Settings.VisibilityGuardAfterCommandSeconds = Math.Clamp(request.VisibilityGuardAfterCommandSeconds, 15, 3600);
+            state.Settings.VisibilityGuardMinimumHoldMinutes = Math.Clamp(request.VisibilityGuardMinimumHoldMinutes, 1, 240);
+            state.Settings.VisibilityGuardMaximumHoldMinutes = Math.Clamp(
+                request.VisibilityGuardMaximumHoldMinutes,
+                state.Settings.VisibilityGuardMinimumHoldMinutes,
+                480);
+            state.Settings.VisibilityGuardSafetyBandCelsius = Math.Round(Math.Clamp(request.VisibilityGuardSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.RoutineTimingEnabled = request.RoutineTimingEnabled;
             state.Settings.RoutineTimingTriggerTouches = Math.Clamp(request.RoutineTimingTriggerTouches, 1, 20);
             state.Settings.RoutineTimingIntervalMinutes = Math.Clamp(request.RoutineTimingIntervalMinutes, 1, 60);
@@ -1008,6 +1018,83 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool TryRespectVisibilityGuard(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassVisibilityGuard,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.VisibilityGuardEnabled)
+            {
+                ClearVisibilityGuard("Visibility guard is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneVisibilityNoticeTimes(now);
+            var triggerNotices = Math.Max(1, state.Settings.VisibilityGuardTriggerNotices);
+            if (state.VisibilityNoticeTimes.Count < triggerNotices)
+            {
+                ClearVisibilityGuard($"Visibility guard is watching for noticed corrections ({state.VisibilityNoticeTimes.Count}/{triggerNotices}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassVisibilityGuard || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearVisibilityGuard("Room comfort needs help now, so visibility guard is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.VisibilityGuardSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearVisibilityGuard($"Room is above {allowedRoomTemperature:0.0} C, so visibility guard is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearVisibilityGuard("Visibility guard is lined up; no quiet hold needed.");
+                SaveState();
+                return false;
+            }
+
+            if (state.VisibilityGuardUntil is { } until)
+            {
+                if (until > now)
+                {
+                    waitUntil = until;
+                    message = $"Visibility guard is holding safe correction until {until.ToLocalTime():HH:mm:ss} after noticed thermostat activity.";
+                    state.VisibilityGuardStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearVisibilityGuard("Visibility guard hold ended; safe correction can continue.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = CalculateVisibilityGuardUntil(now);
+            state.VisibilityGuardUntil = waitUntil;
+            var pressure = CalculateVisibilityPressure(now);
+            message = $"Visibility guard is holding safe correction until {waitUntil.ToLocalTime():HH:mm:ss} from visibility pressure {pressure}/100.";
+            state.VisibilityGuardStatus = message;
+            SaveState();
+            return waitUntil > now;
+        }
+    }
+
     public double CalculateNaturalCommandSetPoint(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1243,6 +1330,7 @@ public sealed class DefenderStateStore
                 && state.RoutineTimingDueAt is null
                 && state.ComfortBudgetHoldUntil is null
                 && state.NaturalCadenceDueAt is null
+                && state.VisibilityGuardUntil is null
                 && state.ConflictQuietUntil is null
                 && state.RoomTrendHoldUntil is null
                 && state.ThermalMomentumHoldUntil is null)
@@ -1271,6 +1359,9 @@ public sealed class DefenderStateStore
             state.TouchSignatureStatus = state.Settings.TouchSignatureEnabled
                 ? "Touch signature is lined up; no safe nudge needed."
                 : "Touch signature is off.";
+            ClearVisibilityGuard(state.Settings.VisibilityGuardEnabled
+                ? "Visibility guard is lined up; no quiet hold needed."
+                : "Visibility guard is off.");
             ClearRoutineTiming(state.Settings.RoutineTimingEnabled
                 ? "Routine timing is lined up; no comfort-check slot needed."
                 : "Routine timing is off.");
@@ -1301,7 +1392,7 @@ public sealed class DefenderStateStore
                 if (Math.Abs(state.TargetTemperatureCelsius - activeSchedule.TargetTemperatureCelsius) > 0.05)
                 {
                     state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
-                    state.BoostOffsetCelsius = 0.0;
+                    ResetCoolingDefenderStep();
                     ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
                     ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
                     AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C.");
@@ -1385,27 +1476,49 @@ public sealed class DefenderStateStore
             target = CalculateComfortCompromiseTarget(target, currentTemperatureCelsius, now);
             if (currentTemperatureCelsius <= target + options.TemperatureToleranceCelsius)
             {
-                state.BoostOffsetCelsius = 0.0;
+                ResetCoolingDefenderStep();
                 return Math.Round(target, 1);
             }
 
             var action = (hvacAction ?? string.Empty).Trim().ToLowerInvariant();
             var isCooling = action is "cooling" or "cool";
-            if (state.BoostOffsetCelsius < 1.0)
+            var lowestNormalSetPoint = Math.Max(options.MinimumCoolingSetPointCelsius, target);
+            double activeSetPoint;
+            if (state.ActiveCoolingSetPointCelsius is not { } previousSetPoint)
             {
-                state.BoostOffsetCelsius = 1.0;
+                activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - 1.0);
+                state.ActiveCoolingStartedInSafeBand = activeSetPoint <= lowestNormalSetPoint + 0.05;
+            }
+            else if (!isCooling
+                && state.ActiveCoolingStartedInSafeBand
+                && previousSetPoint <= lowestNormalSetPoint + 0.05
+                && currentTemperatureCelsius > target + 1.0)
+            {
+                activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - 1.0);
+                state.ActiveCoolingStartedInSafeBand = false;
             }
             else if (!isCooling)
             {
-                state.BoostOffsetCelsius = Math.Min(
-                    state.BoostOffsetCelsius + 1.0,
-                    options.MaximumBoostOffsetCelsius);
+                activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint - 1.0);
+                if (activeSetPoint > lowestNormalSetPoint + 0.05)
+                {
+                    state.ActiveCoolingStartedInSafeBand = false;
+                }
+            }
+            else
+            {
+                activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint);
             }
 
-            var lowestNormalSetPoint = Math.Max(options.MinimumCoolingSetPointCelsius, target);
-            return Math.Round(Math.Max(
-                lowestNormalSetPoint,
-                currentTemperatureCelsius - state.BoostOffsetCelsius), 1);
+            state.ActiveCoolingSetPointCelsius = Math.Round(activeSetPoint, 1);
+            state.BoostOffsetCelsius = Math.Round(
+                Math.Clamp(
+                    currentTemperatureCelsius - state.ActiveCoolingSetPointCelsius.Value,
+                    0.0,
+                    options.MaximumBoostOffsetCelsius),
+                1);
+
+            return state.ActiveCoolingSetPointCelsius.Value;
         }
     }
 
@@ -1541,7 +1654,8 @@ public sealed class DefenderStateStore
 
         PruneTouchTimes(now);
         state.ExternalTouchTimes.Add(now);
-        state.BoostOffsetCelsius = 0.0;
+        RecordVisibilityNoticeIfNeeded(now);
+        ResetCoolingDefenderStep();
         state.NaturalHoldUntil = null;
         state.NaturalHoldCount = 0;
         if (state.Settings.ManualComfortGraceEnabled && state.Settings.ManualComfortGraceMinutes > 0)
@@ -1580,6 +1694,9 @@ public sealed class DefenderStateStore
         state.TouchSignatureStatus = state.Settings.TouchSignatureEnabled
             ? "Manual wall step logged; touch signature will shape safe nudges after enough samples."
             : "Touch signature is off.";
+        state.VisibilityGuardStatus = state.Settings.VisibilityGuardEnabled
+            ? $"Visibility guard has {state.VisibilityNoticeTimes.Count} noticed correction signal(s)."
+            : "Visibility guard is off.";
         TryUpdateComfortMemory(reading, now);
         TryStartComfortCompromise(reading, now);
 
@@ -1863,6 +1980,46 @@ public sealed class DefenderStateStore
         return now.AddSeconds(delaySeconds);
     }
 
+    private DateTimeOffset CalculateVisibilityGuardUntil(DateTimeOffset now)
+    {
+        var minMinutes = Math.Clamp(state.Settings.VisibilityGuardMinimumHoldMinutes, 1, 240);
+        var maxMinutes = Math.Clamp(state.Settings.VisibilityGuardMaximumHoldMinutes, minMinutes, 480);
+        var pressure = CalculateVisibilityPressure(now) / 100.0;
+        var baseMinutes = Lerp(minMinutes, maxMinutes, pressure);
+        var jitterSeconds = random.Next(-90, 91);
+        var delaySeconds = Math.Clamp(
+            (int)Math.Round(baseMinutes * 60) + jitterSeconds,
+            60,
+            maxMinutes * 60);
+
+        return now.AddSeconds(delaySeconds);
+    }
+
+    private void RecordVisibilityNoticeIfNeeded(DateTimeOffset now)
+    {
+        if (!state.Settings.VisibilityGuardEnabled)
+        {
+            state.VisibilityGuardStatus = "Visibility guard is off.";
+            return;
+        }
+
+        PruneVisibilityNoticeTimes(now);
+        var afterCommand = TimeSpan.FromSeconds(Math.Max(15, state.Settings.VisibilityGuardAfterCommandSeconds));
+        if (state.LastDefenderCommandAt is not { } lastCommandAt || now - lastCommandAt > afterCommand)
+        {
+            return;
+        }
+
+        state.VisibilityNoticeTimes.Add(now);
+        if (state.VisibilityNoticeTimes.Count > 100)
+        {
+            state.VisibilityNoticeTimes.RemoveRange(0, state.VisibilityNoticeTimes.Count - 100);
+        }
+
+        state.VisibilityGuardUntil = null;
+        state.VisibilityGuardStatus = $"Wall touch happened {Math.Round((now - lastCommandAt).TotalSeconds)}s after a defender command; visibility guard will slow safe corrections.";
+    }
+
     private int CalculateNaturalHoldSeconds()
     {
         if (!state.Settings.NaturalRecoveryEnabled)
@@ -2001,6 +2158,21 @@ public sealed class DefenderStateStore
         return Math.Clamp(touchScore + recencyScore + conflictScore, 0, 100);
     }
 
+    private int CalculateVisibilityPressure(DateTimeOffset now)
+    {
+        PruneVisibilityNoticeTimes(now);
+        if (state.VisibilityNoticeTimes.Count == 0)
+        {
+            return 0;
+        }
+
+        var noticeScore = Math.Min(75, state.VisibilityNoticeTimes.Count * 25);
+        var latest = state.VisibilityNoticeTimes.Max();
+        var minutesSinceLatest = Math.Max(0.0, (now - latest).TotalMinutes);
+        var recencyScore = Math.Max(0, 25 - (int)Math.Round(minutesSinceLatest * 3.0));
+        return Math.Clamp(noticeScore + recencyScore, 0, 100);
+    }
+
     private ComfortMemorySlot? FindComfortMemorySlot(DateTimeOffset now)
     {
         var hour = now.ToLocalTime().Hour;
@@ -2027,6 +2199,21 @@ public sealed class DefenderStateStore
     {
         var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.TouchFrequencyWindowMinutes));
         state.ExternalTouchTimes.RemoveAll(item => now - item > window);
+    }
+
+    private void PruneVisibilityNoticeTimes(DateTimeOffset now)
+    {
+        var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.VisibilityGuardNoticeWindowMinutes));
+        state.VisibilityNoticeTimes.RemoveAll(item => now - item > window);
+        if (state.VisibilityNoticeTimes.Count > 100)
+        {
+            state.VisibilityNoticeTimes.RemoveRange(0, state.VisibilityNoticeTimes.Count - 100);
+        }
+
+        if (state.VisibilityGuardUntil is { } until && until <= now)
+        {
+            state.VisibilityGuardUntil = null;
+        }
     }
 
     private void PruneDefenderCommandTimes(DateTimeOffset now)
@@ -2057,6 +2244,22 @@ public sealed class DefenderStateStore
         if (saved.ComfortBudgetHoldUntil is { } holdUntil && holdUntil <= now)
         {
             saved.ComfortBudgetHoldUntil = null;
+        }
+    }
+
+    private static void PruneLoadedVisibilityNoticeTimes(DefenderRuntimeState saved)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var window = TimeSpan.FromMinutes(Math.Max(1, saved.Settings.VisibilityGuardNoticeWindowMinutes));
+        saved.VisibilityNoticeTimes.RemoveAll(item => now - item > window);
+        if (saved.VisibilityNoticeTimes.Count > 100)
+        {
+            saved.VisibilityNoticeTimes.RemoveRange(0, saved.VisibilityNoticeTimes.Count - 100);
+        }
+
+        if (saved.VisibilityGuardUntil is { } until && until <= now)
+        {
+            saved.VisibilityGuardUntil = null;
         }
     }
 
@@ -2129,6 +2332,15 @@ public sealed class DefenderStateStore
             saved.Settings.TouchSignatureMinimumStepCelsius,
             5.0), 1);
         saved.Settings.TouchSignatureSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TouchSignatureSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.VisibilityGuardTriggerNotices = Math.Clamp(saved.Settings.VisibilityGuardTriggerNotices, 1, 20);
+        saved.Settings.VisibilityGuardNoticeWindowMinutes = Math.Clamp(saved.Settings.VisibilityGuardNoticeWindowMinutes, 1, 1440);
+        saved.Settings.VisibilityGuardAfterCommandSeconds = Math.Clamp(saved.Settings.VisibilityGuardAfterCommandSeconds, 15, 3600);
+        saved.Settings.VisibilityGuardMinimumHoldMinutes = Math.Clamp(saved.Settings.VisibilityGuardMinimumHoldMinutes, 1, 240);
+        saved.Settings.VisibilityGuardMaximumHoldMinutes = Math.Clamp(
+            saved.Settings.VisibilityGuardMaximumHoldMinutes,
+            saved.Settings.VisibilityGuardMinimumHoldMinutes,
+            480);
+        saved.Settings.VisibilityGuardSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.VisibilityGuardSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.RoutineTimingTriggerTouches = Math.Clamp(saved.Settings.RoutineTimingTriggerTouches, 1, 20);
         saved.Settings.RoutineTimingIntervalMinutes = Math.Clamp(saved.Settings.RoutineTimingIntervalMinutes, 1, 60);
         saved.Settings.RoutineTimingJitterMinutes = Math.Clamp(saved.Settings.RoutineTimingJitterMinutes, 0, 30);
@@ -2181,7 +2393,9 @@ public sealed class DefenderStateStore
         saved.RoomTemperatureSamples ??= [];
         saved.ComfortMemorySlots ??= [];
         saved.DefenderCommandTimes ??= [];
+        saved.VisibilityNoticeTimes ??= [];
         PruneLoadedDefenderCommandTimes(saved);
+        PruneLoadedVisibilityNoticeTimes(saved);
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
@@ -2191,6 +2405,9 @@ public sealed class DefenderStateStore
         saved.TouchSignatureStatus = string.IsNullOrWhiteSpace(saved.TouchSignatureStatus)
             ? "Touch signature is watching."
             : saved.TouchSignatureStatus;
+        saved.VisibilityGuardStatus = string.IsNullOrWhiteSpace(saved.VisibilityGuardStatus)
+            ? "Visibility guard is watching."
+            : saved.VisibilityGuardStatus;
         saved.RoutineTimingStatus = string.IsNullOrWhiteSpace(saved.RoutineTimingStatus)
             ? "Routine timing is watching."
             : saved.RoutineTimingStatus;
@@ -2271,6 +2488,11 @@ public sealed class DefenderStateStore
         var naturalCadenceSeconds = state.NaturalCadenceDueAt is { } cadenceDueAt && cadenceDueAt > now
             ? (int)Math.Ceiling((cadenceDueAt - now).TotalSeconds)
             : 0;
+        PruneVisibilityNoticeTimes(now);
+        var visibilityGuardSeconds = state.VisibilityGuardUntil is { } visibilityUntil && visibilityUntil > now
+            ? (int)Math.Ceiling((visibilityUntil - now).TotalSeconds)
+            : 0;
+        var visibilityPressure = CalculateVisibilityPressure(now);
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         var naturalWalkbackScore = CalculateTouchSuspicionScore(now);
         var naturalWalkbackStep = Math.Min(
@@ -2351,6 +2573,16 @@ public sealed class DefenderStateStore
                 touchSignature.LearnedStepCelsius,
                 touchSignature.EffectiveStepCelsius,
                 touchSignature.Status),
+            new VisibilityGuardSnapshot(
+                state.Settings.VisibilityGuardEnabled,
+                visibilityGuardSeconds > 0,
+                visibilityGuardSeconds,
+                state.VisibilityNoticeTimes.Count,
+                visibilityPressure,
+                string.IsNullOrWhiteSpace(state.VisibilityGuardStatus)
+                    ? "Visibility guard is watching."
+                    : state.VisibilityGuardStatus,
+                visibilityGuardSeconds > 0 ? state.VisibilityGuardUntil : null),
             new RoutineTimingSnapshot(
                 state.Settings.RoutineTimingEnabled,
                 routineTimingSeconds > 0,
@@ -2480,6 +2712,7 @@ public sealed class DefenderStateStore
         state.NaturalRecoveryStatus = status;
         state.NaturalWalkbackStatus = "Natural walkback is watching.";
         state.TouchSignatureStatus = "Touch signature is watching.";
+        ClearVisibilityGuard("Visibility guard is watching.");
         ClearRoutineTiming("Routine timing is watching.");
         ClearComfortBudget("Comfort budget is watching.");
         ClearNaturalCadence("Natural cadence is watching.");
@@ -2521,6 +2754,19 @@ public sealed class DefenderStateStore
     {
         state.NaturalCadenceDueAt = null;
         state.NaturalCadenceStatus = status;
+    }
+
+    private void ClearVisibilityGuard(string status)
+    {
+        state.VisibilityGuardUntil = null;
+        state.VisibilityGuardStatus = status;
+    }
+
+    private void ResetCoolingDefenderStep()
+    {
+        state.BoostOffsetCelsius = 0.0;
+        state.ActiveCoolingSetPointCelsius = null;
+        state.ActiveCoolingStartedInSafeBand = false;
     }
 
     private void ClearComfortCompromise(string status)
@@ -2661,6 +2907,13 @@ public sealed class DefenderStateStore
             TouchSignatureMinimumStepCelsius = settings.TouchSignatureMinimumStepCelsius,
             TouchSignatureMaximumStepCelsius = settings.TouchSignatureMaximumStepCelsius,
             TouchSignatureSafetyBandCelsius = settings.TouchSignatureSafetyBandCelsius,
+            VisibilityGuardEnabled = settings.VisibilityGuardEnabled,
+            VisibilityGuardTriggerNotices = settings.VisibilityGuardTriggerNotices,
+            VisibilityGuardNoticeWindowMinutes = settings.VisibilityGuardNoticeWindowMinutes,
+            VisibilityGuardAfterCommandSeconds = settings.VisibilityGuardAfterCommandSeconds,
+            VisibilityGuardMinimumHoldMinutes = settings.VisibilityGuardMinimumHoldMinutes,
+            VisibilityGuardMaximumHoldMinutes = settings.VisibilityGuardMaximumHoldMinutes,
+            VisibilityGuardSafetyBandCelsius = settings.VisibilityGuardSafetyBandCelsius,
             RoutineTimingEnabled = settings.RoutineTimingEnabled,
             RoutineTimingTriggerTouches = settings.RoutineTimingTriggerTouches,
             RoutineTimingIntervalMinutes = settings.RoutineTimingIntervalMinutes,
@@ -2765,7 +3018,11 @@ public sealed class DefenderStateStore
 
         public bool DefenderEnabled { get; set; } = true;
 
-        public double BoostOffsetCelsius { get; set; } = 1.0;
+        public double BoostOffsetCelsius { get; set; }
+
+        public double? ActiveCoolingSetPointCelsius { get; set; }
+
+        public bool ActiveCoolingStartedInSafeBand { get; set; }
 
         public string ConnectionState { get; set; } = "unavailable";
 
@@ -2802,6 +3059,12 @@ public sealed class DefenderStateStore
         public string NaturalWalkbackStatus { get; set; } = "Natural walkback is watching.";
 
         public string TouchSignatureStatus { get; set; } = "Touch signature is watching.";
+
+        public DateTimeOffset? VisibilityGuardUntil { get; set; }
+
+        public string VisibilityGuardStatus { get; set; } = "Visibility guard is watching.";
+
+        public List<DateTimeOffset> VisibilityNoticeTimes { get; set; } = [];
 
         public DateTimeOffset? RoutineTimingDueAt { get; set; }
 

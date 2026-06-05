@@ -19,6 +19,7 @@ public sealed record DefenderSnapshot(
     NaturalRecoverySnapshot NaturalRecovery,
     NaturalWalkbackSnapshot NaturalWalkback,
     TouchSignatureSnapshot TouchSignature,
+    VisibilityGuardSnapshot VisibilityGuard,
     RoutineTimingSnapshot RoutineTiming,
     ComfortBudgetSnapshot ComfortBudget,
     NaturalCadenceSnapshot NaturalCadence,
@@ -115,6 +116,15 @@ public sealed record TouchSignatureSnapshot(
     double? LearnedStepCelsius,
     double EffectiveStepCelsius,
     string Status);
+
+public sealed record VisibilityGuardSnapshot(
+    bool Enabled,
+    bool Active,
+    int SecondsRemaining,
+    int NoticeCount,
+    int Pressure,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record RoutineTimingSnapshot(
     bool Enabled,
@@ -291,6 +301,20 @@ public sealed class DefenderSettings
     public double TouchSignatureMaximumStepCelsius { get; set; } = 1.0;
 
     public double TouchSignatureSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool VisibilityGuardEnabled { get; set; } = true;
+
+    public int VisibilityGuardTriggerNotices { get; set; } = 1;
+
+    public int VisibilityGuardNoticeWindowMinutes { get; set; } = 45;
+
+    public int VisibilityGuardAfterCommandSeconds { get; set; } = 180;
+
+    public int VisibilityGuardMinimumHoldMinutes { get; set; } = 8;
+
+    public int VisibilityGuardMaximumHoldMinutes { get; set; } = 35;
+
+    public double VisibilityGuardSafetyBandCelsius { get; set; } = 1.0;
 
     public bool RoutineTimingEnabled { get; set; } = true;
 

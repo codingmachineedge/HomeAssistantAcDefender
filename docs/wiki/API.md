@@ -17,6 +17,7 @@ The status snapshot includes:
 - `naturalRecovery`: quiet recovery status, quiet level, wait seconds, recent touch count, base/effective nudge size, base/effective hold chance, and effective command gap.
 - `naturalWalkback`: safe-band walkback status, active flag, touch score, and current walkback step.
 - `touchSignature`: safe nudge signature status, active flag, sample count, learned step, and effective step.
+- `visibilityGuard`: safe correction visibility status, active flag, noticed signal count, pressure score, remaining seconds, and hold expiry.
 - `routineTiming`: safe correction rhythm status, wait seconds, interval, jitter, and due time.
 - `comfortBudget`: safe correction budget status, wait seconds, recent command count, max commands, and due time.
 - `naturalCadence`: variable safe-correction slot status, wait seconds, touch pressure, recent command count, and due time.

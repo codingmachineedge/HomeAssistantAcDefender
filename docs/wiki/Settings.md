@@ -45,6 +45,13 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Small signature step C: smallest learned safe nudge size.
 - Large signature step C: biggest learned safe nudge size.
 - Signature safe band C: extra warmth allowed before signature shaping stops.
+- Visibility guard: slows only safe corrections after a wall touch happens soon after a helper command.
+- Notice trigger: how many noticed correction signals start the hold.
+- Notice window minutes: how long noticed touches count.
+- After-command seconds: how soon after a helper command a wall touch counts as noticed.
+- Min visibility hold: shortest quiet hold after noticed activity.
+- Max visibility hold: longest quiet hold after noticed activity.
+- Visibility safe band C: extra warmth allowed before visibility guard stops waiting.
 - Routine timing: waits for a normal comfort-check rhythm after repeated wall changes.
 - Routine touches: recent wall touches needed before routine timing starts.
 - Routine minutes: normal minute rhythm for safe corrections.

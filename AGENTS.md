@@ -11,6 +11,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Cool-mode restore delay must still restore HVAC mode to `cool`; delay is allowed only while room comfort remains inside the configured safety band.
 - Natural Walkback may soften only safe-band recovery moves after repeated wall touches. Warm-room defender commands must still start one degree below current room temperature, not one degree below the wall setpoint, and continue toward the website target.
 - Touch Signature may shape only safe-band nudge size from real wall thermostat changes. It must clear immediately when room comfort needs direct cooling.
+- Visibility Guard may hold only safe corrections after wall touches that happen soon after defender commands. It must clear immediately when room comfort needs direct cooling.
 - Routine Timing may delay only safe corrections after repeated wall touches so they land on normal-looking comfort-check intervals. It must clear immediately when room comfort needs direct cooling.
 - Comfort Budget may limit only repeated safe setpoint commands inside its window. It must clear immediately when room comfort needs direct cooling.
 - Natural Cadence may choose a variable future slot only for safe corrections after repeated wall touches. It must clear immediately when room comfort needs direct cooling.

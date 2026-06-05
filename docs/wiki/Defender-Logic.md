@@ -18,14 +18,15 @@ Every cycle performs these steps:
 14. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
 15. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
 16. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
-17. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
-18. Respect Comfort Budget when too many safe adjustments happened recently.
-19. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-20. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-21. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-22. Apply fan energy saver when enabled and near target.
-23. Correct the real thermostat setpoint when needed.
-24. Update the next-action status label.
+17. Respect Visibility Guard when a wall touch happens soon after a defender command.
+18. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
+19. Respect Comfort Budget when too many safe adjustments happened recently.
+20. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
+21. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+22. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+23. Apply fan energy saver when enabled and near target.
+24. Correct the real thermostat setpoint when needed.
+25. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -82,6 +83,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Automatically changes quiet level when repeated wall touches happen, shrinking nudge size and increasing wait/hold/command spacing.
 - Uses Natural Walkback for small safe-band setpoint steps when repeated wall touches make a direct correction too obvious.
 - Uses Touch Signature to learn the size of recent wall thermostat steps and shape safe nudges with the same bounded step style.
+- Uses Visibility Guard to slow safe corrections when a wall touch happens soon after a defender command.
 - Uses Routine Timing so safe corrections land on normal-looking comfort-check intervals.
 - Uses Comfort Budget so repeated safe corrections can rest before another adjustment.
 - Uses Natural Cadence so repeated safe corrections wait for a variable future slot based on touch pressure and recent command pressure.
@@ -122,6 +124,18 @@ targetTemperature + touchSignatureSafetyBandCelsius
 ```
 
 If the room crosses the safety band, the normal safety override is reached, or upstairs heat bypasses quiet timing, Touch Signature steps aside. It never changes warm-room defense: active cooling still starts one degree below current room temperature and continues toward the website target.
+
+## Visibility Guard
+
+Visibility Guard watches noticed correction signals: wall thermostat touches that happen soon after a defender command. When enough signals occur inside the configured notice window, the next safe correction gets a variable hold between the minimum and maximum visibility hold.
+
+It only waits while the real room temperature is inside:
+
+```text
+targetTemperature + visibilityGuardSafetyBandCelsius
+```
+
+If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the visibility safe band, the hold clears and direct comfort correction continues. It never changes warm-room defense: active cooling still starts one degree below current room temperature and then steps down by one degree after cooling turns idle/off until the website target is reached.
 
 ## Routine Timing
 

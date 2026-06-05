@@ -141,6 +141,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectVisibilityGuard(reading, expectedSetPoint, comfort.BypassCooldown, now, out var visibilityUntil, out var visibilityMessage))
+                {
+                    stateStore.SetNextAction(visibilityMessage, visibilityUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectNaturalCadence(reading, expectedSetPoint, comfort.BypassCooldown, now, out var cadenceUntil, out var cadenceMessage))
                 {
                     stateStore.SetNextAction(cadenceMessage, cadenceUntil);
