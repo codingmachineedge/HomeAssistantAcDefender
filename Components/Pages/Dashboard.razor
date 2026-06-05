@@ -84,6 +84,9 @@
                 <MudAlert Class="mt-2" Severity="@ComfortBudgetSeverity" Variant="Variant.Outlined">@ComfortBudgetText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if repeated safe adjustments are resting for a while.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@NaturalCadenceSeverity" Variant="Variant.Outlined">@NaturalCadenceText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if safe nudges are waiting for a quieter natural time slot.</MudText>
+
                 <MudAlert Class="mt-2" Severity="@ComfortCompromiseSeverity" Variant="Variant.Outlined">@ComfortCompromiseText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if a wall choice is being blended back gently while the room is safe.</MudText>
 
@@ -172,6 +175,8 @@
                     <MetricCard Label="Routine rhythm" Value="@RoutineTimingRhythmText" Help="Minute rhythm with small wiggle time." />
                     <MetricCard Label="Budget wait" Value="@ComfortBudgetWaitText" Help="Rest after repeated safe adjustments." />
                     <MetricCard Label="Budget used" Value="@ComfortBudgetUsedText" Help="Safe adjustments used in the budget window." />
+                    <MetricCard Label="Cadence wait" Value="@NaturalCadenceWaitText" Help="Quiet future slot for safe nudges." />
+                    <MetricCard Label="Cadence pressure" Value="@NaturalCadencePressureText" Help="How much repeated wall touching is affecting timing." />
                     <MetricCard Label="Blend target" Value="@ComfortCompromiseTargetText" Help="Temporary target while a wall choice fades back." />
                     <MetricCard Label="Blend wait" Value="@ComfortCompromiseWaitText" Help="How long the temporary blend remains." />
                     <MetricCard Label="Memory bias" Value="@ComfortMemoryOffsetText" Help="Small learned time-of-day adjustment." />
@@ -303,6 +308,9 @@
     private string ComfortBudgetText => Snapshot?.ComfortBudget.Status ?? "Comfort budget is watching.";
     private string ComfortBudgetWaitText => Snapshot?.ComfortBudget.Holding == true ? $"{Snapshot.ComfortBudget.SecondsRemaining}s" : "Ready";
     private string ComfortBudgetUsedText => Snapshot?.ComfortBudget.Enabled == true ? $"{Snapshot.ComfortBudget.RecentCommandCount}/{Snapshot.ComfortBudget.MaxCommands}" : "Off";
+    private string NaturalCadenceText => Snapshot?.NaturalCadence.Status ?? "Natural cadence is watching.";
+    private string NaturalCadenceWaitText => Snapshot?.NaturalCadence.Waiting == true ? $"{Snapshot.NaturalCadence.SecondsRemaining}s" : "Ready";
+    private string NaturalCadencePressureText => Snapshot?.NaturalCadence.Enabled == true ? $"{Snapshot.NaturalCadence.TouchPressure}/100" : "Off";
     private string ComfortCompromiseText => Snapshot?.ComfortCompromise.Status ?? "Comfort compromise is watching.";
     private string ComfortCompromiseTargetText => Snapshot?.ComfortCompromise.EffectiveTargetCelsius is { } target ? $"{target:0.0} C" : "Ready";
     private string ComfortCompromiseWaitText => Snapshot?.ComfortCompromise.Active == true ? $"{Snapshot.ComfortCompromise.SecondsRemaining}s" : "Ready";
@@ -353,6 +361,9 @@
     private Severity ComfortBudgetSeverity => Snapshot?.ComfortBudget.Holding == true
         ? Severity.Warning
         : Snapshot?.ComfortBudget.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity NaturalCadenceSeverity => Snapshot?.NaturalCadence.Waiting == true
+        ? Severity.Warning
+        : Snapshot?.NaturalCadence.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity ComfortCompromiseSeverity => Snapshot?.ComfortCompromise.Active == true
         ? Severity.Warning
         : Snapshot?.ComfortCompromise.Enabled == true ? Severity.Info : Severity.Normal;

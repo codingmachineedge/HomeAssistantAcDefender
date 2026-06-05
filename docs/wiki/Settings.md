@@ -49,6 +49,12 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Budget window minutes: how long recent automatic setpoint commands count.
 - Budget adjustments: safe corrections allowed inside the window.
 - Budget safe band C: extra warmth allowed before the budget stops waiting.
+- Natural cadence: picks a variable future time slot for safe nudges after repeated wall touches.
+- Cadence touches: recent wall touches needed before cadence starts.
+- Min cadence minutes: shortest safe cadence wait.
+- Max cadence minutes: longest safe cadence wait.
+- Cadence wiggle minutes: small random time wobble so cadence slots are not exact.
+- Cadence safe band C: extra warmth allowed before cadence stops waiting.
 - Comfort compromise: temporarily blends repeated wall choices while the room is still safe.
 - Compromise touches: recent wall touches needed before blending starts.
 - Compromise hold minutes: how long the wall choice can rest.

@@ -29,6 +29,8 @@ Routine Timing is another `DefenderStateStore` timing guard consumed by `AcDefen
 
 Comfort Budget is stored in `DefenderStateStore` as recent real setpoint command timestamps. `AcDefenderService` checks it before sending another safe correction. It limits only safe repeated commands and clears when comfort safety requires direct correction.
 
+Natural Cadence is a persisted timing slot in `DefenderStateStore`. `AcDefenderService` checks it after routine timing and comfort budget, then waits only for safe corrections. Its delay is based on recent wall-touch pressure and recent automatic command pressure, and it clears when direct comfort correction is needed.
+
 Comfort Compromise is evaluated inside `CalculateExpectedSetPoint`. It can temporarily adjust the effective target from repeated wall choices, but only while the real room temperature remains inside its safety band. Target changes from the website, schedule, or upstairs comfort clear the compromise.
 
 Comfort Memory is also evaluated inside `CalculateExpectedSetPoint`, before temporary compromise. It stores small local-hour offsets learned from repeated safe wall choices, prunes them by retention time, and skips warmer memory when upstairs is hot.

@@ -20,6 +20,7 @@ public sealed record DefenderSnapshot(
     NaturalWalkbackSnapshot NaturalWalkback,
     RoutineTimingSnapshot RoutineTiming,
     ComfortBudgetSnapshot ComfortBudget,
+    NaturalCadenceSnapshot NaturalCadence,
     ComfortCompromiseSnapshot ComfortCompromise,
     ComfortMemorySnapshot ComfortMemory,
     ConflictQuietSnapshot ConflictQuiet,
@@ -123,6 +124,15 @@ public sealed record ComfortBudgetSnapshot(
     int MaxCommands,
     string Status,
     DateTimeOffset? Until);
+
+public sealed record NaturalCadenceSnapshot(
+    bool Enabled,
+    bool Waiting,
+    int SecondsRemaining,
+    int TouchPressure,
+    int RecentCommandCount,
+    string Status,
+    DateTimeOffset? DueAt);
 
 public sealed record ComfortCompromiseSnapshot(
     bool Enabled,
@@ -280,6 +290,18 @@ public sealed class DefenderSettings
     public int ComfortBudgetMaxCommands { get; set; } = 3;
 
     public double ComfortBudgetSafetyBandCelsius { get; set; } = 1.2;
+
+    public bool NaturalCadenceEnabled { get; set; } = true;
+
+    public int NaturalCadenceTriggerTouches { get; set; } = 2;
+
+    public int NaturalCadenceMinimumMinutes { get; set; } = 3;
+
+    public int NaturalCadenceMaximumMinutes { get; set; } = 18;
+
+    public int NaturalCadenceJitterMinutes { get; set; } = 4;
+
+    public double NaturalCadenceSafetyBandCelsius { get; set; } = 1.0;
 
     public bool ComfortCompromiseEnabled { get; set; } = true;
 

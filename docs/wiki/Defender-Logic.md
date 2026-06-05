@@ -19,11 +19,12 @@ Every cycle performs these steps:
 15. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
 16. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
 17. Respect Comfort Budget when too many safe adjustments happened recently.
-18. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-19. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-20. Apply fan energy saver when enabled and near target.
-21. Correct the real thermostat setpoint when needed.
-22. Update the next-action status label.
+18. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
+19. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+20. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+21. Apply fan energy saver when enabled and near target.
+22. Correct the real thermostat setpoint when needed.
+23. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -81,6 +82,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Uses Natural Walkback for small safe-band setpoint steps when repeated wall touches make a direct correction too obvious.
 - Uses Routine Timing so safe corrections land on normal-looking comfort-check intervals.
 - Uses Comfort Budget so repeated safe corrections can rest before another adjustment.
+- Uses Natural Cadence so repeated safe corrections wait for a variable future slot based on touch pressure and recent command pressure.
 - Uses Comfort Memory to remember a tiny expiring time-of-day preference after repeated safe wall choices.
 - Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
@@ -132,6 +134,18 @@ currentRoomTemperature <= targetTemperature + comfortBudgetSafetyBandCelsius
 ```
 
 If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the budget safe band, the budget clears and the real correction path continues.
+
+## Natural Cadence
+
+Natural Cadence is a safe-correction timing layer for repeated wall touches. When the trigger count is reached, it picks a future slot using touch pressure, recent automatic command pressure, and a small random wiggle. The selected slot is persisted so the next-action label keeps counting down in real time.
+
+It only waits while the real room temperature is inside:
+
+```text
+targetTemperature + naturalCadenceSafetyBandCelsius
+```
+
+If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the cadence safe band, cadence clears immediately and the real correction path continues. It never changes the warm-room defender rule: active cooling still starts one degree below current room temperature and continues toward the website target.
 
 ## Comfort Compromise
 

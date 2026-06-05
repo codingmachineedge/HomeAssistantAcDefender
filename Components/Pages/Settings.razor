@@ -455,6 +455,68 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_naturalCadenceEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _naturalCadenceEnabled = v))"
+                           Label="Natural cadence"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Picks a quiet future slot for safe nudges when wall touches keep happening.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_naturalCadenceTriggerTouches"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalCadenceTriggerTouches = value))"
+                                         Label="Cadence touches"
+                                         HelperText="How many touches start the quiet clock."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_naturalCadenceMinimumMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalCadenceMinimumMinutes = value))"
+                                         Label="Min cadence minutes"
+                                         HelperText="Shortest quiet slot wait."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="120" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_naturalCadenceMaximumMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalCadenceMaximumMinutes = value))"
+                                         Label="Max cadence minutes"
+                                         HelperText="Longest quiet slot wait."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_naturalCadenceJitterMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalCadenceJitterMinutes = value))"
+                                         Label="Cadence wiggle minutes"
+                                         HelperText="Tiny time wobble so slots do not match."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="60" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_naturalCadenceSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalCadenceSafetyBandCelsius = value))"
+                                         Label="Cadence safe band C"
+                                         HelperText="Skip the quiet slot if room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_comfortCompromiseEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _comfortCompromiseEnabled = v))"
                            Label="Comfort compromise"
@@ -991,6 +1053,12 @@
     private int _comfortBudgetWindowMinutes = 30;
     private int _comfortBudgetMaxCommands = 3;
     private double _comfortBudgetSafetyBandCelsius = 1.2;
+    private bool _naturalCadenceEnabled = true;
+    private int _naturalCadenceTriggerTouches = 2;
+    private int _naturalCadenceMinimumMinutes = 3;
+    private int _naturalCadenceMaximumMinutes = 18;
+    private int _naturalCadenceJitterMinutes = 4;
+    private double _naturalCadenceSafetyBandCelsius = 1.0;
     private bool _comfortCompromiseEnabled = true;
     private int _comfortCompromiseTriggerTouches = 2;
     private int _comfortCompromiseHoldMinutes = 20;
@@ -1081,6 +1149,12 @@
         _comfortBudgetWindowMinutes = settings.ComfortBudgetWindowMinutes;
         _comfortBudgetMaxCommands = settings.ComfortBudgetMaxCommands;
         _comfortBudgetSafetyBandCelsius = settings.ComfortBudgetSafetyBandCelsius;
+        _naturalCadenceEnabled = settings.NaturalCadenceEnabled;
+        _naturalCadenceTriggerTouches = settings.NaturalCadenceTriggerTouches;
+        _naturalCadenceMinimumMinutes = settings.NaturalCadenceMinimumMinutes;
+        _naturalCadenceMaximumMinutes = settings.NaturalCadenceMaximumMinutes;
+        _naturalCadenceJitterMinutes = settings.NaturalCadenceJitterMinutes;
+        _naturalCadenceSafetyBandCelsius = settings.NaturalCadenceSafetyBandCelsius;
         _comfortCompromiseEnabled = settings.ComfortCompromiseEnabled;
         _comfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches;
         _comfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes;
@@ -1218,6 +1292,12 @@
             _comfortBudgetWindowMinutes,
             _comfortBudgetMaxCommands,
             _comfortBudgetSafetyBandCelsius,
+            _naturalCadenceEnabled,
+            _naturalCadenceTriggerTouches,
+            _naturalCadenceMinimumMinutes,
+            _naturalCadenceMaximumMinutes,
+            _naturalCadenceJitterMinutes,
+            _naturalCadenceSafetyBandCelsius,
             _comfortCompromiseEnabled,
             _comfortCompromiseTriggerTouches,
             _comfortCompromiseHoldMinutes,

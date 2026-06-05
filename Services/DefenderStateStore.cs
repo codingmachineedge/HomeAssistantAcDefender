@@ -143,6 +143,15 @@ public sealed class DefenderStateStore
             state.Settings.ComfortBudgetWindowMinutes = Math.Clamp(request.ComfortBudgetWindowMinutes, 1, 240);
             state.Settings.ComfortBudgetMaxCommands = Math.Clamp(request.ComfortBudgetMaxCommands, 1, 30);
             state.Settings.ComfortBudgetSafetyBandCelsius = Math.Round(Math.Clamp(request.ComfortBudgetSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.NaturalCadenceEnabled = request.NaturalCadenceEnabled;
+            state.Settings.NaturalCadenceTriggerTouches = Math.Clamp(request.NaturalCadenceTriggerTouches, 1, 20);
+            state.Settings.NaturalCadenceMinimumMinutes = Math.Clamp(request.NaturalCadenceMinimumMinutes, 1, 120);
+            state.Settings.NaturalCadenceMaximumMinutes = Math.Clamp(
+                request.NaturalCadenceMaximumMinutes,
+                state.Settings.NaturalCadenceMinimumMinutes,
+                240);
+            state.Settings.NaturalCadenceJitterMinutes = Math.Clamp(request.NaturalCadenceJitterMinutes, 0, 60);
+            state.Settings.NaturalCadenceSafetyBandCelsius = Math.Round(Math.Clamp(request.NaturalCadenceSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.ComfortCompromiseEnabled = request.ComfortCompromiseEnabled;
             state.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(request.ComfortCompromiseTriggerTouches, 1, 20);
             state.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(request.ComfortCompromiseHoldMinutes, 0, 240);
@@ -305,6 +314,8 @@ public sealed class DefenderStateStore
                 state.RoutineTimingDueAt = null;
                 state.RoutineTimingStatus = "Routine timing used its comfort-check slot; watching for the next one.";
                 state.ComfortBudgetStatus = $"Comfort budget counted {state.DefenderCommandTimes.Count}/{state.Settings.ComfortBudgetMaxCommands} recent comfort adjustments.";
+                state.NaturalCadenceDueAt = null;
+                state.NaturalCadenceStatus = "Natural cadence used its quiet slot; watching for the next safe rhythm.";
             }
 
             AddEvent("info", message);
@@ -910,6 +921,84 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool TryRespectNaturalCadence(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassNaturalCadence,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.NaturalCadenceEnabled)
+            {
+                ClearNaturalCadence("Natural cadence is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            PruneDefenderCommandTimes(now);
+            var triggerTouches = Math.Max(1, state.Settings.NaturalCadenceTriggerTouches);
+            if (state.ExternalTouchTimes.Count < triggerTouches)
+            {
+                ClearNaturalCadence($"Natural cadence is watching for repeated wall changes ({state.ExternalTouchTimes.Count}/{triggerTouches}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassNaturalCadence || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearNaturalCadence("Room comfort needs help now, so natural cadence is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.NaturalCadenceSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearNaturalCadence($"Room is above {allowedRoomTemperature:0.0} C, so natural cadence is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearNaturalCadence("Natural cadence is lined up; no quiet slot needed.");
+                SaveState();
+                return false;
+            }
+
+            if (state.NaturalCadenceDueAt is { } dueAt)
+            {
+                if (dueAt > now)
+                {
+                    waitUntil = dueAt;
+                    message = $"Natural cadence is waiting until {dueAt.ToLocalTime():HH:mm:ss} before the next safe comfort nudge.";
+                    state.NaturalCadenceStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearNaturalCadence("Natural cadence slot arrived; the next safe comfort nudge can continue.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = CalculateNaturalCadenceDueAt(now);
+            state.NaturalCadenceDueAt = waitUntil;
+            var pressure = CalculateTouchSuspicionScore(now);
+            message = $"Natural cadence picked {waitUntil.ToLocalTime():HH:mm:ss} from touch pressure {pressure}/100 before the next safe comfort nudge.";
+            state.NaturalCadenceStatus = message;
+            SaveState();
+            return waitUntil > now;
+        }
+    }
+
     public double CalculateNaturalCommandSetPoint(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1029,6 +1118,7 @@ public sealed class DefenderStateStore
                 && state.NaturalHoldCount == 0
                 && state.RoutineTimingDueAt is null
                 && state.ComfortBudgetHoldUntil is null
+                && state.NaturalCadenceDueAt is null
                 && state.ConflictQuietUntil is null
                 && state.RoomTrendHoldUntil is null
                 && state.ThermalMomentumHoldUntil is null)
@@ -1060,6 +1150,9 @@ public sealed class DefenderStateStore
             ClearComfortBudget(state.Settings.ComfortBudgetEnabled
                 ? "Comfort budget is lined up; no adjustment rest needed."
                 : "Comfort budget is off.");
+            ClearNaturalCadence(state.Settings.NaturalCadenceEnabled
+                ? "Natural cadence is lined up; no quiet slot needed."
+                : "Natural cadence is off.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
         }
@@ -1082,6 +1175,7 @@ public sealed class DefenderStateStore
                 {
                     state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
                     state.BoostOffsetCelsius = 0.0;
+                    ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
                     ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
                     AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C.");
                 }
@@ -1121,6 +1215,7 @@ public sealed class DefenderStateStore
             {
                 state.TargetTemperatureCelsius = Math.Round(comfortTarget, 1);
                 state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
+                ClearNaturalCadence("Upstairs comfort changed the target, so natural cadence reset.");
                 ClearComfortCompromise("Upstairs comfort changed the target, so comfort compromise reset.");
                 AddEvent("warning", $"Upstairs comfort guard lowered target to {state.TargetTemperatureCelsius:0.0} C.");
             }
@@ -1351,6 +1446,10 @@ public sealed class DefenderStateStore
         state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
             ? $"Manual touch score is {touchScore}/100; natural walkback will use small safe-band nudges if correction is needed."
             : "Natural walkback is off.";
+        state.NaturalCadenceDueAt = null;
+        state.NaturalCadenceStatus = state.Settings.NaturalCadenceEnabled
+            ? $"Manual touch pressure is {touchScore}/100; natural cadence will pick a quiet slot if a safe correction is needed."
+            : "Natural cadence is off.";
         TryUpdateComfortMemory(reading, now);
         TryStartComfortCompromise(reading, now);
 
@@ -1609,6 +1708,29 @@ public sealed class DefenderStateStore
 
         var minimumDueAt = now.AddSeconds(15);
         return dueAt < minimumDueAt ? minimumDueAt : dueAt;
+    }
+
+    private DateTimeOffset CalculateNaturalCadenceDueAt(DateTimeOffset now)
+    {
+        var minMinutes = Math.Clamp(state.Settings.NaturalCadenceMinimumMinutes, 1, 120);
+        var maxMinutes = Math.Clamp(state.Settings.NaturalCadenceMaximumMinutes, minMinutes, 240);
+        var jitterMinutes = Math.Clamp(state.Settings.NaturalCadenceJitterMinutes, 0, 60);
+        var touchPressure = CalculateTouchSuspicionScore(now) / 100.0;
+        var commandPressure = Math.Clamp(
+            state.DefenderCommandTimes.Count / Math.Max(1.0, state.Settings.ComfortBudgetMaxCommands),
+            0.0,
+            1.0);
+        var intensity = Math.Clamp(Math.Max(touchPressure, commandPressure), 0.0, 1.0);
+        var baseSeconds = (int)Math.Round(Lerp(minMinutes * 60.0, maxMinutes * 60.0, intensity));
+        var jitterSeconds = jitterMinutes <= 0
+            ? 0
+            : random.Next(-jitterMinutes * 60, jitterMinutes * 60 + 1);
+        var delaySeconds = Math.Clamp(
+            baseSeconds + jitterSeconds,
+            30,
+            Math.Max(30, (maxMinutes + jitterMinutes) * 60));
+
+        return now.AddSeconds(delaySeconds);
     }
 
     private int CalculateNaturalHoldSeconds()
@@ -1877,6 +1999,14 @@ public sealed class DefenderStateStore
         saved.Settings.ComfortBudgetWindowMinutes = Math.Clamp(saved.Settings.ComfortBudgetWindowMinutes, 1, 240);
         saved.Settings.ComfortBudgetMaxCommands = Math.Clamp(saved.Settings.ComfortBudgetMaxCommands, 1, 30);
         saved.Settings.ComfortBudgetSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortBudgetSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.NaturalCadenceTriggerTouches = Math.Clamp(saved.Settings.NaturalCadenceTriggerTouches, 1, 20);
+        saved.Settings.NaturalCadenceMinimumMinutes = Math.Clamp(saved.Settings.NaturalCadenceMinimumMinutes, 1, 120);
+        saved.Settings.NaturalCadenceMaximumMinutes = Math.Clamp(
+            saved.Settings.NaturalCadenceMaximumMinutes,
+            saved.Settings.NaturalCadenceMinimumMinutes,
+            240);
+        saved.Settings.NaturalCadenceJitterMinutes = Math.Clamp(saved.Settings.NaturalCadenceJitterMinutes, 0, 60);
+        saved.Settings.NaturalCadenceSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalCadenceSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(saved.Settings.ComfortCompromiseTriggerTouches, 1, 20);
         saved.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(saved.Settings.ComfortCompromiseHoldMinutes, 0, 240);
         saved.Settings.ComfortCompromiseDecayMinutes = Math.Clamp(saved.Settings.ComfortCompromiseDecayMinutes, 1, 240);
@@ -1926,6 +2056,13 @@ public sealed class DefenderStateStore
         saved.ComfortBudgetStatus = string.IsNullOrWhiteSpace(saved.ComfortBudgetStatus)
             ? "Comfort budget is watching."
             : saved.ComfortBudgetStatus;
+        saved.NaturalCadenceStatus = string.IsNullOrWhiteSpace(saved.NaturalCadenceStatus)
+            ? "Natural cadence is watching."
+            : saved.NaturalCadenceStatus;
+        if (saved.NaturalCadenceDueAt is { } cadenceDueAt && cadenceDueAt <= DateTimeOffset.UtcNow)
+        {
+            saved.NaturalCadenceDueAt = null;
+        }
         saved.ComfortCompromiseStatus = string.IsNullOrWhiteSpace(saved.ComfortCompromiseStatus)
             ? "Comfort compromise is watching for repeated wall changes."
             : saved.ComfortCompromiseStatus;
@@ -1989,6 +2126,9 @@ public sealed class DefenderStateStore
         PruneDefenderCommandTimes(now);
         var comfortBudgetSeconds = state.ComfortBudgetHoldUntil is { } budgetUntil && budgetUntil > now
             ? (int)Math.Ceiling((budgetUntil - now).TotalSeconds)
+            : 0;
+        var naturalCadenceSeconds = state.NaturalCadenceDueAt is { } cadenceDueAt && cadenceDueAt > now
+            ? (int)Math.Ceiling((cadenceDueAt - now).TotalSeconds)
             : 0;
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         var naturalWalkbackScore = CalculateTouchSuspicionScore(now);
@@ -2079,6 +2219,16 @@ public sealed class DefenderStateStore
                     ? "Comfort budget is watching."
                     : state.ComfortBudgetStatus,
                 comfortBudgetSeconds > 0 ? state.ComfortBudgetHoldUntil : null),
+            new NaturalCadenceSnapshot(
+                state.Settings.NaturalCadenceEnabled,
+                naturalCadenceSeconds > 0,
+                naturalCadenceSeconds,
+                naturalWalkbackScore,
+                state.DefenderCommandTimes.Count,
+                string.IsNullOrWhiteSpace(state.NaturalCadenceStatus)
+                    ? "Natural cadence is watching."
+                    : state.NaturalCadenceStatus,
+                naturalCadenceSeconds > 0 ? state.NaturalCadenceDueAt : null),
             new ComfortCompromiseSnapshot(
                 state.Settings.ComfortCompromiseEnabled,
                 comfortCompromiseSeconds > 0,
@@ -2179,6 +2329,7 @@ public sealed class DefenderStateStore
         state.NaturalWalkbackStatus = "Natural walkback is watching.";
         ClearRoutineTiming("Routine timing is watching.");
         ClearComfortBudget("Comfort budget is watching.");
+        ClearNaturalCadence("Natural cadence is watching.");
         ClearComfortCompromise("Comfort compromise reset after website target change.");
         state.ComfortMemoryEffectiveTargetCelsius = null;
         state.ComfortMemoryStatus = "Comfort memory is watching wall choices.";
@@ -2211,6 +2362,12 @@ public sealed class DefenderStateStore
     {
         state.ComfortBudgetHoldUntil = null;
         state.ComfortBudgetStatus = status;
+    }
+
+    private void ClearNaturalCadence(string status)
+    {
+        state.NaturalCadenceDueAt = null;
+        state.NaturalCadenceStatus = status;
     }
 
     private void ClearComfortCompromise(string status)
@@ -2355,6 +2512,12 @@ public sealed class DefenderStateStore
             ComfortBudgetWindowMinutes = settings.ComfortBudgetWindowMinutes,
             ComfortBudgetMaxCommands = settings.ComfortBudgetMaxCommands,
             ComfortBudgetSafetyBandCelsius = settings.ComfortBudgetSafetyBandCelsius,
+            NaturalCadenceEnabled = settings.NaturalCadenceEnabled,
+            NaturalCadenceTriggerTouches = settings.NaturalCadenceTriggerTouches,
+            NaturalCadenceMinimumMinutes = settings.NaturalCadenceMinimumMinutes,
+            NaturalCadenceMaximumMinutes = settings.NaturalCadenceMaximumMinutes,
+            NaturalCadenceJitterMinutes = settings.NaturalCadenceJitterMinutes,
+            NaturalCadenceSafetyBandCelsius = settings.NaturalCadenceSafetyBandCelsius,
             ComfortCompromiseEnabled = settings.ComfortCompromiseEnabled,
             ComfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches,
             ComfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes,
@@ -2488,6 +2651,10 @@ public sealed class DefenderStateStore
         public string ComfortBudgetStatus { get; set; } = "Comfort budget is watching.";
 
         public List<DateTimeOffset> DefenderCommandTimes { get; set; } = [];
+
+        public DateTimeOffset? NaturalCadenceDueAt { get; set; }
+
+        public string NaturalCadenceStatus { get; set; } = "Natural cadence is watching.";
 
         public DateTimeOffset? ComfortCompromiseStartedAt { get; set; }
 
