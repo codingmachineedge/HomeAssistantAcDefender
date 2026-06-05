@@ -29,6 +29,7 @@ The status snapshot includes:
 - `manualComfortGrace`: wall-change grace status, remaining seconds, comfort band, and expiry time.
 - `touchIntent`: wall-choice intent status, active flag, direction, recent touch count, net change, and extra grace minutes.
 - `setpointEcho`: pending setpoint confirmation status, wait seconds, pending target, and expiry time.
+- `repeatCommand`: identical-command hold status, wait seconds, pressure, last defender setpoint, and expiry time.
 - `sensorRhythm`: Home Assistant reading cadence status, wait seconds, learned median interval, sample count, and due time.
 - `roomTrend`: real room trend direction, delta, sample count, hold status, and remaining hold seconds.
 - `thermalMomentum`: real cooling rate, estimated minutes to target, hold status, and remaining hold seconds.
