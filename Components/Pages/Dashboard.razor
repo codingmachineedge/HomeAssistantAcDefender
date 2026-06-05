@@ -115,6 +115,9 @@
                 <MudAlert Class="mt-2" Severity="@SetpointEchoSeverity" Variant="Variant.Outlined">@SetpointEchoText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if the helper is waiting for Home Assistant to repeat back the last setpoint.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@RepeatCommandSeverity" Variant="Variant.Outlined">@RepeatCommandText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if the helper is waiting before sending the same thermostat number again.</MudText>
+
                 <MudAlert Class="mt-2" Severity="@SensorRhythmSeverity" Variant="Variant.Outlined">@SensorRhythmText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if a safe correction is waiting for a normal Home Assistant sensor beat.</MudText>
 
@@ -245,6 +248,8 @@
                     <MetricCard Label="Intent grace" Value="@TouchIntentGraceText" Help="Extra safe grace available for clear warmer intent." />
                     <MetricCard Label="Echo wait" Value="@SetpointEchoWaitText" Help="Wait for Home Assistant to confirm the last setpoint." />
                     <MetricCard Label="Echo target" Value="@SetpointEchoTargetText" Help="The last setpoint Home Assistant has not reported back yet." />
+                    <MetricCard Label="Repeat wait" Value="@RepeatCommandWaitText" Help="Wait before repeating the same thermostat number." />
+                    <MetricCard Label="Repeat pressure" Value="@RepeatCommandPressureText" Help="How strongly repeated touches and commands are slowing repeats." />
                     <MetricCard Label="Sensor rhythm" Value="@SensorRhythmWaitText" Help="Wait for a normal Home Assistant sensor beat." />
                     <MetricCard Label="Sensor beat" Value="@SensorRhythmBeatText" Help="Learned reading interval from real Home Assistant updates." />
                     <MetricCard Label="Room trend" Value="@RoomTrendDirectionText" Help="Whether the room is warming or cooling." />
@@ -409,6 +414,9 @@
     private string SetpointEchoText => Snapshot?.SetpointEcho.Status ?? "Setpoint echo is watching.";
     private string SetpointEchoWaitText => Snapshot?.SetpointEcho.Waiting == true ? $"{Snapshot.SetpointEcho.SecondsRemaining}s" : "Ready";
     private string SetpointEchoTargetText => Snapshot?.SetpointEcho.PendingSetPointCelsius is { } target ? $"{target:0.0} C" : "Ready";
+    private string RepeatCommandText => Snapshot?.RepeatCommand.Status ?? "Repeat quiet is watching for identical follow-up commands.";
+    private string RepeatCommandWaitText => Snapshot?.RepeatCommand.Holding == true ? $"{Snapshot.RepeatCommand.SecondsRemaining}s" : "Ready";
+    private string RepeatCommandPressureText => Snapshot?.RepeatCommand.Enabled == true ? $"{Snapshot.RepeatCommand.Pressure}/100" : "Off";
     private string SensorRhythmText => Snapshot?.SensorRhythm.Status ?? "Sensor rhythm is watching.";
     private string SensorRhythmWaitText => Snapshot?.SensorRhythm.Waiting == true ? $"{Snapshot.SensorRhythm.SecondsRemaining}s" : "Ready";
     private string SensorRhythmBeatText => Snapshot?.SensorRhythm.Enabled == true && Snapshot.SensorRhythm.MedianIntervalSeconds > 0
@@ -479,6 +487,9 @@
     private Severity SetpointEchoSeverity => Snapshot?.SetpointEcho.Waiting == true
         ? Severity.Warning
         : Snapshot?.SetpointEcho.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity RepeatCommandSeverity => Snapshot?.RepeatCommand.Holding == true
+        ? Severity.Warning
+        : Snapshot?.RepeatCommand.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity SensorRhythmSeverity => Snapshot?.SensorRhythm.Waiting == true
         ? Severity.Warning
         : Snapshot?.SensorRhythm.Enabled == true ? Severity.Info : Severity.Normal;

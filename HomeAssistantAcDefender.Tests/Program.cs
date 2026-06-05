@@ -12,6 +12,7 @@ tests.ManualTouchWhileWarmRestartsAtOneDegreeBelowRoom();
 tests.ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom();
 tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
+tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -210,6 +211,70 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.SetpointEcho.PendingSetPointCelsius is not null || snapshot.SetpointEcho.Waiting)
         {
             throw new InvalidOperationException("Setpoint Echo should have no pending target after Home Assistant echoes it.");
+        }
+    }
+
+    public void RepeatQuietWaitsOnlyForIdenticalSafeCommands()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        store.RecordCommand("Seed same defender setpoint.", 24.0);
+        var now = DateTimeOffset.UtcNow;
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.5,
+            26.0,
+            "cool",
+            "idle",
+            null,
+            []);
+
+        var waited = store.TryRespectRepeatCommandGuard(
+            safeReading,
+            24.0,
+            bypassRepeatGuard: false,
+            now,
+            out var waitUntil,
+            out _);
+
+        if (!waited || waitUntil <= now)
+        {
+            throw new InvalidOperationException("Repeat Quiet should wait before sending the same safe setpoint again.");
+        }
+
+        var differentSetPoint = store.TryRespectRepeatCommandGuard(
+            safeReading,
+            23.0,
+            bypassRepeatGuard: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (differentSetPoint)
+        {
+            throw new InvalidOperationException("Repeat Quiet must not hold a different step-down setpoint.");
+        }
+
+        var hotReading = safeReading with { CurrentTemperatureCelsius = 24.2 };
+        var bypassed = store.TryRespectRepeatCommandGuard(
+            hotReading,
+            24.0,
+            bypassRepeatGuard: false,
+            now.AddSeconds(2),
+            out _,
+            out _);
+
+        if (bypassed)
+        {
+            throw new InvalidOperationException("Repeat Quiet must step aside when direct cooling is needed.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (snapshot.RepeatCommand.Holding)
+        {
+            throw new InvalidOperationException("Repeat Quiet should not keep holding after a comfort bypass.");
         }
     }
 

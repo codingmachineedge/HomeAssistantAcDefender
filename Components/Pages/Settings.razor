@@ -896,6 +896,48 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_repeatCommandGuardEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _repeatCommandGuardEnabled = v))"
+                           Label="Repeat quiet"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Waits before sending the same thermostat number again when the room is still safe.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_repeatCommandMinimumWaitSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _repeatCommandMinimumWaitSeconds = value))"
+                                         Label="Repeat wait seconds"
+                                         HelperText="Smallest wait before repeating the same number."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="1800" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_repeatCommandPressureExtraSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _repeatCommandPressureExtraSeconds = value))"
+                                         Label="Repeat pressure seconds"
+                                         HelperText="Extra wait when wall touches or helper commands pile up."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="3600" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="double"
+                                         Value="_repeatCommandSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _repeatCommandSafetyBandCelsius = value))"
+                                         Label="Repeat safe band C"
+                                         HelperText="Stop waiting if the room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_sensorRhythmGuardEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _sensorRhythmGuardEnabled = v))"
                            Label="Sensor rhythm"
@@ -1378,6 +1420,10 @@
     private bool _setpointEchoGuardEnabled = true;
     private int _setpointEchoGraceSeconds = 30;
     private double _setpointEchoSafetyBandCelsius = 1.0;
+    private bool _repeatCommandGuardEnabled = true;
+    private int _repeatCommandMinimumWaitSeconds = 90;
+    private int _repeatCommandPressureExtraSeconds = 240;
+    private double _repeatCommandSafetyBandCelsius = 1.0;
     private bool _sensorRhythmGuardEnabled = true;
     private int _sensorRhythmMinimumSamples = 3;
     private int _sensorRhythmWindowMinutes = 120;
@@ -1501,6 +1547,10 @@
         _setpointEchoGuardEnabled = settings.SetpointEchoGuardEnabled;
         _setpointEchoGraceSeconds = settings.SetpointEchoGraceSeconds;
         _setpointEchoSafetyBandCelsius = settings.SetpointEchoSafetyBandCelsius;
+        _repeatCommandGuardEnabled = settings.RepeatCommandGuardEnabled;
+        _repeatCommandMinimumWaitSeconds = settings.RepeatCommandMinimumWaitSeconds;
+        _repeatCommandPressureExtraSeconds = settings.RepeatCommandPressureExtraSeconds;
+        _repeatCommandSafetyBandCelsius = settings.RepeatCommandSafetyBandCelsius;
         _sensorRhythmGuardEnabled = settings.SensorRhythmGuardEnabled;
         _sensorRhythmMinimumSamples = settings.SensorRhythmMinimumSamples;
         _sensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes;
@@ -1671,6 +1721,10 @@
             _setpointEchoGuardEnabled,
             _setpointEchoGraceSeconds,
             _setpointEchoSafetyBandCelsius,
+            _repeatCommandGuardEnabled,
+            _repeatCommandMinimumWaitSeconds,
+            _repeatCommandPressureExtraSeconds,
+            _repeatCommandSafetyBandCelsius,
             _sensorRhythmGuardEnabled,
             _sensorRhythmMinimumSamples,
             _sensorRhythmWindowMinutes,

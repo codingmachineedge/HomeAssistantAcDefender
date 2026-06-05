@@ -2876,6 +2876,9 @@ public sealed class DefenderStateStore
         saved.Settings.TouchIntentSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TouchIntentSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.SetpointEchoGraceSeconds = Math.Clamp(saved.Settings.SetpointEchoGraceSeconds, 5, 300);
         saved.Settings.SetpointEchoSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.SetpointEchoSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.RepeatCommandMinimumWaitSeconds = Math.Clamp(saved.Settings.RepeatCommandMinimumWaitSeconds, 0, 1800);
+        saved.Settings.RepeatCommandPressureExtraSeconds = Math.Clamp(saved.Settings.RepeatCommandPressureExtraSeconds, 0, 3600);
+        saved.Settings.RepeatCommandSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.RepeatCommandSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.SensorRhythmMinimumSamples = Math.Clamp(saved.Settings.SensorRhythmMinimumSamples, 2, 60);
         saved.Settings.SensorRhythmWindowMinutes = Math.Clamp(saved.Settings.SensorRhythmWindowMinutes, 5, 1440);
         saved.Settings.SensorRhythmJitterSeconds = Math.Clamp(saved.Settings.SensorRhythmJitterSeconds, 0, 300);
@@ -2947,6 +2950,14 @@ public sealed class DefenderStateStore
         saved.SetpointEchoStatus = string.IsNullOrWhiteSpace(saved.SetpointEchoStatus)
             ? "Setpoint echo is watching."
             : saved.SetpointEchoStatus;
+        saved.RepeatCommandStatus = string.IsNullOrWhiteSpace(saved.RepeatCommandStatus)
+            ? "Repeat quiet is watching for identical follow-up commands."
+            : saved.RepeatCommandStatus;
+        if (saved.RepeatCommandHoldUntil is { } repeatHoldUntil && repeatHoldUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.RepeatCommandHoldUntil = null;
+            saved.RepeatCommandStatus = "Repeat quiet is watching for identical follow-up commands.";
+        }
         if (saved.PendingCommandAt is { } pendingAt
             && DateTimeOffset.UtcNow - pendingAt > TimeSpan.FromSeconds(Math.Max(saved.Settings.SetpointEchoGraceSeconds, 300)))
         {
@@ -3555,6 +3566,10 @@ public sealed class DefenderStateStore
             SetpointEchoGuardEnabled = settings.SetpointEchoGuardEnabled,
             SetpointEchoGraceSeconds = settings.SetpointEchoGraceSeconds,
             SetpointEchoSafetyBandCelsius = settings.SetpointEchoSafetyBandCelsius,
+            RepeatCommandGuardEnabled = settings.RepeatCommandGuardEnabled,
+            RepeatCommandMinimumWaitSeconds = settings.RepeatCommandMinimumWaitSeconds,
+            RepeatCommandPressureExtraSeconds = settings.RepeatCommandPressureExtraSeconds,
+            RepeatCommandSafetyBandCelsius = settings.RepeatCommandSafetyBandCelsius,
             SensorRhythmGuardEnabled = settings.SensorRhythmGuardEnabled,
             SensorRhythmMinimumSamples = settings.SensorRhythmMinimumSamples,
             SensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes,
@@ -3670,6 +3685,8 @@ public sealed class DefenderStateStore
 
         public DateTimeOffset? LastDefenderCommandAt { get; set; }
 
+        public double? LastDefenderCommandSetPointCelsius { get; set; }
+
         public string NaturalRecoveryStatus { get; set; } = "Comfort sync is ready.";
 
         public string NaturalWalkbackStatus { get; set; } = "Natural walkback is watching.";
@@ -3731,6 +3748,10 @@ public sealed class DefenderStateStore
         public string TouchIntentStatus { get; set; } = "Touch intent is watching.";
 
         public string SetpointEchoStatus { get; set; } = "Setpoint echo is watching.";
+
+        public DateTimeOffset? RepeatCommandHoldUntil { get; set; }
+
+        public string RepeatCommandStatus { get; set; } = "Repeat quiet is watching for identical follow-up commands.";
 
         public DateTimeOffset? SensorRhythmDueAt { get; set; }
 
