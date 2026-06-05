@@ -30,7 +30,7 @@
         <MudGrid Spacing="2" Class="mt-2 compact-reading-grid">
             @foreach (var metric in SummaryMetrics)
             {
-                <MudItem xs="6" sm="3">
+                <MudItem xs="3">
                     <div class="reading-tile">
                         <MudText Typo="Typo.overline">@metric.Label</MudText>
                         <MudText Typo="Typo.subtitle1">@metric.Value</MudText>
@@ -108,27 +108,97 @@
                               Variant="Variant.Outlined"
                               Class="mt-2" />
 
-                <MudGrid Spacing="2" Class="mt-2">
-                    @foreach (var metric in FilteredDefenseMetrics)
-                    {
-                        <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                    }
-                </MudGrid>
+                <MudTabs Class="app-tabs compact-subtabs" Elevation="0" Rounded="true">
+                    <MudTabPanel Text="Core">
+                        <MudGrid Spacing="2" Class="mt-2">
+                            @foreach (var metric in FilterMetrics(CoreDefenseMetrics))
+                            {
+                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
+                            }
+                        </MudGrid>
+                        <MudStack Spacing="1" Class="scroll-list compact-list mt-3">
+                            @foreach (var item in FilterStatuses(CoreDefenseStatuses))
+                            {
+                                <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
+                                    <MudText Typo="Typo.subtitle2">@item.Name</MudText>
+                                    <MudText Typo="Typo.body2">@item.Status</MudText>
+                                </MudAlert>
+                                <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
+                            }
+                            @if (!FilterStatuses(CoreDefenseStatuses).Any())
+                            {
+                                <MudText Class="helper-text">No core status matches that search.</MudText>
+                            }
+                        </MudStack>
+                    </MudTabPanel>
+                    <MudTabPanel Text="Wall Touch">
+                        <MudGrid Spacing="2" Class="mt-2">
+                            @foreach (var metric in FilterMetrics(WallTouchDefenseMetrics))
+                            {
+                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
+                            }
+                        </MudGrid>
+                        <MudStack Spacing="1" Class="scroll-list compact-list mt-3">
+                            @foreach (var item in FilterStatuses(WallTouchDefenseStatuses))
+                            {
+                                <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
+                                    <MudText Typo="Typo.subtitle2">@item.Name</MudText>
+                                    <MudText Typo="Typo.body2">@item.Status</MudText>
+                                </MudAlert>
+                                <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
+                            }
+                            @if (!FilterStatuses(WallTouchDefenseStatuses).Any())
+                            {
+                                <MudText Class="helper-text">No wall-touch status matches that search.</MudText>
+                            }
+                        </MudStack>
+                    </MudTabPanel>
+                    <MudTabPanel Text="Sensors">
+                        <MudGrid Spacing="2" Class="mt-2">
+                            @foreach (var metric in FilterMetrics(SensorDefenseMetrics))
+                            {
+                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
+                            }
+                        </MudGrid>
+                        <MudStack Spacing="1" Class="scroll-list compact-list mt-3">
+                            @foreach (var item in FilterStatuses(SensorDefenseStatuses))
+                            {
+                                <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
+                                    <MudText Typo="Typo.subtitle2">@item.Name</MudText>
+                                    <MudText Typo="Typo.body2">@item.Status</MudText>
+                                </MudAlert>
+                                <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
+                            }
+                            @if (!FilterStatuses(SensorDefenseStatuses).Any())
+                            {
+                                <MudText Class="helper-text">No sensor status matches that search.</MudText>
+                            }
+                        </MudStack>
+                    </MudTabPanel>
+                    <MudTabPanel Text="All">
+                        <MudGrid Spacing="2" Class="mt-2">
+                            @foreach (var metric in FilteredDefenseMetrics)
+                            {
+                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
+                            }
+                        </MudGrid>
 
-                <MudStack Spacing="1" Class="scroll-list tall-list mt-3">
-                    @foreach (var item in FilteredDefenseStatuses)
-                    {
-                        <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
-                            <MudText Typo="Typo.subtitle2">@item.Name</MudText>
-                            <MudText Typo="Typo.body2">@item.Status</MudText>
-                        </MudAlert>
-                        <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
-                    }
-                    @if (!FilteredDefenseStatuses.Any())
-                    {
-                        <MudText Class="helper-text">No defender status matches that search.</MudText>
-                    }
-                </MudStack>
+                        <MudStack Spacing="1" Class="scroll-list tall-list mt-3">
+                            @foreach (var item in FilteredDefenseStatuses)
+                            {
+                                <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
+                                    <MudText Typo="Typo.subtitle2">@item.Name</MudText>
+                                    <MudText Typo="Typo.body2">@item.Status</MudText>
+                                </MudAlert>
+                                <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
+                            }
+                            @if (!FilteredDefenseStatuses.Any())
+                            {
+                                <MudText Class="helper-text">No defender status matches that search.</MudText>
+                            }
+                        </MudStack>
+                    </MudTabPanel>
+                </MudTabs>
             </MudPaper>
         </MudTabPanel>
 
@@ -210,8 +280,8 @@
         </MudTabPanel>
 
         <MudTabPanel Text="Logs">
-            <MudGrid Spacing="2">
-                <MudItem xs="12" lg="6">
+            <MudTabs Class="app-tabs compact-subtabs" Elevation="0" Rounded="true">
+                <MudTabPanel Text="Wall Touches">
                     <MudPaper Class="panel-card">
                         <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="wrap-gap">
                             <div>
@@ -249,9 +319,9 @@
                             }
                         </MudStack>
                     </MudPaper>
-                </MudItem>
+                </MudTabPanel>
 
-                <MudItem xs="12" lg="6">
+                <MudTabPanel Text="Activity">
                     <MudPaper Class="panel-card">
                         <MudText Typo="Typo.overline">Activity</MudText>
                         <MudText Typo="Typo.body2" Class="helper-text">Search the story of what the defender has been doing.</MudText>
@@ -282,8 +352,8 @@
                             }
                         </MudStack>
                     </MudPaper>
-                </MudItem>
-            </MudGrid>
+                </MudTabPanel>
+            </MudTabs>
         </MudTabPanel>
 
         <MudTabPanel Text="Controls">
@@ -292,53 +362,65 @@
                 <MudText Typo="Typo.h5">Dining room climate</MudText>
                 <MudText Typo="Typo.body2" Class="helper-text">These controls send real Home Assistant service calls.</MudText>
 
-                <MudGrid Spacing="2" Class="mt-2">
-                    <MudItem xs="12" md="6">
-                        <MudNumericField T="double"
-                                         Value="_targetInput"
-                                         ValueChanged="OnTargetInputChanged"
-                                         Label="Set target"
-                                         HelperText="Type the temperature you want, like picking a number on a toy dial."
-                                         Variant="Variant.Outlined"
-                                         Min="10"
-                                         Max="35"
-                                         Step="0.1"
-                                         Adornment="Adornment.End"
-                                         AdornmentText="C" />
-                    </MudItem>
-                    <MudItem xs="6" md="3">
-                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyTarget" StartIcon="@Icons.Material.Filled.Check">Apply</MudButton>
-                        <MudText Typo="Typo.caption" Class="helper-text">Sends the number to the defender.</MudText>
-                    </MudItem>
-                    <MudItem xs="6" md="3">
-                        <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="GenerateTarget" StartIcon="@Icons.Material.Filled.AutoAwesome">Generate</MudButton>
-                        <MudText Typo="Typo.caption" Class="helper-text">Lets the website pick a comfy number.</MudText>
-                    </MudItem>
-                    <MudItem xs="12" md="8">
-                        <MudSelect T="string" @bind-Value="_fanMode" Label="Fan mode" HelperText="Pick how the fan should blow air." Variant="Variant.Outlined">
-                            @foreach (var mode in FanModes)
-                            {
-                                <MudSelectItem T="string" Value="@mode">@mode</MudSelectItem>
-                            }
-                        </MudSelect>
-                    </MudItem>
-                    <MudItem xs="12" md="4">
-                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyFanMode" StartIcon="@Icons.Material.Filled.Air">Set fan</MudButton>
-                        <MudText Typo="Typo.caption" Class="helper-text">Sends the fan choice to the thermostat.</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
-                        <MudText Typo="Typo.caption" Class="helper-text">Asks Home Assistant for the newest thermostat reading.</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ForceTarget" StartIcon="@Icons.Material.Filled.TrackChanges">Force target</MudButton>
-                        <MudText Typo="Typo.caption" Class="helper-text">Sets the thermostat to the exact target now.</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ForceBoost" StartIcon="@Icons.Material.Filled.AcUnit">Force cooling</MudButton>
-                        <MudText Typo="Typo.caption" Class="helper-text">Sets the thermostat one degree below current room temp when cooling is needed.</MudText>
-                    </MudItem>
-                </MudGrid>
+                <MudTabs Class="app-tabs compact-subtabs" Elevation="0" Rounded="true">
+                    <MudTabPanel Text="Target">
+                        <MudGrid Spacing="2" Class="mt-2">
+                            <MudItem xs="12" md="6">
+                                <MudNumericField T="double"
+                                                 Value="_targetInput"
+                                                 ValueChanged="OnTargetInputChanged"
+                                                 Label="Set target"
+                                                 HelperText="Type the temperature you want, like picking a number on a toy dial."
+                                                 Variant="Variant.Outlined"
+                                                 Min="10"
+                                                 Max="35"
+                                                 Step="0.1"
+                                                 Adornment="Adornment.End"
+                                                 AdornmentText="C" />
+                            </MudItem>
+                            <MudItem xs="6" md="3">
+                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyTarget" StartIcon="@Icons.Material.Filled.Check">Apply</MudButton>
+                                <MudText Typo="Typo.caption" Class="helper-text">Sends the number to the defender.</MudText>
+                            </MudItem>
+                            <MudItem xs="6" md="3">
+                                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="GenerateTarget" StartIcon="@Icons.Material.Filled.AutoAwesome">Generate</MudButton>
+                                <MudText Typo="Typo.caption" Class="helper-text">Lets the website pick a comfy number.</MudText>
+                            </MudItem>
+                        </MudGrid>
+                    </MudTabPanel>
+                    <MudTabPanel Text="Fan">
+                        <MudGrid Spacing="2" Class="mt-2">
+                            <MudItem xs="12" md="8">
+                                <MudSelect T="string" @bind-Value="_fanMode" Label="Fan mode" HelperText="Pick how the fan should blow air." Variant="Variant.Outlined">
+                                    @foreach (var mode in FanModes)
+                                    {
+                                        <MudSelectItem T="string" Value="@mode">@mode</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" md="4">
+                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyFanMode" StartIcon="@Icons.Material.Filled.Air">Set fan</MudButton>
+                                <MudText Typo="Typo.caption" Class="helper-text">Sends the fan choice to the thermostat.</MudText>
+                            </MudItem>
+                        </MudGrid>
+                    </MudTabPanel>
+                    <MudTabPanel Text="Actions">
+                        <MudGrid Spacing="2" Class="mt-2">
+                            <MudItem xs="12" sm="4">
+                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
+                                <MudText Typo="Typo.caption" Class="helper-text">Asks Home Assistant for the newest thermostat reading.</MudText>
+                            </MudItem>
+                            <MudItem xs="12" sm="4">
+                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ForceTarget" StartIcon="@Icons.Material.Filled.TrackChanges">Force target</MudButton>
+                                <MudText Typo="Typo.caption" Class="helper-text">Sets the thermostat to the exact target now.</MudText>
+                            </MudItem>
+                            <MudItem xs="12" sm="4">
+                                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ForceBoost" StartIcon="@Icons.Material.Filled.AcUnit">Force cooling</MudButton>
+                                <MudText Typo="Typo.caption" Class="helper-text">Sets the thermostat one degree below current room temp when cooling is needed.</MudText>
+                            </MudItem>
+                        </MudGrid>
+                    </MudTabPanel>
+                </MudTabs>
             </MudPaper>
         </MudTabPanel>
     </MudTabs>
@@ -361,6 +443,41 @@
     private string _defenseSearch = "";
     private string _touchSearch = "";
     private string _eventSearch = "";
+
+    private static readonly string[] CoreDefenseMetricLabels =
+    [
+        "Boost", "Quiet level", "Quiet wait", "Cool restore", "Nudge size", "Hold chance", "Command gap", "Updated", "Entity"
+    ];
+
+    private static readonly string[] WallTouchDefenseMetricLabels =
+    [
+        "Touch count", "Touch pressure", "Walk step", "Touch step", "Touch samples", "Visibility wait", "Visibility pressure",
+        "Routine wait", "Routine rhythm", "Budget wait", "Budget used", "Cadence wait", "Cadence pressure", "Blend target",
+        "Blend wait", "Memory bias", "Memory target", "Stand-down", "Wall grace", "Touch intent", "Intent grace",
+        "Cooler fast lane", "Cooler net"
+    ];
+
+    private static readonly string[] SensorDefenseMetricLabels =
+    [
+        "Echo wait", "Echo target", "Repeat wait", "Repeat pressure", "Sensor rhythm", "Sensor beat", "Runway wait",
+        "Runway pressure", "Room trend", "Trend hold", "Cooling rate", "Target ETA", "Weather drift", "Weather hold"
+    ];
+
+    private static readonly string[] CoreDefenseStatusNames =
+    [
+        "Natural recovery", "Cool mode restore"
+    ];
+
+    private static readonly string[] WallTouchDefenseStatusNames =
+    [
+        "Natural walkback", "Touch signature", "Visibility guard", "Routine timing", "Comfort budget", "Natural cadence",
+        "Comfort compromise", "Comfort memory", "Conflict quiet", "Manual grace", "Touch intent", "Cooler intent"
+    ];
+
+    private static readonly string[] SensorDefenseStatusNames =
+    [
+        "Setpoint echo", "Repeat command", "Sensor rhythm", "Cooling runway", "Room trend", "Thermal momentum", "Weather drift"
+    ];
 
     private string TargetText => Snapshot is null ? "-- C" : $"{Snapshot.TargetTemperatureCelsius:0.0} C";
     private string EntityText => Snapshot?.HomeAssistantEntityId ?? "No entity";
@@ -620,6 +737,15 @@
         new("Entity", Snapshot?.HomeAssistantEntityId ?? "--", "The Home Assistant thermostat name.")
     ];
 
+    private IEnumerable<MetricItem> CoreDefenseMetrics =>
+        DefenseMetrics.Where(item => CoreDefenseMetricLabels.Contains(item.Label));
+
+    private IEnumerable<MetricItem> WallTouchDefenseMetrics =>
+        DefenseMetrics.Where(item => WallTouchDefenseMetricLabels.Contains(item.Label));
+
+    private IEnumerable<MetricItem> SensorDefenseMetrics =>
+        DefenseMetrics.Where(item => SensorDefenseMetricLabels.Contains(item.Label));
+
     private IReadOnlyList<MetricItem> ComfortMetrics =>
     [
         new("Hottest upstairs", Temp(Snapshot?.Comfort.HottestUpstairsTemperatureCelsius), "The warmest upstairs sensor."),
@@ -673,11 +799,26 @@
         new("Weather drift", WeatherDriftText, "This says if outdoor weather movement is being used to time a safe correction.", WeatherDriftSeverity)
     ];
 
+    private IEnumerable<StatusItem> CoreDefenseStatuses =>
+        DefenseStatuses.Where(item => CoreDefenseStatusNames.Contains(item.Name));
+
+    private IEnumerable<StatusItem> WallTouchDefenseStatuses =>
+        DefenseStatuses.Where(item => WallTouchDefenseStatusNames.Contains(item.Name));
+
+    private IEnumerable<StatusItem> SensorDefenseStatuses =>
+        DefenseStatuses.Where(item => SensorDefenseStatusNames.Contains(item.Name));
+
     private IEnumerable<MetricItem> FilteredDefenseMetrics =>
-        DefenseMetrics.Where(item => MatchesSearch(_defenseSearch, item.Label, item.Value, item.Help));
+        FilterMetrics(DefenseMetrics);
 
     private IEnumerable<StatusItem> FilteredDefenseStatuses =>
-        DefenseStatuses.Where(item => MatchesSearch(_defenseSearch, item.Name, item.Status, item.Help));
+        FilterStatuses(DefenseStatuses);
+
+    private IEnumerable<MetricItem> FilterMetrics(IEnumerable<MetricItem> metrics) =>
+        metrics.Where(item => MatchesSearch(_defenseSearch, item.Label, item.Value, item.Help));
+
+    private IEnumerable<StatusItem> FilterStatuses(IEnumerable<StatusItem> statuses) =>
+        statuses.Where(item => MatchesSearch(_defenseSearch, item.Name, item.Status, item.Help));
 
     private IEnumerable<ThermostatChangeAudit> FilteredThermostatChanges =>
         (Snapshot?.ThermostatChanges ?? Array.Empty<ThermostatChangeAudit>())

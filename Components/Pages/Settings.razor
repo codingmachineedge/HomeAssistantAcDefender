@@ -254,7 +254,7 @@
             </MudGrid>
         </MudTabPanel>
 
-        <MudTabPanel Text="Natural Timing">
+        <MudTabPanel Text="Recovery">
             <MudGrid Spacing="3">
         <MudItem xs="12" md="6">
             <MudPaper Class="panel-card">
@@ -455,6 +455,17 @@
                     </MudItem>
                 </MudGrid>
 
+            </MudPaper>
+        </MudItem>
+            </MudGrid>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Wall Touch">
+            <MudGrid Spacing="3">
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudText Typo="Typo.overline">Wall Touch Behavior</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">Settings that react when someone changes the real wall thermostat.</MudText>
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
                            Value="_touchSignatureEnabled"
@@ -1031,6 +1042,17 @@
                     </MudItem>
                 </MudGrid>
 
+            </MudPaper>
+        </MudItem>
+            </MudGrid>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Sensor Timing">
+            <MudGrid Spacing="3">
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
+                <MudText Typo="Typo.overline">Sensor Timing</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">Settings that wait for Home Assistant readings and cooling momentum.</MudText>
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
                            Value="_setpointEchoGuardEnabled"
@@ -1581,9 +1603,9 @@
     private static readonly SettingsGroup[] SettingGroups =
     [
         new("Automation", "Schedule and weather", "Time rules, weather activation, cooldown, cool restore, conflict quiet, and weather drift."),
-        new("Natural Timing", "Quiet recovery", "Adaptive waits, nudge size, command gaps, safe bands, and hold chance."),
-        new("Natural Timing", "Touch behavior", "Natural walkback, touch signature, visibility guard, routine timing, budget, cadence, compromise, and memory."),
-        new("Natural Timing", "Sensor timing", "Setpoint echo, repeat command, Home Assistant sensor rhythm, cooling runway, room trend, and thermal momentum."),
+        new("Recovery", "Quiet recovery", "Adaptive waits, nudge size, command gaps, safe bands, walkback, and hold chance."),
+        new("Wall Touch", "Touch behavior", "Touch signature, visibility guard, routine timing, budget, cadence, compromise, memory, manual grace, and intent."),
+        new("Sensor Timing", "Sensor timing", "Setpoint echo, repeat command, Home Assistant sensor rhythm, cooling runway, room trend, and thermal momentum."),
         new("Comfort", "Fan saver", "Fan mode and near-target energy saver."),
         new("Comfort", "Upstairs comfort", "Upstairs temperature sensors, too-hot threshold, comfort target, boost, and presence rules."),
         new("Schedule", "Custom schedule", "Add, remove, search, and edit target temperature schedule rules.")
