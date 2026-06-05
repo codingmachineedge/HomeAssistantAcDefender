@@ -28,6 +28,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Routine Timing so safe corrections after repeated touches wait for normal-looking comfort-check intervals.
 - Adds Comfort Budget so repeated safe corrections can rest before another adjustment.
 - Adds Command Camouflage so a recent helper command gets a believable gap before another safe correction.
+- Adds Stealth Governor so high overall touch/command pressure can trigger a low-profile safe hold.
 - Adds Natural Cadence so repeated safe corrections wait for a variable future slot based on wall-touch pressure.
 - Adds Comfort Pace so frequent wall changes can wait for a calmer weather, Home Assistant sensor, or clock-aligned climate slot before a safe correction.
 - Adds Comfort Envelope so small safe wall setpoint differences can rest briefly after repeated touches instead of being corrected immediately.
@@ -113,17 +114,18 @@ Every cycle:
 17. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
 18. Respect Comfort Budget when too many safe adjustments happened recently.
 19. Respect Command Camouflage when a recent helper command needs a believable gap before another safe correction.
-20. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-21. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
-22. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
-23. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-24. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-25. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-26. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
-27. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
-28. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-29. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
-30. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
+20. Respect Stealth Governor when the overall activity pressure score is high.
+21. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
+22. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
+23. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
+24. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+25. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+26. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+27. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
+28. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
+29. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+30. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
+31. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
 30. Optionally set fan saver mode when near target.
 31. Correct the thermostat setpoint when it does not match the defender decision.
 32. Update the real-time dashboard status.
@@ -220,6 +222,11 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `CommandCamouflageMinimumGapSeconds`: shortest cover gap after the last helper setpoint command.
 - `CommandCamouflagePressureExtraSeconds`: extra cover gap added as recent touches or helper commands rise.
 - `CommandCamouflageSafetyBandCelsius`: extra room warmth allowed before command camouflage stops waiting.
+- `StealthGovernorEnabled`: enables the overall low-profile pressure guard.
+- `StealthGovernorTriggerScore`: 0-100 pressure score that starts a safe low-profile hold.
+- `StealthGovernorMinimumHoldMinutes`: shortest low-profile hold after the score is crossed.
+- `StealthGovernorMaximumHoldMinutes`: longest low-profile hold as the score rises.
+- `StealthGovernorSafetyBandCelsius`: extra room warmth allowed before stealth governor stops waiting.
 - `NaturalCadenceEnabled`: picks a variable future slot for safe nudges after repeated wall touches.
 - `NaturalCadenceTriggerTouches`: recent wall touches needed before cadence starts.
 - `NaturalCadenceMinimumMinutes`: shortest safe cadence wait.
@@ -337,6 +344,8 @@ Routine Timing is a timing layer for safe corrections. When repeated wall change
 Comfort Budget is a rolling command limiter for safe corrections. If too many automatic setpoint adjustments happened inside the configured window, the defender rests until the oldest one leaves the window. If the room gets too warm or upstairs comfort needs direct cooling, the budget clears and the real correction path continues.
 
 Command Camouflage spaces safe follow-up corrections after the last helper setpoint command. It waits for the configured minimum gap plus extra pressure seconds from recent wall touches or helper commands, so the next safe correction does not appear instantly after the previous one. If the room gets too warm, upstairs comfort needs direct cooling, or a quiet-timing bypass is active, camouflage clears immediately.
+
+Stealth Governor is the broad low-profile layer. It scores recent wall touches, noticed corrections, Home Assistant remote changes, and helper command frequency into a 0-100 pressure score. If the score crosses the trigger and the room is still inside the safety band, it holds only safe corrections for a min-to-max window scaled by the score. If the room gets too warm, upstairs comfort needs direct cooling, or a quiet-timing bypass is active, it clears immediately.
 
 Natural Cadence picks a variable future slot for safe corrections after repeated wall touches. The slot gets later as touch pressure or recent command pressure rises, and it has a small jitter so safe nudges do not land at identical times. If the room gets too warm or upstairs comfort needs direct cooling, cadence clears and the real correction path continues.
 

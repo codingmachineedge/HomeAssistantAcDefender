@@ -204,6 +204,17 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("stealth governor suspicion pressure low profile quiet")) {
+                <MudExpansionPanel Text="Stealth governor" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Stealth governor" Value="_stealthGovernorEnabled" ValueChanged="@(v => SetDirty(v, x => _stealthGovernorEnabled = x))" Help="Hold safe corrections when the overall pressure score is too loud." />
+                        <SettingInt Label="Trigger score" Value="_stealthGovernorTriggerScore" ValueChanged="@(v => SetDirty(v, x => _stealthGovernorTriggerScore = x))" Min="1" Max="100" />
+                        <SettingInt Label="Min hold" Unit="min" Value="_stealthGovernorMinimumHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _stealthGovernorMinimumHoldMinutes = x))" Min="1" Max="240" />
+                        <SettingInt Label="Max hold" Unit="min" Value="_stealthGovernorMaximumHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _stealthGovernorMaximumHoldMinutes = x))" Min="1" Max="480" />
+                        <SettingDouble Label="Safe band" Value="_stealthGovernorSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _stealthGovernorSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("natural cadence slot")) {
                 <MudExpansionPanel Text="Natural cadence" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -602,6 +613,11 @@
     private int _commandCamouflageMinimumGapSeconds = 180;
     private int _commandCamouflagePressureExtraSeconds = 360;
     private double _commandCamouflageSafetyBandCelsius = 1.0;
+    private bool _stealthGovernorEnabled = true;
+    private int _stealthGovernorTriggerScore = 65;
+    private int _stealthGovernorMinimumHoldMinutes = 5;
+    private int _stealthGovernorMaximumHoldMinutes = 25;
+    private double _stealthGovernorSafetyBandCelsius = 1.2;
     private bool _naturalCadenceEnabled = true;
     private int _naturalCadenceTriggerTouches = 2;
     private int _naturalCadenceMinimumMinutes = 3;
@@ -806,6 +822,11 @@
         _commandCamouflageMinimumGapSeconds = settings.CommandCamouflageMinimumGapSeconds;
         _commandCamouflagePressureExtraSeconds = settings.CommandCamouflagePressureExtraSeconds;
         _commandCamouflageSafetyBandCelsius = settings.CommandCamouflageSafetyBandCelsius;
+        _stealthGovernorEnabled = settings.StealthGovernorEnabled;
+        _stealthGovernorTriggerScore = settings.StealthGovernorTriggerScore;
+        _stealthGovernorMinimumHoldMinutes = settings.StealthGovernorMinimumHoldMinutes;
+        _stealthGovernorMaximumHoldMinutes = settings.StealthGovernorMaximumHoldMinutes;
+        _stealthGovernorSafetyBandCelsius = settings.StealthGovernorSafetyBandCelsius;
         _naturalCadenceEnabled = settings.NaturalCadenceEnabled;
         _naturalCadenceTriggerTouches = settings.NaturalCadenceTriggerTouches;
         _naturalCadenceMinimumMinutes = settings.NaturalCadenceMinimumMinutes;
@@ -1047,6 +1068,11 @@
             _commandCamouflageMinimumGapSeconds,
             _commandCamouflagePressureExtraSeconds,
             _commandCamouflageSafetyBandCelsius,
+            _stealthGovernorEnabled,
+            _stealthGovernorTriggerScore,
+            _stealthGovernorMinimumHoldMinutes,
+            _stealthGovernorMaximumHoldMinutes,
+            _stealthGovernorSafetyBandCelsius,
             _naturalCadenceEnabled,
             _naturalCadenceTriggerTouches,
             _naturalCadenceMinimumMinutes,

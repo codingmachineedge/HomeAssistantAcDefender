@@ -27,7 +27,7 @@ sequence. The first guard that wants to wait stops the cycle and reports its nex
 12. **Alectra Peak Power Saver** makes safe cooling more chill during On-peak, high-price, or high-power usage.
 13. **Fan Energy Saver** moves the fan to a saver mode when near target.
 14. Compute the **expected setpoint**: 1 C below room when the room is warm.
-15. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver -> Comfort Envelope -> Room Trend -> Thermal Momentum -> Weather Drift -> Setpoint Echo -> Cooling Runway -> Sensor Rhythm -> Comfort Sync -> Comfort Pace -> Routine Timing -> Comfort Budget -> Command Camouflage -> Visibility Guard -> Natural Cadence**.
+15. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver -> Comfort Envelope -> Room Trend -> Thermal Momentum -> Weather Drift -> Setpoint Echo -> Cooling Runway -> Sensor Rhythm -> Comfort Sync -> Comfort Pace -> Routine Timing -> Comfort Budget -> Command Camouflage -> Stealth Governor -> Visibility Guard -> Natural Cadence**.
 16. Shape the command size with **Natural Walkback** and **Touch Signature**, then **Repeat Quiet**.
 17. Send the corrected setpoint to Home Assistant.
 18. **Cooling Failure Watch** runs alongside and raises a mega-alert if cooling is demanded but not real.
@@ -110,6 +110,12 @@ Gives a recent helper command time to look normal before another safe correction
 - **Watches:** the last helper setpoint command, recent helper-command pressure, recent wall-touch pressure, and room temperature.
 - **Logic:** after a setpoint command, it waits at least the minimum gap plus pressure-scaled extra seconds before another safe correction. A room over the safety band or any comfort bypass clears it.
 - **Settings:** `CommandCamouflageEnabled`, `CommandCamouflageMinimumGapSeconds`, `CommandCamouflagePressureExtraSeconds`, `CommandCamouflageSafetyBandCelsius`.
+
+### Stealth Governor
+Runs a whole-system low-profile hold when the defender looks too active.
+- **Watches:** wall-touch pressure, noticed-correction pressure, Home Assistant remote changes, helper command count, and room temperature.
+- **Logic:** it computes a 0-100 score. If the score reaches the trigger and the room is inside the safety band, it holds only safe corrections for a min-to-max low-profile window.
+- **Settings:** `StealthGovernorEnabled`, `StealthGovernorTriggerScore`, `StealthGovernorMinimumHoldMinutes`, `StealthGovernorMaximumHoldMinutes`, `StealthGovernorSafetyBandCelsius`.
 
 ### Natural Cadence
 Picks a variable future slot for safe nudges so they never land at identical, robotic times.

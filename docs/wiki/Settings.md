@@ -72,6 +72,11 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Camouflage min gap seconds: shortest cover gap after a helper command.
 - Camouflage pressure extra seconds: extra gap added as recent touches or helper commands rise.
 - Camouflage safe band C: extra warmth allowed before camouflage stops waiting.
+- Stealth governor: holds safe corrections when the overall activity pressure score gets too high.
+- Stealth trigger score: 0-100 pressure score that starts the low-profile hold.
+- Stealth min hold minutes: shortest low-profile hold.
+- Stealth max hold minutes: longest low-profile hold as pressure rises.
+- Stealth safe band C: extra warmth allowed before stealth governor stops waiting.
 - Natural cadence: picks a variable future time slot for safe nudges after repeated wall touches.
 - Cadence touches: recent wall touches needed before cadence starts.
 - Min cadence minutes: shortest safe cadence wait.

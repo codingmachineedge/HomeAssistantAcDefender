@@ -257,6 +257,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectStealthGovernor(reading, expectedSetPoint, bypassQuietTiming, now, out var stealthUntil, out var stealthMessage))
+                {
+                    stateStore.SetNextAction(stealthMessage, stealthUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectVisibilityGuard(reading, expectedSetPoint, bypassQuietTiming, now, out var visibilityUntil, out var visibilityMessage))
                 {
                     stateStore.SetNextAction(visibilityMessage, visibilityUntil);

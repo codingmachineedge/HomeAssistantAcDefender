@@ -194,6 +194,18 @@ public sealed class DefenderStateStore
             {
                 ClearCommandCamouflage("Command camouflage is off.");
             }
+            state.Settings.StealthGovernorEnabled = request.StealthGovernorEnabled;
+            state.Settings.StealthGovernorTriggerScore = Math.Clamp(request.StealthGovernorTriggerScore, 1, 100);
+            state.Settings.StealthGovernorMinimumHoldMinutes = Math.Clamp(request.StealthGovernorMinimumHoldMinutes, 1, 240);
+            state.Settings.StealthGovernorMaximumHoldMinutes = Math.Clamp(
+                request.StealthGovernorMaximumHoldMinutes,
+                state.Settings.StealthGovernorMinimumHoldMinutes,
+                480);
+            state.Settings.StealthGovernorSafetyBandCelsius = Math.Round(Math.Clamp(request.StealthGovernorSafetyBandCelsius, 0.1, 5.0), 1);
+            if (!state.Settings.StealthGovernorEnabled)
+            {
+                ClearStealthGovernor("Stealth governor is off.");
+            }
             state.Settings.NaturalCadenceEnabled = request.NaturalCadenceEnabled;
             state.Settings.NaturalCadenceTriggerTouches = Math.Clamp(request.NaturalCadenceTriggerTouches, 1, 20);
             state.Settings.NaturalCadenceMinimumMinutes = Math.Clamp(request.NaturalCadenceMinimumMinutes, 1, 120);
@@ -2114,6 +2126,88 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Stealth Governor: true while high overall activity pressure calls for a low-profile safe-correction hold.</summary>
+    public bool TryRespectStealthGovernor(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassStealthGovernor,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.StealthGovernorEnabled)
+            {
+                ClearStealthGovernor("Stealth governor is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            PruneDefenderCommandTimes(now);
+            PruneRemoteChangeTimes(now);
+            PruneVisibilityNoticeTimes(now);
+
+            if (bypassStealthGovernor || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearStealthGovernor("Room comfort needs help now, so stealth governor is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.StealthGovernorSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearStealthGovernor($"Room is above {allowedRoomTemperature:0.0} C, so stealth governor is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearStealthGovernor("Stealth governor is lined up; no low-profile hold is needed.");
+                SaveState();
+                return false;
+            }
+
+            var score = CalculateStealthGovernorScore(now);
+            var triggerScore = Math.Clamp(state.Settings.StealthGovernorTriggerScore, 1, 100);
+            if (score < triggerScore && state.StealthGovernorHoldUntil is null)
+            {
+                ClearStealthGovernor($"Stealth governor is watching pressure {score}/100 below trigger {triggerScore}/100.");
+                SaveState();
+                return false;
+            }
+
+            if (state.StealthGovernorHoldUntil is { } holdUntil)
+            {
+                if (holdUntil > now)
+                {
+                    waitUntil = holdUntil;
+                    message = $"Stealth governor is holding safe correction until {holdUntil.ToLocalTime():HH:mm:ss}; pressure {score}/100 crossed trigger {triggerScore}/100.";
+                    state.StealthGovernorStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearStealthGovernor("Stealth governor low-profile window ended; the next safe correction can continue.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = CalculateStealthGovernorUntil(score, now);
+            state.StealthGovernorHoldUntil = waitUntil;
+            message = $"Stealth governor chose a low-profile hold until {waitUntil.ToLocalTime():HH:mm:ss}; pressure {score}/100 crossed trigger {triggerScore}/100.";
+            state.StealthGovernorStatus = message;
+            SaveState();
+            return waitUntil > now;
+        }
+    }
+
     /// <summary>Natural Cadence: true while waiting for a varied future slot (min-max minutes by pressure, plus jitter).</summary>
     public bool TryRespectNaturalCadence(
         ThermostatReading reading,
@@ -2670,6 +2764,7 @@ public sealed class DefenderStateStore
                 && state.RoutineTimingDueAt is null
                 && state.ComfortBudgetHoldUntil is null
                 && state.CommandCamouflageHoldUntil is null
+                && state.StealthGovernorHoldUntil is null
                 && state.NaturalCadenceDueAt is null
                 && state.NaturalChangePlannerDueAt is null
                 && state.ComfortEnvelopeUntil is null
@@ -2729,6 +2824,9 @@ public sealed class DefenderStateStore
             ClearCommandCamouflage(state.Settings.CommandCamouflageEnabled
                 ? "Command camouflage is lined up; no helper-command gap needed."
                 : "Command camouflage is off.");
+            ClearStealthGovernor(state.Settings.StealthGovernorEnabled
+                ? "Stealth governor is lined up; no low-profile hold needed."
+                : "Stealth governor is off.");
             ClearNaturalCadence(state.Settings.NaturalCadenceEnabled
                 ? "Natural cadence is lined up; no quiet slot needed."
                 : "Natural cadence is off.");
@@ -2771,6 +2869,7 @@ public sealed class DefenderStateStore
                     ResetCoolingDefenderStep();
                     ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
                     ClearCommandCamouflage($"Schedule {activeSchedule.Name} changed the target, so command camouflage reset.");
+                    ClearStealthGovernor($"Schedule {activeSchedule.Name} changed the target, so stealth governor reset.");
                     ClearNaturalChangePlanner($"Schedule {activeSchedule.Name} changed the target, so Comfort Pace reset.");
                     ClearComfortEnvelope($"Schedule {activeSchedule.Name} changed the target, so comfort envelope reset.");
                     ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
@@ -2817,6 +2916,7 @@ public sealed class DefenderStateStore
                 state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
                 ClearNaturalCadence("Upstairs comfort changed the target, so natural cadence reset.");
                 ClearCommandCamouflage("Upstairs comfort changed the target, so command camouflage reset.");
+                ClearStealthGovernor("Upstairs comfort changed the target, so stealth governor reset.");
                 ClearNaturalChangePlanner("Upstairs comfort changed the target, so Comfort Pace reset.");
                 ClearComfortEnvelope("Upstairs comfort changed the target, so comfort envelope reset.");
                 ClearRepeatCommand("Upstairs comfort changed the target, so repeat quiet reset.");
@@ -3440,6 +3540,7 @@ public sealed class DefenderStateStore
         ClearRoutineTiming("Cooler intent fast lane is active, so routine timing is stepping aside.");
         ClearComfortBudget("Cooler intent fast lane is active, so comfort budget is stepping aside.");
         ClearCommandCamouflage("Cooler intent fast lane is active, so command camouflage is stepping aside.");
+        ClearStealthGovernor("Cooler intent fast lane is active, so stealth governor is stepping aside.");
         ClearNaturalCadence("Cooler intent fast lane is active, so natural cadence is stepping aside.");
         ClearNaturalChangePlanner("Cooler intent fast lane is active, so Comfort Pace is stepping aside.");
         ClearComfortEnvelope("Cooler intent fast lane is active, so comfort envelope is stepping aside.");
@@ -4203,6 +4304,16 @@ public sealed class DefenderStateStore
         return lastCommandAt.AddSeconds(baseSeconds + extraSeconds);
     }
 
+    private DateTimeOffset CalculateStealthGovernorUntil(int score, DateTimeOffset now)
+    {
+        var minMinutes = Math.Clamp(state.Settings.StealthGovernorMinimumHoldMinutes, 1, 240);
+        var maxMinutes = Math.Clamp(state.Settings.StealthGovernorMaximumHoldMinutes, minMinutes, 480);
+        var intensity = Math.Clamp(score / 100.0, 0.0, 1.0);
+        var baseSeconds = (int)Math.Round(Lerp(minMinutes * 60.0, maxMinutes * 60.0, intensity));
+        var jitterSeconds = random.Next(-45, 46);
+        return now.AddSeconds(Math.Clamp(baseSeconds + jitterSeconds, 60, maxMinutes * 60));
+    }
+
     private DateTimeOffset CalculateCoolingRunwayUntil(DateTimeOffset startedAt, DateTimeOffset now)
     {
         var baseSeconds = Math.Clamp(state.Settings.CoolingRunwayMinimumSeconds, 0, 1800);
@@ -4233,6 +4344,25 @@ public sealed class DefenderStateStore
             0.0,
             1.0);
         return (int)Math.Round(Math.Clamp(Math.Max(touchPressure, commandPressure), 0.0, 1.0) * 100);
+    }
+
+    private int CalculateStealthGovernorScore(DateTimeOffset now)
+    {
+        PruneTouchTimes(now);
+        PruneDefenderCommandTimes(now);
+        PruneRemoteChangeTimes(now);
+        PruneVisibilityNoticeTimes(now);
+
+        var touchScore = CalculateTouchSuspicionScore(now);
+        var noticeScore = CalculateVisibilityPressure(now);
+        var commandScore = Math.Min(90, state.DefenderCommandTimes.Count * 22);
+        var remoteScore = Math.Min(85, state.RemoteChangeTimes.Count * 24);
+        var blendedScore = (int)Math.Round(
+            touchScore * 0.45
+            + noticeScore * 0.25
+            + commandScore * 0.20
+            + remoteScore * 0.10);
+        return Math.Clamp(Math.Max(Math.Max(touchScore, noticeScore), Math.Max(commandScore, blendedScore)), 0, 100);
     }
 
     private int CalculateRepeatCommandPressure(DateTimeOffset now)
@@ -4663,6 +4793,13 @@ public sealed class DefenderStateStore
         saved.Settings.CommandCamouflageMinimumGapSeconds = Math.Clamp(saved.Settings.CommandCamouflageMinimumGapSeconds, 0, 1800);
         saved.Settings.CommandCamouflagePressureExtraSeconds = Math.Clamp(saved.Settings.CommandCamouflagePressureExtraSeconds, 0, 3600);
         saved.Settings.CommandCamouflageSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.CommandCamouflageSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.StealthGovernorTriggerScore = Math.Clamp(saved.Settings.StealthGovernorTriggerScore <= 0 ? 65 : saved.Settings.StealthGovernorTriggerScore, 1, 100);
+        saved.Settings.StealthGovernorMinimumHoldMinutes = Math.Clamp(saved.Settings.StealthGovernorMinimumHoldMinutes <= 0 ? 5 : saved.Settings.StealthGovernorMinimumHoldMinutes, 1, 240);
+        saved.Settings.StealthGovernorMaximumHoldMinutes = Math.Clamp(
+            saved.Settings.StealthGovernorMaximumHoldMinutes <= 0 ? 25 : saved.Settings.StealthGovernorMaximumHoldMinutes,
+            saved.Settings.StealthGovernorMinimumHoldMinutes,
+            480);
+        saved.Settings.StealthGovernorSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.StealthGovernorSafetyBandCelsius <= 0 ? 1.2 : saved.Settings.StealthGovernorSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.NaturalCadenceTriggerTouches = Math.Clamp(saved.Settings.NaturalCadenceTriggerTouches, 1, 20);
         saved.Settings.NaturalCadenceMinimumMinutes = Math.Clamp(saved.Settings.NaturalCadenceMinimumMinutes, 1, 120);
         saved.Settings.NaturalCadenceMaximumMinutes = Math.Clamp(
@@ -4804,6 +4941,19 @@ public sealed class DefenderStateStore
         {
             saved.CommandCamouflageHoldUntil = null;
             saved.CommandCamouflageStatus = "Command camouflage is watching for a recent helper command.";
+        }
+        saved.StealthGovernorStatus = string.IsNullOrWhiteSpace(saved.StealthGovernorStatus)
+            ? "Stealth governor is watching overall pressure."
+            : saved.StealthGovernorStatus;
+        if (!saved.Settings.StealthGovernorEnabled)
+        {
+            saved.StealthGovernorHoldUntil = null;
+            saved.StealthGovernorStatus = "Stealth governor is off.";
+        }
+        else if (saved.StealthGovernorHoldUntil is { } stealthUntil && stealthUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.StealthGovernorHoldUntil = null;
+            saved.StealthGovernorStatus = "Stealth governor is watching overall pressure.";
         }
         saved.NaturalCadenceStatus = string.IsNullOrWhiteSpace(saved.NaturalCadenceStatus)
             ? "Natural cadence is watching."
@@ -5145,6 +5295,13 @@ public sealed class DefenderStateStore
         {
             ClearCommandCamouflage("Command camouflage slot arrived; watching for the next helper-command gap.");
         }
+        var stealthGovernorSeconds = state.StealthGovernorHoldUntil is { } stealthUntil && stealthUntil > now
+            ? (int)Math.Ceiling((stealthUntil - now).TotalSeconds)
+            : 0;
+        if (stealthGovernorSeconds == 0 && state.StealthGovernorHoldUntil is not null)
+        {
+            ClearStealthGovernor("Stealth governor low-profile window ended; watching overall pressure.");
+        }
         var naturalCadenceSeconds = state.NaturalCadenceDueAt is { } cadenceDueAt && cadenceDueAt > now
             ? (int)Math.Ceiling((cadenceDueAt - now).TotalSeconds)
             : 0;
@@ -5170,6 +5327,7 @@ public sealed class DefenderStateStore
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         var naturalWalkbackScore = CalculateTouchSuspicionScore(now);
         var commandCamouflagePressure = CalculateCommandCamouflagePressure(now);
+        var stealthGovernorScore = CalculateStealthGovernorScore(now);
         var repeatCommandPressure = CalculateRepeatCommandPressure(now);
         var coolingRunwayPressure = CalculateCoolingRunwayPressure(now);
         var naturalWalkbackStep = Math.Min(
@@ -5355,6 +5513,18 @@ public sealed class DefenderStateStore
                     ? "Command camouflage is watching for a recent helper command."
                     : state.CommandCamouflageStatus,
                 commandCamouflageSeconds > 0 ? state.CommandCamouflageHoldUntil : null),
+            new StealthGovernorSnapshot(
+                state.Settings.StealthGovernorEnabled,
+                stealthGovernorSeconds > 0,
+                stealthGovernorSeconds,
+                stealthGovernorScore,
+                state.Settings.StealthGovernorTriggerScore,
+                state.ExternalTouchTimes.Count,
+                state.DefenderCommandTimes.Count,
+                string.IsNullOrWhiteSpace(state.StealthGovernorStatus)
+                    ? "Stealth governor is watching overall pressure."
+                    : state.StealthGovernorStatus,
+                stealthGovernorSeconds > 0 ? state.StealthGovernorHoldUntil : null),
             new NaturalCadenceSnapshot(
                 state.Settings.NaturalCadenceEnabled,
                 naturalCadenceSeconds > 0,
@@ -5619,6 +5789,7 @@ public sealed class DefenderStateStore
         ClearRoutineTiming("Routine timing is watching.");
         ClearComfortBudget("Comfort budget is watching.");
         ClearCommandCamouflage("Command camouflage is watching for a recent helper command.");
+        ClearStealthGovernor("Stealth governor is watching overall pressure.");
         ClearNaturalCadence("Natural cadence is watching.");
         ClearNaturalChangePlanner("Comfort Pace is watching.");
         ClearComfortEnvelope("Comfort envelope is watching.");
@@ -5680,6 +5851,12 @@ public sealed class DefenderStateStore
     {
         state.CommandCamouflageHoldUntil = null;
         state.CommandCamouflageStatus = status;
+    }
+
+    private void ClearStealthGovernor(string status)
+    {
+        state.StealthGovernorHoldUntil = null;
+        state.StealthGovernorStatus = status;
     }
 
     private void ClearNaturalCadence(string status)
@@ -5794,6 +5971,8 @@ public sealed class DefenderStateStore
             state.ComfortBudgetStatus = $"Comfort budget counted {state.DefenderCommandTimes.Count}/{state.Settings.ComfortBudgetMaxCommands} recent comfort adjustments.";
             state.CommandCamouflageHoldUntil = null;
             state.CommandCamouflageStatus = "Command camouflage counted the latest helper command and is watching the next safe gap.";
+            state.StealthGovernorHoldUntil = null;
+            state.StealthGovernorStatus = "Stealth governor counted the latest helper command and is watching overall pressure.";
             state.NaturalCadenceDueAt = null;
             state.NaturalCadenceStatus = "Natural cadence used its quiet slot; watching for the next safe rhythm.";
             ClearNaturalChangePlanner("Comfort Pace used its climate slot; watching for the next calm opening.");
@@ -6136,6 +6315,11 @@ public sealed class DefenderStateStore
             CommandCamouflageMinimumGapSeconds = settings.CommandCamouflageMinimumGapSeconds,
             CommandCamouflagePressureExtraSeconds = settings.CommandCamouflagePressureExtraSeconds,
             CommandCamouflageSafetyBandCelsius = settings.CommandCamouflageSafetyBandCelsius,
+            StealthGovernorEnabled = settings.StealthGovernorEnabled,
+            StealthGovernorTriggerScore = settings.StealthGovernorTriggerScore,
+            StealthGovernorMinimumHoldMinutes = settings.StealthGovernorMinimumHoldMinutes,
+            StealthGovernorMaximumHoldMinutes = settings.StealthGovernorMaximumHoldMinutes,
+            StealthGovernorSafetyBandCelsius = settings.StealthGovernorSafetyBandCelsius,
             NaturalCadenceEnabled = settings.NaturalCadenceEnabled,
             NaturalCadenceTriggerTouches = settings.NaturalCadenceTriggerTouches,
             NaturalCadenceMinimumMinutes = settings.NaturalCadenceMinimumMinutes,
@@ -6382,6 +6566,10 @@ public sealed class DefenderStateStore
         public DateTimeOffset? CommandCamouflageHoldUntil { get; set; }
 
         public string CommandCamouflageStatus { get; set; } = "Command camouflage is watching for a recent helper command.";
+
+        public DateTimeOffset? StealthGovernorHoldUntil { get; set; }
+
+        public string StealthGovernorStatus { get; set; } = "Stealth governor is watching overall pressure.";
 
         public List<DateTimeOffset> DefenderCommandTimes { get; set; } = [];
 

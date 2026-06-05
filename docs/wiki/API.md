@@ -27,6 +27,7 @@ The status snapshot includes:
 - `routineTiming`: safe correction rhythm status, wait seconds, interval, jitter, and due time.
 - `comfortBudget`: safe correction budget status, wait seconds, recent command count, max commands, and due time.
 - `commandCamouflage`: helper-command spacing status, hold seconds, pressure, recent command count, and expiry time.
+- `stealthGovernor`: overall low-profile pressure status, score, trigger score, recent touch/command counts, hold seconds, and expiry time.
 - `naturalCadence`: variable safe-correction slot status, wait seconds, touch pressure, recent command count, and due time.
 - `naturalChangePlanner`: Comfort Pace status, wait seconds, touch pressure, recent touches, recent command count, selected reason, and due time.
 - `comfortEnvelope`: safe wall-preference range status, active flag, wait seconds, recent touch count, preferred wall setpoint, accepted min/max setpoints, and expiry time.
@@ -71,7 +72,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, Command Camouflage, Comfort Pace, Comfort Envelope, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 

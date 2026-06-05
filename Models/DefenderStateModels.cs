@@ -26,6 +26,7 @@ public sealed record DefenderSnapshot(
     RoutineTimingSnapshot RoutineTiming,
     ComfortBudgetSnapshot ComfortBudget,
     CommandCamouflageSnapshot CommandCamouflage,
+    StealthGovernorSnapshot StealthGovernor,
     NaturalCadenceSnapshot NaturalCadence,
     NaturalChangePlannerSnapshot NaturalChangePlanner,
     ComfortEnvelopeSnapshot ComfortEnvelope,
@@ -214,6 +215,17 @@ public sealed record CommandCamouflageSnapshot(
     bool Holding,
     int SecondsRemaining,
     int Pressure,
+    int RecentCommandCount,
+    string Status,
+    DateTimeOffset? Until);
+
+public sealed record StealthGovernorSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    int Score,
+    int TriggerScore,
+    int RecentTouchCount,
     int RecentCommandCount,
     string Status,
     DateTimeOffset? Until);
@@ -568,6 +580,16 @@ public sealed class DefenderSettings
     public int CommandCamouflagePressureExtraSeconds { get; set; } = 360;
 
     public double CommandCamouflageSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool StealthGovernorEnabled { get; set; } = true;
+
+    public int StealthGovernorTriggerScore { get; set; } = 65;
+
+    public int StealthGovernorMinimumHoldMinutes { get; set; } = 5;
+
+    public int StealthGovernorMaximumHoldMinutes { get; set; } = 25;
+
+    public double StealthGovernorSafetyBandCelsius { get; set; } = 1.2;
 
     public bool NaturalCadenceEnabled { get; set; } = true;
 

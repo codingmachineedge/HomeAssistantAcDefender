@@ -15,6 +15,7 @@ tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
 tests.CommandCamouflageSpacesSafeFollowUpButBypassesHotRoom();
+tests.StealthGovernorHoldsSafeHighPressureButBypassesHotRoom();
 tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
 tests.WebsiteCommandDebounceCanBypassNonThermostatButtons();
 tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
@@ -41,9 +42,9 @@ internal sealed class DefenderSetPointRegressionTests
         var snapshot = fixture.Store.GetSnapshot();
 
         var live = GuardCatalog.Live.ToList();
-        if (live.Count < 28)
+        if (live.Count < 29)
         {
-            throw new InvalidOperationException($"Expected at least 28 live guard cards in the catalog, found {live.Count}.");
+            throw new InvalidOperationException($"Expected at least 29 live guard cards in the catalog, found {live.Count}.");
         }
 
         foreach (var guard in live)
@@ -382,6 +383,73 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.CommandCamouflage.Holding)
         {
             throw new InvalidOperationException("Command Camouflage should clear its hold after a comfort bypass.");
+        }
+    }
+
+    public void StealthGovernorHoldsSafeHighPressureButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.StealthGovernorEnabled = true;
+        settings.StealthGovernorTriggerScore = 20;
+        settings.StealthGovernorMinimumHoldMinutes = 4;
+        settings.StealthGovernorMaximumHoldMinutes = 4;
+        settings.StealthGovernorSafetyBandCelsius = 1.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.4,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(safeReading);
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 25.0 });
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 26.0 });
+
+        var now = DateTimeOffset.UtcNow;
+        var waited = store.TryRespectStealthGovernor(
+            safeReading with { SetPointCelsius = 26.0 },
+            22.0,
+            bypassStealthGovernor: false,
+            now,
+            out var waitUntil,
+            out var message);
+
+        if (!waited || waitUntil <= now || !message.Contains("Stealth", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Stealth Governor should hold a safe correction when overall pressure is high.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.StealthGovernor.Holding
+            || snapshot.StealthGovernor.Score < settings.StealthGovernorTriggerScore
+            || snapshot.StealthGovernor.RecentTouchCount < 2)
+        {
+            throw new InvalidOperationException("Stealth Governor snapshot should show the active hold, score, and recent touches.");
+        }
+
+        var hotRoom = store.TryRespectStealthGovernor(
+            safeReading with { CurrentTemperatureCelsius = 24.2, SetPointCelsius = 26.0 },
+            22.0,
+            bypassStealthGovernor: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Stealth Governor must step aside when the room is too warm.");
+        }
+
+        snapshot = store.GetSnapshot();
+        if (snapshot.StealthGovernor.Holding)
+        {
+            throw new InvalidOperationException("Stealth Governor should clear its hold after comfort safety takes over.");
         }
     }
 

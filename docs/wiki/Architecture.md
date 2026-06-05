@@ -39,7 +39,9 @@ Comfort Budget is stored in `DefenderStateStore` as recent real setpoint command
 
 Command Camouflage is a persisted safe-correction hold in `DefenderStateStore`. `AcDefenderService` checks it after Comfort Budget and before the later visibility/cadence holds. It spaces another safe command after the most recent helper setpoint command using recent touch and command pressure, and it clears immediately when direct comfort correction or quiet-timing bypass is needed.
 
-Natural Cadence is a persisted timing slot in `DefenderStateStore`. `AcDefenderService` checks it after routine timing, comfort budget, command camouflage, and visibility guard, then waits only for safe corrections. Its delay is based on recent wall-touch pressure and recent automatic command pressure, and it clears when direct comfort correction is needed.
+Stealth Governor is a persisted low-profile hold in `DefenderStateStore`. `AcDefenderService` checks it after Command Camouflage and before Visibility Guard. It combines wall-touch pressure, noticed-correction pressure, remote/Home Assistant changes, and recent helper command count into a score, then delays only safe corrections while the room remains inside its safety band.
+
+Natural Cadence is a persisted timing slot in `DefenderStateStore`. `AcDefenderService` checks it after routine timing, comfort budget, command camouflage, stealth governor, and visibility guard, then waits only for safe corrections. Its delay is based on recent wall-touch pressure and recent automatic command pressure, and it clears when direct comfort correction is needed.
 
 Comfort Pace is a higher-pressure timing slot in `DefenderStateStore` for frequent wall changes. `AcDefenderService` checks it before routine timing and other late safe-correction holds. It chooses a persisted due time from wall-touch pressure, recent command pressure, real weather movement, the learned Home Assistant sensor rhythm, and local 5/10-minute clock boundaries. It only delays safe corrections and clears immediately when direct comfort correction is needed.
 

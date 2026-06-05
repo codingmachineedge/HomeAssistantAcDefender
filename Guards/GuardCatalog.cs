@@ -164,6 +164,25 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Stealth Governor", GuardCategory.WallTouch,
+            "Runs a whole-system low-profile hold when wall touches, noticed corrections, remote changes, and helper commands make the defender look too busy.",
+            "Recent wall-touch pressure, noticed-correction pressure, Home Assistant remote-change pressure, helper command count, and room temperature.",
+            "It computes a 0-100 pressure score. If the score reaches the trigger and the room is inside the safety band, it holds the next safe correction for a min-to-max low-profile window scaled by the score. Direct comfort needs, upstairs heat, or a quiet-timing bypass clear it.",
+            "Holds only safe corrections until the low-profile window ends.",
+            ["StealthGovernorEnabled", "StealthGovernorTriggerScore", "StealthGovernorMinimumHoldMinutes", "StealthGovernorMaximumHoldMinutes", "StealthGovernorSafetyBandCelsius"],
+            s =>
+            {
+                var g = s.StealthGovernor;
+                return GuardLiveView.Standard(g.Enabled, g.Holding, "Low profile", g.Status,
+                [
+                    new("Pressure", g.Enabled ? $"{g.Score}/{g.TriggerScore}" : "Off", "Overall stealth pressure versus trigger."),
+                    new("Low wait", OffWait(g.Enabled, g.Holding, g.SecondsRemaining), "Time left in low-profile hold."),
+                    new("Touches", g.Enabled ? g.RecentTouchCount.ToString() : "Off", "Recent external thermostat changes."),
+                    new("Commands", g.Enabled ? g.RecentCommandCount.ToString() : "Off", "Recent helper setpoint commands."),
+                ], busyTone: GuardTone.Holding);
+            }),
+
+        new GuardInfo(
             "Natural Cadence", GuardCategory.WallTouch,
             "Picks a variable future slot for safe nudges so they never land at identical, robotic times.",
             "Recent wall-touch pressure and recent command pressure.",
