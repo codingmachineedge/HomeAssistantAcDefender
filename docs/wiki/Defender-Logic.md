@@ -28,8 +28,9 @@ Every cycle performs these steps:
 24. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
 25. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
 26. Apply fan energy saver when enabled and near target.
-27. Correct the real thermostat setpoint when needed.
-28. Update the next-action status label.
+27. Respect Repeat Quiet if the exact command about to be sent matches the last defender setpoint.
+28. Correct the real thermostat setpoint when needed.
+29. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -94,6 +95,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
 - Uses Touch Intent to classify recent wall choices and extend safe grace only when warmer intent is clear.
 - Uses Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
+- Uses Repeat Quiet so identical follow-up commands wait longer when recent wall-touch or command pressure is high.
 - Uses Sensor Rhythm so safe corrections can wait until just after the learned Home Assistant reading beat.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
@@ -242,6 +244,24 @@ targetTemperature + setpointEchoSafetyBandCelsius
 ```
 
 If Home Assistant reports the pending setpoint, the echo clears. If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the echo safe band, the hold steps aside immediately.
+
+## Repeat Quiet
+
+Repeat Quiet checks the final real setpoint immediately before a Home Assistant command is sent. If that setpoint matches the last defender setpoint, the command can wait until:
+
+```text
+lastDefenderCommandAt + repeatCommandMinimumWaitSeconds + pressure extra
+```
+
+The pressure extra rises from recent wall-touch pressure and recent defender command pressure. This makes identical follow-up commands slow down when the thermostat has been touched frequently.
+
+Repeat Quiet does not hold a different setpoint, so the one-degree step-down path can continue toward the website target. It only waits while the room is inside:
+
+```text
+targetTemperature + repeatCommandSafetyBandCelsius
+```
+
+If the room crosses that band, the normal safety override is reached, or upstairs heat bypasses quiet timing, Repeat Quiet clears immediately and the real correction path continues.
 
 ## Sensor Rhythm
 

@@ -91,6 +91,10 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Setpoint echo: waits for Home Assistant to report the last helper setpoint before another safe command.
 - Echo wait seconds: how long to wait for that Home Assistant confirmation.
 - Echo safe band C: extra warmth allowed before setpoint echo stops waiting.
+- Repeat quiet: waits before sending the same thermostat number again while the room is safe.
+- Repeat wait seconds: smallest wait before an identical follow-up command.
+- Repeat pressure seconds: extra wait added when wall touches or helper commands pile up.
+- Repeat safe band C: extra warmth allowed before repeat quiet stops waiting.
 - Sensor rhythm: waits for a normal Home Assistant sensor beat before safe nudges.
 - Rhythm samples: real Home Assistant readings needed before the beat is trusted.
 - Rhythm window minutes: how long reading timestamps stay useful.
