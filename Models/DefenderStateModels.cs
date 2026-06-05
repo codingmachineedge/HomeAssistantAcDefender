@@ -15,6 +15,7 @@ public sealed record DefenderSnapshot(
     string NextAction,
     DateTimeOffset? NextActionAt,
     int CooldownSeconds,
+    CoolModeRestoreSnapshot CoolModeRestore,
     NaturalRecoverySnapshot NaturalRecovery,
     ConflictQuietSnapshot ConflictQuiet,
     ManualComfortGraceSnapshot ManualComfortGrace,
@@ -72,6 +73,13 @@ public sealed record PresenceReading(
     string Name,
     string State,
     bool IsHome);
+
+public sealed record CoolModeRestoreSnapshot(
+    bool Enabled,
+    bool Waiting,
+    int SecondsRemaining,
+    string Status,
+    DateTimeOffset? DueAt);
 
 public sealed record NaturalRecoverySnapshot(
     bool Enabled,
@@ -151,6 +159,14 @@ public sealed class DefenderSettings
     public int MaxCooldownSeconds { get; set; } = 600;
 
     public int TouchFrequencyWindowMinutes { get; set; } = 30;
+
+    public bool CoolModeRestoreDelayEnabled { get; set; } = true;
+
+    public int CoolModeRestoreMinimumDelaySeconds { get; set; } = 8;
+
+    public int CoolModeRestoreMaximumDelaySeconds { get; set; } = 60;
+
+    public double CoolModeRestoreComfortBandCelsius { get; set; } = 0.6;
 
     public bool ConflictQuietModeEnabled { get; set; } = true;
 

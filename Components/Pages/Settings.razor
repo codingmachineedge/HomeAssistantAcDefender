@@ -66,6 +66,48 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_coolModeRestoreDelayEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _coolModeRestoreDelayEnabled = v))"
+                           Label="Delay cool restore"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Waits a little before switching mode back to cool.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_coolModeRestoreMinimumDelaySeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _coolModeRestoreMinimumDelaySeconds = value))"
+                                         Label="Min mode wait seconds"
+                                         HelperText="Shortest wait before cool returns."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="3600" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_coolModeRestoreMaximumDelaySeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _coolModeRestoreMaximumDelaySeconds = value))"
+                                         Label="Max mode wait seconds"
+                                         HelperText="Longest wait before cool returns."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="7200" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="double"
+                                         Value="_coolModeRestoreComfortBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _coolModeRestoreComfortBandCelsius = value))"
+                                         Label="Mode safe band C"
+                                         HelperText="Skip wait if room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_conflictQuietModeEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _conflictQuietModeEnabled = v))"
                            Label="Conflict quiet mode"
@@ -638,6 +680,10 @@
     private int _baseCooldownSeconds = 45;
     private int _maxCooldownSeconds = 600;
     private int _touchFrequencyWindowMinutes = 30;
+    private bool _coolModeRestoreDelayEnabled = true;
+    private int _coolModeRestoreMinimumDelaySeconds = 8;
+    private int _coolModeRestoreMaximumDelaySeconds = 60;
+    private double _coolModeRestoreComfortBandCelsius = 0.6;
     private bool _conflictQuietModeEnabled = true;
     private int _conflictQuietTouchThreshold = 4;
     private int _conflictQuietMinutes = 35;
@@ -698,6 +744,10 @@
         _baseCooldownSeconds = settings.BaseCooldownSeconds;
         _maxCooldownSeconds = settings.MaxCooldownSeconds;
         _touchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes;
+        _coolModeRestoreDelayEnabled = settings.CoolModeRestoreDelayEnabled;
+        _coolModeRestoreMinimumDelaySeconds = settings.CoolModeRestoreMinimumDelaySeconds;
+        _coolModeRestoreMaximumDelaySeconds = settings.CoolModeRestoreMaximumDelaySeconds;
+        _coolModeRestoreComfortBandCelsius = settings.CoolModeRestoreComfortBandCelsius;
         _conflictQuietModeEnabled = settings.ConflictQuietModeEnabled;
         _conflictQuietTouchThreshold = settings.ConflictQuietTouchThreshold;
         _conflictQuietMinutes = settings.ConflictQuietMinutes;
@@ -805,6 +855,10 @@
             _baseCooldownSeconds,
             _maxCooldownSeconds,
             _touchFrequencyWindowMinutes,
+            _coolModeRestoreDelayEnabled,
+            _coolModeRestoreMinimumDelaySeconds,
+            _coolModeRestoreMaximumDelaySeconds,
+            _coolModeRestoreComfortBandCelsius,
             _conflictQuietModeEnabled,
             _conflictQuietTouchThreshold,
             _conflictQuietMinutes,

@@ -75,6 +75,9 @@
                 <MudAlert Class="mt-2" Severity="@NaturalSeverity" Variant="Variant.Outlined">@NaturalRecoveryText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if comfort sync is waiting, nudging, or skipping quiet waits because it is too warm.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@CoolModeRestoreSeverity" Variant="Variant.Outlined">@CoolModeRestoreText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if cool mode is waiting before it comes back.</MudText>
+
                 <MudAlert Class="mt-2" Severity="@ConflictQuietSeverity" Variant="Variant.Outlined">@ConflictQuietText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if repeated wall touches made the helper stand down.</MudText>
 
@@ -147,6 +150,7 @@
                     <MetricCard Label="Quiet level" Value="@QuietLevelText" Help="How soft comfort sync is being." />
                     <MetricCard Label="Quiet wait" Value="@NaturalWaitText" Help="How long comfort sync is waiting." />
                     <MetricCard Label="Touch count" Value="@RecentTouchText" Help="Wall thermostat changes counted right now." />
+                    <MetricCard Label="Cool restore" Value="@CoolModeRestoreWaitText" Help="How long before cool mode comes back." />
                     <MetricCard Label="Nudge size" Value="@NaturalStepText" Help="The biggest gentle thermostat move right now." />
                     <MetricCard Label="Hold chance" Value="@HoldChanceText" Help="Chance it waits one more beat." />
                     <MetricCard Label="Command gap" Value="@CommandGapText" Help="Space between automatic nudges." />
@@ -265,6 +269,8 @@
     private string CooldownText => Snapshot?.CooldownSeconds > 0 ? $"{Snapshot.CooldownSeconds}s" : "Ready";
     private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
     private string NaturalRecoveryText => Snapshot?.NaturalRecovery.Status ?? "Comfort sync is waiting for status.";
+    private string CoolModeRestoreText => Snapshot?.CoolModeRestore.Status ?? "Cool mode restore is watching.";
+    private string CoolModeRestoreWaitText => Snapshot?.CoolModeRestore.Waiting == true ? $"{Snapshot.CoolModeRestore.SecondsRemaining}s" : "Ready";
     private string QuietLevelText => Snapshot?.NaturalRecovery.Enabled == true ? Snapshot.NaturalRecovery.QuietLevel : "Off";
     private string NaturalWaitText => Snapshot?.NaturalRecovery.Waiting == true ? $"{Snapshot.NaturalRecovery.SecondsRemaining}s" : "Ready";
     private string RecentTouchText => (Snapshot?.NaturalRecovery.RecentTouchCount ?? 0).ToString();
@@ -298,6 +304,9 @@
     private Severity NaturalSeverity => Snapshot?.NaturalRecovery.Waiting == true
         ? Severity.Warning
         : Snapshot?.NaturalRecovery.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity CoolModeRestoreSeverity => Snapshot?.CoolModeRestore.Waiting == true
+        ? Severity.Warning
+        : Snapshot?.CoolModeRestore.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity ConflictQuietSeverity => Snapshot?.ConflictQuiet.Active == true
         ? Severity.Warning
         : Snapshot?.ConflictQuiet.Enabled == true ? Severity.Info : Severity.Normal;

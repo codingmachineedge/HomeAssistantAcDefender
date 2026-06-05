@@ -38,8 +38,16 @@ public sealed class AcDefenderService
 
             if (!string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
             {
-                stateStore.SetNextAction("Thermostat mode changed away from cool; restoring cool mode.", DateTimeOffset.UtcNow);
+                var now = DateTimeOffset.UtcNow;
+                if (stateStore.TryDelayCoolModeRestore(reading, now, out var restoreAt, out var restoreMessage))
+                {
+                    stateStore.SetNextAction(restoreMessage, restoreAt);
+                    return;
+                }
+
+                stateStore.SetNextAction("Cool mode restore delay finished; restoring cool mode now.", now);
                 await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "cool", cancellationToken);
+                stateStore.RecordCoolModeRestoreCommand(reading.HvacMode);
                 stateStore.RecordCommand($"Home Assistant {reading.EntityId} mode restored to cool.");
                 return;
             }

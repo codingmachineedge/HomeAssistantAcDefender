@@ -9,6 +9,10 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Base cooldown seconds: minimum cooldown after a manual thermostat change.
 - Max cooldown seconds: cap for repeated manual changes.
 - Touch window minutes: time window used for frequency-based cooldown.
+- Delay cool restore: waits briefly before switching HVAC mode back to cool when the room is still safe.
+- Min mode wait seconds: shortest wait before restoring cool mode.
+- Max mode wait seconds: longest wait before restoring cool mode.
+- Mode safe band C: extra warmth allowed above target before cool mode restore stops waiting.
 - Conflict quiet mode: stands down when wall touches keep happening.
 - Touches to stand down: how many recent wall changes trigger the stand-down.
 - Stand-down minutes: how long to stop fighting back while the room is still safe.

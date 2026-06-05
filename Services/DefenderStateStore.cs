@@ -85,6 +85,13 @@ public sealed class DefenderStateStore
             state.Settings.BaseCooldownSeconds = Math.Clamp(request.BaseCooldownSeconds, 0, 3600);
             state.Settings.MaxCooldownSeconds = Math.Clamp(request.MaxCooldownSeconds, 0, 7200);
             state.Settings.TouchFrequencyWindowMinutes = Math.Clamp(request.TouchFrequencyWindowMinutes, 1, 1440);
+            state.Settings.CoolModeRestoreDelayEnabled = request.CoolModeRestoreDelayEnabled;
+            state.Settings.CoolModeRestoreMinimumDelaySeconds = Math.Clamp(request.CoolModeRestoreMinimumDelaySeconds, 0, 3600);
+            state.Settings.CoolModeRestoreMaximumDelaySeconds = Math.Clamp(
+                request.CoolModeRestoreMaximumDelaySeconds,
+                state.Settings.CoolModeRestoreMinimumDelaySeconds,
+                7200);
+            state.Settings.CoolModeRestoreComfortBandCelsius = Math.Round(Math.Clamp(request.CoolModeRestoreComfortBandCelsius, 0.1, 5.0), 1);
             state.Settings.ConflictQuietModeEnabled = request.ConflictQuietModeEnabled;
             state.Settings.ConflictQuietTouchThreshold = Math.Clamp(request.ConflictQuietTouchThreshold, 2, 20);
             state.Settings.ConflictQuietMinutes = Math.Clamp(request.ConflictQuietMinutes, 1, 240);
@@ -225,6 +232,15 @@ public sealed class DefenderStateStore
                 UpdatedAt = now
             };
             state.LastObservedSetPointCelsius = reading.SetPointCelsius;
+            if (string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+            {
+                state.CoolModeRestoreDueAt = null;
+                state.CoolModeRestoreCommandedAt = null;
+                state.CoolModeRestoreStatus = state.Settings.CoolModeRestoreDelayEnabled
+                    ? "Cool mode is lined up."
+                    : "Cool mode restore delay is off.";
+            }
+
             state.LastError = null;
             state.UpdatedAt = now;
             SaveState();
@@ -284,6 +300,82 @@ public sealed class DefenderStateStore
         {
             cooldownUntil = state.CooldownUntil ?? DateTimeOffset.MinValue;
             return state.CooldownUntil is { } until && until > now;
+        }
+    }
+
+    public bool TryDelayCoolModeRestore(
+        ThermostatReading reading,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+            {
+                state.CoolModeRestoreDueAt = null;
+                state.CoolModeRestoreCommandedAt = null;
+                state.CoolModeRestoreStatus = "Cool mode is lined up.";
+                SaveState();
+                return true;
+            }
+
+            if (state.CoolModeRestoreCommandedAt is { } commandedAt)
+            {
+                var commandGraceUntil = commandedAt.AddSeconds(Math.Max(15, options.CommandGraceSeconds));
+                if (commandGraceUntil > now)
+                {
+                    waitUntil = commandGraceUntil;
+                    message = $"Cool mode restore was sent; waiting for Home Assistant confirmation until {commandGraceUntil.ToLocalTime():HH:mm:ss}.";
+                    state.CoolModeRestoreStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                state.CoolModeRestoreCommandedAt = null;
+            }
+
+            if (!state.Settings.CoolModeRestoreDelayEnabled)
+            {
+                state.CoolModeRestoreDueAt = null;
+                state.CoolModeRestoreStatus = "Cool mode restore delay is off.";
+                SaveState();
+                return false;
+            }
+
+            if (ShouldBypassCoolModeRestoreDelay(reading))
+            {
+                state.CoolModeRestoreDueAt = null;
+                state.CoolModeRestoreStatus = "Room comfort needs cool mode now, so restore delay is stepping aside.";
+                SaveState();
+                return false;
+            }
+
+            if (state.CoolModeRestoreDueAt is not { } dueAt || dueAt <= now)
+            {
+                dueAt = now.AddSeconds(CalculateCoolModeRestoreDelaySeconds());
+                state.CoolModeRestoreDueAt = dueAt;
+            }
+
+            waitUntil = dueAt;
+            message = $"Thermostat mode is {reading.HvacMode}; restoring cool mode at {dueAt.ToLocalTime():HH:mm:ss} unless comfort needs it sooner.";
+            state.CoolModeRestoreStatus = message;
+            SaveState();
+            return dueAt > now;
+        }
+    }
+
+    public void RecordCoolModeRestoreCommand(string previousMode)
+    {
+        lock (gate)
+        {
+            state.CoolModeRestoreDueAt = null;
+            state.CoolModeRestoreCommandedAt = DateTimeOffset.UtcNow;
+            state.CoolModeRestoreStatus = $"Cool mode restore sent from {previousMode}.";
+            SaveState();
         }
     }
 
@@ -1021,6 +1113,15 @@ public sealed class DefenderStateStore
             : random.Next(plan.MinimumDelaySeconds, plan.MaximumDelaySeconds + 1);
     }
 
+    private int CalculateCoolModeRestoreDelaySeconds()
+    {
+        var minDelay = Math.Max(0, state.Settings.CoolModeRestoreMinimumDelaySeconds);
+        var maxDelay = Math.Max(minDelay, state.Settings.CoolModeRestoreMaximumDelaySeconds);
+        return maxDelay == minDelay
+            ? minDelay
+            : random.Next(minDelay, maxDelay + 1);
+    }
+
     private int CalculateNaturalHoldSeconds()
     {
         if (!state.Settings.NaturalRecoveryEnabled)
@@ -1125,6 +1226,24 @@ public sealed class DefenderStateStore
         return reading.CurrentTemperatureCelsius >= state.TargetTemperatureCelsius + overrideMargin;
     }
 
+    private bool ShouldBypassCoolModeRestoreDelay(ThermostatReading reading)
+    {
+        if (ShouldBypassNaturalRecovery(reading))
+        {
+            return true;
+        }
+
+        var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.CoolModeRestoreComfortBandCelsius;
+        if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+        {
+            return true;
+        }
+
+        return state.UpstairsTooHot
+            && state.HottestUpstairsTemperatureCelsius is { } hottest
+            && hottest >= state.Settings.UpstairsMaxComfortCelsius + 1.0;
+    }
+
     private void PruneTouchTimes(DateTimeOffset now)
     {
         var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.TouchFrequencyWindowMinutes));
@@ -1188,6 +1307,12 @@ public sealed class DefenderStateStore
             saved.Settings.MinimumCommandGapSeconds,
             saved.Settings.MaximumAdaptiveCommandGapSeconds);
         saved.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
+        saved.Settings.CoolModeRestoreMinimumDelaySeconds = Math.Clamp(saved.Settings.CoolModeRestoreMinimumDelaySeconds, 0, 3600);
+        saved.Settings.CoolModeRestoreMaximumDelaySeconds = Math.Clamp(
+            saved.Settings.CoolModeRestoreMaximumDelaySeconds,
+            saved.Settings.CoolModeRestoreMinimumDelaySeconds,
+            7200);
+        saved.Settings.CoolModeRestoreComfortBandCelsius = Math.Round(Math.Clamp(saved.Settings.CoolModeRestoreComfortBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ConflictQuietTouchThreshold = Math.Clamp(saved.Settings.ConflictQuietTouchThreshold, 2, 20);
         saved.Settings.ConflictQuietMinutes = Math.Clamp(saved.Settings.ConflictQuietMinutes, 1, 240);
         saved.Settings.ConflictQuietComfortBandCelsius = Math.Round(Math.Clamp(saved.Settings.ConflictQuietComfortBandCelsius, 0.1, 5.0), 1);
@@ -1210,6 +1335,9 @@ public sealed class DefenderStateStore
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
+        saved.CoolModeRestoreStatus = string.IsNullOrWhiteSpace(saved.CoolModeRestoreStatus)
+            ? "Cool mode restore is watching."
+            : saved.CoolModeRestoreStatus;
         saved.ConflictQuietStatus = string.IsNullOrWhiteSpace(saved.ConflictQuietStatus)
             ? "Conflict quiet is watching."
             : saved.ConflictQuietStatus;
@@ -1240,6 +1368,9 @@ public sealed class DefenderStateStore
             ? (int)Math.Ceiling((holdUntil - now).TotalSeconds)
             : 0;
         var naturalSeconds = Math.Max(cooldownSeconds, holdSeconds);
+        var coolModeRestoreSeconds = state.CoolModeRestoreDueAt is { } coolModeDueAt && coolModeDueAt > now
+            ? (int)Math.Ceiling((coolModeDueAt - now).TotalSeconds)
+            : 0;
         var conflictQuietSeconds = state.ConflictQuietUntil is { } conflictUntil && conflictUntil > now
             ? (int)Math.Ceiling((conflictUntil - now).TotalSeconds)
             : 0;
@@ -1270,6 +1401,14 @@ public sealed class DefenderStateStore
             state.NextAction,
             state.NextActionAt,
             cooldownSeconds,
+            new CoolModeRestoreSnapshot(
+                state.Settings.CoolModeRestoreDelayEnabled,
+                coolModeRestoreSeconds > 0,
+                coolModeRestoreSeconds,
+                string.IsNullOrWhiteSpace(state.CoolModeRestoreStatus)
+                    ? "Cool mode restore is watching."
+                    : state.CoolModeRestoreStatus,
+                coolModeRestoreSeconds > 0 ? state.CoolModeRestoreDueAt : null),
             new NaturalRecoverySnapshot(
                 state.Settings.NaturalRecoveryEnabled,
                 naturalSeconds > 0,
@@ -1362,6 +1501,9 @@ public sealed class DefenderStateStore
         state.NaturalHoldUntil = null;
         state.NaturalHoldCount = 0;
         state.NaturalRecoveryStatus = status;
+        state.CoolModeRestoreDueAt = null;
+        state.CoolModeRestoreCommandedAt = null;
+        state.CoolModeRestoreStatus = "Cool mode restore is watching.";
         state.ConflictQuietUntil = null;
         state.ConflictQuietStatus = "Conflict quiet is watching.";
         ClearManualComfortGrace();
@@ -1474,6 +1616,10 @@ public sealed class DefenderStateStore
             BaseCooldownSeconds = settings.BaseCooldownSeconds,
             MaxCooldownSeconds = settings.MaxCooldownSeconds,
             TouchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes,
+            CoolModeRestoreDelayEnabled = settings.CoolModeRestoreDelayEnabled,
+            CoolModeRestoreMinimumDelaySeconds = settings.CoolModeRestoreMinimumDelaySeconds,
+            CoolModeRestoreMaximumDelaySeconds = settings.CoolModeRestoreMaximumDelaySeconds,
+            CoolModeRestoreComfortBandCelsius = settings.CoolModeRestoreComfortBandCelsius,
             ConflictQuietModeEnabled = settings.ConflictQuietModeEnabled,
             ConflictQuietTouchThreshold = settings.ConflictQuietTouchThreshold,
             ConflictQuietMinutes = settings.ConflictQuietMinutes,
@@ -1602,6 +1748,12 @@ public sealed class DefenderStateStore
         public DateTimeOffset? LastDefenderCommandAt { get; set; }
 
         public string NaturalRecoveryStatus { get; set; } = "Comfort sync is ready.";
+
+        public DateTimeOffset? CoolModeRestoreDueAt { get; set; }
+
+        public DateTimeOffset? CoolModeRestoreCommandedAt { get; set; }
+
+        public string CoolModeRestoreStatus { get; set; } = "Cool mode restore is watching.";
 
         public DateTimeOffset? ConflictQuietUntil { get; set; }
 

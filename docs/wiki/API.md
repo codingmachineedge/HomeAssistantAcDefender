@@ -13,6 +13,7 @@ GET /api/status/stream
 The status snapshot includes:
 
 - `cooldownSeconds`: remaining dynamic/manual-touch cooldown.
+- `coolModeRestore`: cool-mode restore delay status, remaining seconds, and due time.
 - `naturalRecovery`: quiet recovery status, quiet level, wait seconds, recent touch count, base/effective nudge size, base/effective hold chance, and effective command gap.
 - `conflictQuiet`: repeated-touch stand-down status, remaining seconds, trigger touch count, comfort band, and expiry time.
 - `manualComfortGrace`: wall-change grace status, remaining seconds, comfort band, and expiry time.

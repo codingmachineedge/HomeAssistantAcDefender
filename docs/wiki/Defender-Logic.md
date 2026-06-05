@@ -4,7 +4,7 @@ Every cycle performs these steps:
 
 1. Read weather and outdoor temperature from Home Assistant.
 2. Read the real dining room climate entity.
-3. Restore HVAC mode to `cool` immediately if Home Assistant reports another mode, even when temperature corrections are paused.
+3. Restore HVAC mode to `cool` when Home Assistant reports another mode, using the cool-mode restore delay only while comfort is still safe.
 4. Detect whether the thermostat setpoint changed outside the website.
 5. Read upstairs temperature sensors and presence entities.
 6. Apply the active schedule target when scheduling is enabled.
@@ -26,7 +26,19 @@ When room temperature is above target, a new defender correction starts by setti
 
 When room temperature reaches target, the defender returns the thermostat setpoint to the exact website target.
 
-If the thermostat mode is changed to anything other than `cool`, the defender sends `climate.set_hvac_mode` with `hvac_mode: cool` before pause, schedule, weather, cooldown, or setpoint logic continues.
+If the thermostat mode is changed to anything other than `cool`, the defender can wait a short configured delay before sending `climate.set_hvac_mode` with `hvac_mode: cool`. The delay is skipped when the room is above the mode safe band, the normal safety override is crossed, or severe upstairs heat is active. Paused defender state still restores `cool`.
+
+## Cool Mode Restore
+
+Cool Mode Restore keeps the hard rule that the thermostat must return to `cool`, but avoids doing it at the exact same instant every time when the room is still safe.
+
+It waits between the configured minimum and maximum seconds only while:
+
+```text
+currentRoomTemperature <= targetTemperature + coolModeRestoreComfortBandCelsius
+```
+
+After a restore command is sent, the worker waits through the command grace window before sending another mode command. That prevents repeated service calls while Home Assistant is still confirming the first restore.
 
 ## Cooldown
 

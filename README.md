@@ -9,7 +9,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Shows the real dining room thermostat state from Home Assistant.
 - Generates or accepts a target temperature from the website.
 - Checks the thermostat 24/7 on a short polling interval.
-- Restores the thermostat to `cool` if anyone changes HVAC mode away from cooling, even while temperature corrections are paused.
+- Restores the thermostat to `cool` if anyone changes HVAC mode away from cooling, with an optional short delay while the room is still safe.
 - Detects when someone changes the thermostat outside the website.
 - Logs external thermostat touches with date, time, previous setpoint, new setpoint, room temperature, outdoor temperature, and weather condition when Home Assistant exposes those values.
 - Uses a dynamic cooldown after manual thermostat touches so corrections do not happen instantly every time.
@@ -57,7 +57,7 @@ Every cycle:
 
 1. Pull weather/outdoor temperature.
 2. Pull the real dining room climate entity.
-3. Restore HVAC mode to `cool` immediately if another mode is selected, even when the temperature defender is paused.
+3. Restore HVAC mode to `cool` if another mode is selected, using the cool-mode restore delay only while comfort is still safe.
 4. Detect external setpoint changes by comparing the latest Home Assistant setpoint to the previously observed setpoint.
 5. Ignore setpoint changes that match commands recently sent by the app.
 6. Apply active schedule target if schedule is enabled.
@@ -73,6 +73,18 @@ Every cycle:
 16. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
+
+## Cool Mode Restore
+
+Cool Mode Restore keeps the rule that HVAC mode must return to `cool`, but can wait between `CoolModeRestoreMinimumDelaySeconds` and `CoolModeRestoreMaximumDelaySeconds` so the change does not always happen instantly.
+
+It only waits while the room is still safe:
+
+```text
+currentRoomTemperature <= targetTemperature + CoolModeRestoreComfortBandCelsius
+```
+
+If the room gets warmer than that, upstairs comfort becomes severe, or the safety override is crossed, it skips the wait and restores `cool` right away.
 
 ## Dynamic Cooldown
 
