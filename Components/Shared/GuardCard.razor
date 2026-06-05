@@ -1,4 +1,4 @@
-@* One defender guard: live state chip + metrics, with an inline "How this works" explainer. *@
+@* One defender guard: live state chip + plain explainer + extra-specific live field report. *@
 <MudPaper Class="@($"guard-card guard-card--{Tone.Css()}")" Elevation="0">
     <div class="guard-card__head">
         <div class="guard-card__title">
@@ -25,13 +25,25 @@
         </div>
     }
 
-    <MudButton Class="guard-card__more"
-               Variant="Variant.Text"
-               Size="Size.Small"
-               OnClick="@(() => _open = !_open)"
-               EndIcon="@(_open ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
-        How this works
-    </MudButton>
+    <div class="guard-card__actions">
+        <MudButton Class="guard-card__more"
+                   Variant="Variant.Text"
+                   Size="Size.Small"
+                   OnClick="@(() => _open = !_open)"
+                   EndIcon="@(_open ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
+            How this works
+        </MudButton>
+
+        <MudButton Class="guard-card__more"
+                   Variant="Variant.Text"
+                   Color="Color.Info"
+                   Size="Size.Small"
+                   OnClick="@(() => _detailOpen = !_detailOpen)"
+                   StartIcon="@Icons.Material.Filled.FactCheck"
+                   EndIcon="@(_detailOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
+            Extra specific field report
+        </MudButton>
+    </div>
 
     <MudCollapse Expanded="_open">
         <div class="guard-help">
@@ -45,6 +57,78 @@
             }
         </div>
     </MudCollapse>
+
+    <MudCollapse Expanded="_detailOpen">
+        <div class="guard-detail">
+            <div class="guard-detail__row guard-detail__row--next">
+                <div class="guard-detail__label">
+                    <MudIcon Icon="@Icons.Material.Filled.NearMe" Size="Size.Small" />
+                    Next step
+                </div>
+                <div class="guard-detail__text">@NextStepText</div>
+            </div>
+
+            <div class="guard-detail__row">
+                <div class="guard-detail__label">
+                    <MudIcon Icon="@Icons.Material.Filled.Bolt" Size="Size.Small" />
+                    What triggered this card now
+                </div>
+                <div class="guard-detail__text">@TriggeredByText</div>
+            </div>
+
+            <div class="guard-detail__row">
+                <div class="guard-detail__label">
+                    <MudIcon Icon="@Icons.Material.Filled.Flag" Size="Size.Small" />
+                    What would trigger it next
+                </div>
+                <div class="guard-detail__text">@FutureTriggerText</div>
+            </div>
+
+            <div class="guard-detail__row">
+                <div class="guard-detail__label">
+                    <MudIcon Icon="@Icons.Material.Filled.Route" Size="Size.Small" />
+                    Current defender next action
+                </div>
+                <div class="guard-detail__text">@GlobalNextActionText</div>
+            </div>
+
+            <div class="guard-detail__algorithm">
+                <div class="guard-detail__label">
+                    <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" />
+                    Exact algorithm path
+                </div>
+                <ol>
+                    @foreach (var step in AlgorithmSteps)
+                    {
+                        <li>@step</li>
+                    }
+                </ol>
+            </div>
+
+            @if (view.Metrics.Count > 0)
+            {
+                <div class="guard-detail__evidence">
+                    <div class="guard-detail__label">
+                        <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Small" />
+                        Live evidence on this card
+                    </div>
+                    <div class="guard-detail__metrics">
+                        @foreach (var metric in view.Metrics)
+                        {
+                            <div class="guard-detail-metric">
+                                <span>@metric.Label</span>
+                                <strong>@metric.Value</strong>
+                                @if (!string.IsNullOrWhiteSpace(metric.Help))
+                                {
+                                    <small>@metric.Help</small>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </MudCollapse>
 </MudPaper>
 
 @code {
@@ -52,8 +136,67 @@
     [Parameter, EditorRequired] public DefenderSnapshot Snapshot { get; set; } = default!;
 
     private bool _open;
+    private bool _detailOpen;
     private GuardLiveView view = default!;
     private GuardTone Tone => view.Tone;
+
+    private string NextStepText
+    {
+        get
+        {
+            if (!view.Enabled)
+            {
+                return $"{Info.Name} is off. Next step: do nothing until its setting is enabled again.";
+            }
+
+            if (view.Busy)
+            {
+                return $"{Info.Name} is {view.StateLabel.ToLowerInvariant()}. Next step: keep enforcing this guard's current result, then let the defender continue once the live condition clears or the timer expires.";
+            }
+
+            return $"{Info.Name} is watching only. Next step: let the defender pass through this card unless the watched readings cross this guard's trigger.";
+        }
+    }
+
+    private string TriggeredByText
+    {
+        get
+        {
+            if (!view.Enabled)
+            {
+                return "Nothing triggered it. The guard is disabled by settings.";
+            }
+
+            return view.Busy
+                ? $"It is active because the live snapshot says: {view.StatusText}"
+                : $"Nothing is actively triggering it right now. Current live status: {view.StatusText}";
+        }
+    }
+
+    private string FutureTriggerText =>
+        $"{Info.Name} watches {Info.Watches} It will trigger when this logic becomes true: {Info.Logic}";
+
+    private string GlobalNextActionText
+    {
+        get
+        {
+            var when = Snapshot.NextActionAt is null
+                ? string.Empty
+                : $" Planned time: {Format.ShortTime(Snapshot.NextActionAt)}.";
+            return $"{Snapshot.NextAction}{when}";
+        }
+    }
+
+    private IReadOnlyList<string> AlgorithmSteps =>
+    [
+        $"Read real Home Assistant data: {Info.Watches}",
+        $"Compare the live readings to this rule: {Info.Logic}",
+        view.Busy
+            ? $"Because this card is currently {view.StateLabel.ToLowerInvariant()}, apply this action: {Info.Output}"
+            : $"Because this card is not currently busy, do not block the cycle here and allow the next guard to evaluate.",
+        $"If it triggers, the card's action is: {Info.Output}",
+        "If room comfort or a higher-priority safety guard requires direct cooling, the subtle timing guard steps aside and the defender continues toward the real thermostat command."
+    ];
 
     protected override void OnParametersSet()
     {
