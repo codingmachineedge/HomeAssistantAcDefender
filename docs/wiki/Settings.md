@@ -34,6 +34,11 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Max holds: maximum number of extra pauses before a correction must continue.
 - Command gap seconds: minimum time between automatic setpoint commands.
 - Too-hot override C: if the room is this far above target, skip quiet waits and prioritize comfort.
+- Natural walkback: uses smaller safe-band nudges when wall touches keep happening.
+- Walkback touches: recent wall touches needed before walkback starts.
+- Walkback step C: normal nudge size while walkback is active.
+- Tiny variation C: small random change so walkback nudges are not identical.
+- Walkback safe band C: extra warmth allowed before walkback stops being subtle.
 - Respect wall changes: leaves a wall thermostat change alone while the room is still okay.
 - Grace minutes: maximum time that wall change can rest.
 - Grace room band C: extra warmth allowed above target before the defender resumes.

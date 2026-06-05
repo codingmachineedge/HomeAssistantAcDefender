@@ -23,6 +23,8 @@ The app records setpoints it commands itself and treats matching Home Assistant 
 
 Comfort Sync is implemented inside `DefenderStateStore` and consumed by `AcDefenderService`. The worker still talks only to the real Home Assistant climate entity. Comfort Sync decides whether to wait, whether to hold briefly, and which real setpoint command `HomeAssistantClient` sends. Warm-room corrections are anchored to current room temperature, so a raised wall setpoint does not become the starting point for the next cooling command.
 
+Natural Walkback is part of that same state-store command selection path. It calculates touch pressure from recent external wall changes, then uses smaller safe-band setpoint steps before `AcDefenderService` sends the real Home Assistant command. It is skipped when the room needs the direct one-degree-below-room cooling correction.
+
 Adaptive quietness is also calculated in `DefenderStateStore`. It turns recent external thermostat touches into a quiet level and effective delay, hold chance, command gap, and nudge size. The dashboard displays those effective values so the UI matches the worker decision.
 
 Cool Mode Restore is stored in `DefenderStateStore` and evaluated by `AcDefenderService` before pause, schedule, weather, cooldown, or setpoint logic. It can delay the real `climate.set_hvac_mode` restore command while room temperature is inside the safe band, and it skips the delay when comfort safety requires cooling now.

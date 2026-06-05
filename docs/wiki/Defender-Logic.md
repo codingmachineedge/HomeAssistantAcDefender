@@ -16,9 +16,10 @@ Every cycle performs these steps:
 12. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
 13. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
 14. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
-15. Apply fan energy saver when enabled and near target.
-16. Correct the real thermostat setpoint when needed.
-17. Update the next-action status label.
+15. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
+16. Apply fan energy saver when enabled and near target.
+17. Correct the real thermostat setpoint when needed.
+18. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -73,6 +74,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Caps softer non-warm corrections to the configured nudge size.
 - Sends warm-room corrections to the room-temperature defender target instead of walking down from the wall setpoint.
 - Automatically changes quiet level when repeated wall touches happen, shrinking nudge size and increasing wait/hold/command spacing.
+- Uses Natural Walkback for small safe-band setpoint steps when repeated wall touches make a direct correction too obvious.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
 Quiet recovery does not fake thermostat state and does not run a simulator. It only changes the timing and selected command target sent to the real Home Assistant climate entity.
@@ -84,6 +86,18 @@ Adaptive quiet levels:
 - `Quiet`: repeated touches crossed the configured threshold.
 - `Extra quiet`: repeated touches are continuing.
 - `Softest`: maximum adaptive quietness before safety override wins.
+
+## Natural Walkback
+
+Natural Walkback is a command-shaping layer for safe-band recovery. It calculates a touch score from recent wall thermostat touches and recency. When the trigger count is reached and the real room temperature is still inside:
+
+```text
+targetTemperature + naturalWalkbackSafetyBandCelsius
+```
+
+the next safe-band correction walks toward the website target in smaller nudges. A tiny optional variation changes the nudge size so every correction is not identical.
+
+Natural Walkback never changes the warm-room defender rule. If the room needs active cooling, the command still starts one degree below current room temperature and continues down toward the website target. If the room crosses the safety band, the normal direct comfort correction path wins.
 
 ## Manual Comfort Grace
 

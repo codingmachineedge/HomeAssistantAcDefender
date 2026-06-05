@@ -128,6 +128,11 @@ public sealed class DefenderStateStore
                 state.Settings.MinimumCommandGapSeconds,
                 state.Settings.MaximumAdaptiveCommandGapSeconds);
             state.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(request.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
+            state.Settings.NaturalWalkbackEnabled = request.NaturalWalkbackEnabled;
+            state.Settings.NaturalWalkbackTriggerTouches = Math.Clamp(request.NaturalWalkbackTriggerTouches, 1, 20);
+            state.Settings.NaturalWalkbackStepCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackStepCelsius, 0.1, 5.0), 1);
+            state.Settings.NaturalWalkbackJitterCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackJitterCelsius, 0.0, 0.5), 1);
+            state.Settings.NaturalWalkbackSafetyBandCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.ManualComfortGraceEnabled = request.ManualComfortGraceEnabled;
             state.Settings.ManualComfortGraceMinutes = Math.Clamp(request.ManualComfortGraceMinutes, 0, 240);
             state.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(request.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
@@ -749,30 +754,104 @@ public sealed class DefenderStateStore
     {
         lock (gate)
         {
+            var now = DateTimeOffset.UtcNow;
+            var plan = BuildNaturalRecoveryPlan(now);
             if (!state.Settings.NaturalRecoveryEnabled
                 || bypassNaturalStep
                 || ShouldBypassNaturalRecovery(reading))
             {
+                state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
+                    ? "Natural walkback is standing aside because comfort needs a direct correction."
+                    : "Natural walkback is off.";
+                SaveState();
                 return Math.Round(expectedSetPointCelsius, 1);
             }
 
-            var plan = BuildNaturalRecoveryPlan(DateTimeOffset.UtcNow);
-            var step = Math.Max(0.1, plan.StepCelsius);
             if (reading.CurrentTemperatureCelsius > state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius
                 && reading.SetPointCelsius > expectedSetPointCelsius + 0.05)
             {
                 // CalculateExpectedSetPoint anchors warm-room defense at room temp minus the active boost.
+                state.NaturalWalkbackStatus = "Room needs cooling now, so warm-room defense uses the 1 C-below-room target.";
+                SaveState();
                 return Math.Round(expectedSetPointCelsius, 1);
             }
 
             var delta = expectedSetPointCelsius - reading.SetPointCelsius;
+            var step = CalculateNaturalWalkbackStep(reading, expectedSetPointCelsius, plan, now);
             if (Math.Abs(delta) <= step)
             {
+                state.NaturalWalkbackStatus = !state.Settings.NaturalWalkbackEnabled
+                    ? "Natural walkback is off."
+                    : Math.Abs(delta) <= 0.05
+                    ? "Natural walkback is lined up; no setpoint walk needed."
+                    : $"Natural walkback can finish with a {Math.Abs(delta):0.0} C nudge.";
+                SaveState();
                 return Math.Round(expectedSetPointCelsius, 1);
             }
 
-            return Math.Round(reading.SetPointCelsius + Math.Sign(delta) * step, 1);
+            var commandSetPoint = reading.SetPointCelsius + Math.Sign(delta) * step;
+            if (delta > 0)
+            {
+                commandSetPoint = Math.Min(commandSetPoint, expectedSetPointCelsius);
+            }
+            else
+            {
+                commandSetPoint = Math.Max(commandSetPoint, expectedSetPointCelsius);
+            }
+
+            commandSetPoint = Math.Round(commandSetPoint, 1);
+            if (Math.Abs(commandSetPoint - reading.SetPointCelsius) <= 0.05)
+            {
+                commandSetPoint = Math.Round(reading.SetPointCelsius + Math.Sign(delta) * 0.1, 1);
+            }
+
+            state.NaturalWalkbackStatus = $"Natural walkback is using a {Math.Abs(commandSetPoint - reading.SetPointCelsius):0.0} C nudge toward {expectedSetPointCelsius:0.0} C after {state.ExternalTouchTimes.Count} recent wall touches.";
+            SaveState();
+            return commandSetPoint;
         }
+    }
+
+    private double CalculateNaturalWalkbackStep(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        NaturalRecoveryPlan plan,
+        DateTimeOffset now)
+    {
+        var baseStep = Math.Round(Math.Max(0.1, plan.StepCelsius), 1);
+        if (!state.Settings.NaturalWalkbackEnabled)
+        {
+            state.NaturalWalkbackStatus = "Natural walkback is off.";
+            return baseStep;
+        }
+
+        PruneTouchTimes(now);
+        var touches = state.ExternalTouchTimes.Count;
+        var triggerTouches = Math.Max(1, state.Settings.NaturalWalkbackTriggerTouches);
+        if (touches < triggerTouches)
+        {
+            state.NaturalWalkbackStatus = $"Natural walkback is watching for repeated wall touches ({touches}/{triggerTouches}).";
+            return baseStep;
+        }
+
+        var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.NaturalWalkbackSafetyBandCelsius;
+        if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+        {
+            state.NaturalWalkbackStatus = $"Room is above {allowedRoomTemperature:0.0} C, so natural walkback lets direct comfort correction continue.";
+            return baseStep;
+        }
+
+        var walkStep = Math.Min(baseStep, Math.Round(Math.Max(0.1, state.Settings.NaturalWalkbackStepCelsius), 1));
+        var jitter = Math.Clamp(state.Settings.NaturalWalkbackJitterCelsius, 0.0, 0.5);
+        var delta = Math.Abs(expectedSetPointCelsius - reading.SetPointCelsius);
+        if (jitter > 0 && delta > walkStep + 0.05)
+        {
+            var offset = (random.NextDouble() * 2.0 - 1.0) * jitter;
+            walkStep = Math.Round(Math.Clamp(walkStep + offset, 0.1, baseStep), 1);
+        }
+
+        var score = CalculateTouchSuspicionScore(now);
+        state.NaturalWalkbackStatus = $"Natural walkback is active at score {score}/100 and will use about {walkStep:0.0} C nudges.";
+        return Math.Max(0.1, walkStep);
     }
 
     public void RecordNaturalRecoverySettled()
@@ -807,6 +886,9 @@ public sealed class DefenderStateStore
             state.ThermalMomentumStatus = state.Settings.ThermalMomentumGuardEnabled
                 ? "Thermal momentum is lined up; no hold needed."
                 : "Thermal momentum guard is off.";
+            state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
+                ? "Natural walkback is lined up; no setpoint walk needed."
+                : "Natural walkback is off.";
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
         }
@@ -1002,6 +1084,10 @@ public sealed class DefenderStateStore
         state.NaturalRecoveryStatus = state.Settings.NaturalRecoveryEnabled
             ? $"Manual thermostat touch noticed; comfort sync is in {plan.QuietLevel.ToLowerInvariant()} mode and will wait {cooldownSeconds}s before a quiet nudge."
             : "Manual thermostat touch noticed; quiet recovery is off.";
+        var touchScore = CalculateTouchSuspicionScore(now);
+        state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
+            ? $"Manual touch score is {touchScore}/100; natural walkback will use small safe-band nudges if correction is needed."
+            : "Natural walkback is off.";
 
         var audit = new ThermostatChangeAudit(
             now,
@@ -1244,6 +1330,22 @@ public sealed class DefenderStateStore
             && hottest >= state.Settings.UpstairsMaxComfortCelsius + 1.0;
     }
 
+    private int CalculateTouchSuspicionScore(DateTimeOffset now)
+    {
+        PruneTouchTimes(now);
+        if (state.ExternalTouchTimes.Count == 0)
+        {
+            return 0;
+        }
+
+        var touchScore = Math.Min(80, state.ExternalTouchTimes.Count * 18);
+        var lastTouch = state.ExternalTouchTimes.Max();
+        var minutesSinceLastTouch = Math.Max(0.0, (now - lastTouch).TotalMinutes);
+        var recencyScore = Math.Max(0, 20 - (int)Math.Round(minutesSinceLastTouch * 2.0));
+        var conflictScore = state.ConflictQuietUntil is { } until && until > now ? 15 : 0;
+        return Math.Clamp(touchScore + recencyScore + conflictScore, 0, 100);
+    }
+
     private void PruneTouchTimes(DateTimeOffset now)
     {
         var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.TouchFrequencyWindowMinutes));
@@ -1307,6 +1409,10 @@ public sealed class DefenderStateStore
             saved.Settings.MinimumCommandGapSeconds,
             saved.Settings.MaximumAdaptiveCommandGapSeconds);
         saved.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
+        saved.Settings.NaturalWalkbackTriggerTouches = Math.Clamp(saved.Settings.NaturalWalkbackTriggerTouches, 1, 20);
+        saved.Settings.NaturalWalkbackStepCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackStepCelsius, 0.1, 5.0), 1);
+        saved.Settings.NaturalWalkbackJitterCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackJitterCelsius, 0.0, 0.5), 1);
+        saved.Settings.NaturalWalkbackSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.CoolModeRestoreMinimumDelaySeconds = Math.Clamp(saved.Settings.CoolModeRestoreMinimumDelaySeconds, 0, 3600);
         saved.Settings.CoolModeRestoreMaximumDelaySeconds = Math.Clamp(
             saved.Settings.CoolModeRestoreMaximumDelaySeconds,
@@ -1335,6 +1441,9 @@ public sealed class DefenderStateStore
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
+        saved.NaturalWalkbackStatus = string.IsNullOrWhiteSpace(saved.NaturalWalkbackStatus)
+            ? "Natural walkback is watching."
+            : saved.NaturalWalkbackStatus;
         saved.CoolModeRestoreStatus = string.IsNullOrWhiteSpace(saved.CoolModeRestoreStatus)
             ? "Cool mode restore is watching."
             : saved.CoolModeRestoreStatus;
@@ -1384,6 +1493,22 @@ public sealed class DefenderStateStore
             ? (int)Math.Ceiling((momentumUntil - now).TotalSeconds)
             : 0;
         var naturalPlan = BuildNaturalRecoveryPlan(now);
+        var naturalWalkbackScore = CalculateTouchSuspicionScore(now);
+        var naturalWalkbackStep = Math.Min(
+            naturalPlan.StepCelsius,
+            Math.Round(Math.Max(0.1, state.Settings.NaturalWalkbackStepCelsius), 1));
+        var naturalWalkbackActive = state.Settings.NaturalWalkbackEnabled
+            && state.ExternalTouchTimes.Count >= Math.Max(1, state.Settings.NaturalWalkbackTriggerTouches)
+            && state.HomeAssistantThermostat is { } thermostat
+            && thermostat.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + state.Settings.NaturalWalkbackSafetyBandCelsius
+            && !ShouldBypassNaturalRecovery(new ThermostatReading(
+                state.HomeAssistantEntityId ?? string.Empty,
+                thermostat.CurrentTemperatureCelsius,
+                thermostat.SetPointCelsius,
+                thermostat.HvacMode,
+                thermostat.HvacAction,
+                thermostat.FanMode,
+                thermostat.AvailableFanModes));
         var roomTrend = BuildRoomTrend(now);
         var thermalMomentum = BuildThermalMomentum(now, state.HomeAssistantThermostat?.CurrentTemperatureCelsius);
         return new DefenderSnapshot(
@@ -1423,6 +1548,14 @@ public sealed class DefenderStateStore
                 state.Settings.NaturalHoldChancePercent,
                 naturalPlan.HoldChancePercent,
                 naturalPlan.CommandGapSeconds),
+            new NaturalWalkbackSnapshot(
+                state.Settings.NaturalWalkbackEnabled,
+                naturalWalkbackActive,
+                naturalWalkbackScore,
+                naturalWalkbackStep,
+                string.IsNullOrWhiteSpace(state.NaturalWalkbackStatus)
+                    ? "Natural walkback is watching."
+                    : state.NaturalWalkbackStatus),
             new ConflictQuietSnapshot(
                 state.Settings.ConflictQuietModeEnabled,
                 conflictQuietSeconds > 0,
@@ -1501,6 +1634,7 @@ public sealed class DefenderStateStore
         state.NaturalHoldUntil = null;
         state.NaturalHoldCount = 0;
         state.NaturalRecoveryStatus = status;
+        state.NaturalWalkbackStatus = "Natural walkback is watching.";
         state.CoolModeRestoreDueAt = null;
         state.CoolModeRestoreCommandedAt = null;
         state.CoolModeRestoreStatus = "Cool mode restore is watching.";
@@ -1638,6 +1772,11 @@ public sealed class DefenderStateStore
             MaxNaturalHolds = settings.MaxNaturalHolds,
             MinimumCommandGapSeconds = settings.MinimumCommandGapSeconds,
             NaturalSafetyOverrideCelsius = settings.NaturalSafetyOverrideCelsius,
+            NaturalWalkbackEnabled = settings.NaturalWalkbackEnabled,
+            NaturalWalkbackTriggerTouches = settings.NaturalWalkbackTriggerTouches,
+            NaturalWalkbackStepCelsius = settings.NaturalWalkbackStepCelsius,
+            NaturalWalkbackJitterCelsius = settings.NaturalWalkbackJitterCelsius,
+            NaturalWalkbackSafetyBandCelsius = settings.NaturalWalkbackSafetyBandCelsius,
             ManualComfortGraceEnabled = settings.ManualComfortGraceEnabled,
             ManualComfortGraceMinutes = settings.ManualComfortGraceMinutes,
             ManualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius,
@@ -1748,6 +1887,8 @@ public sealed class DefenderStateStore
         public DateTimeOffset? LastDefenderCommandAt { get; set; }
 
         public string NaturalRecoveryStatus { get; set; } = "Comfort sync is ready.";
+
+        public string NaturalWalkbackStatus { get; set; } = "Natural walkback is watching.";
 
         public DateTimeOffset? CoolModeRestoreDueAt { get; set; }
 

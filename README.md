@@ -18,6 +18,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Manual Comfort Grace so a wall thermostat change can be left alone while the room remains within the configured comfort band.
 - Adds Room Trend Guard so the defender keeps observing when the room is stable or cooling after a wall change, and resumes when it starts warming.
 - Adds Thermal Momentum so the defender can wait when the room is already cooling fast enough to reach target soon.
+- Adds Natural Walkback so safe-band recovery moves get smaller and less predictable after repeated wall thermostat touches.
 - Shows the next defender action in a live status label.
 - Supports a custom schedule for target temperatures.
 - Supports weather-based activation rules.
@@ -68,9 +69,10 @@ Every cycle:
 11. Respect Room Trend Guard when the room is stable or cooling after a wall change.
 12. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
 13. Apply Comfort Sync quiet recovery timing unless the room or upstairs is too warm.
-14. Optionally set fan saver mode when near target.
-15. Correct the thermostat setpoint when it does not match the defender decision.
-16. Update the real-time dashboard status.
+14. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
+15. Optionally set fan saver mode when near target.
+16. Correct the thermostat setpoint when it does not match the defender decision.
+17. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -124,6 +126,11 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `MaxNaturalHolds`: cap on those extra waits so recovery cannot stall forever.
 - `MinimumCommandGapSeconds`: minimum spacing between automatic setpoint commands.
 - `NaturalSafetyOverrideCelsius`: if room temperature is this far above target, skip quiet waits and restore comfort faster.
+- `NaturalWalkbackEnabled`: enables small safe-band walkback nudges after repeated wall touches.
+- `NaturalWalkbackTriggerTouches`: recent wall touches needed before walkback starts.
+- `NaturalWalkbackStepCelsius`: normal maximum nudge size while walkback is active.
+- `NaturalWalkbackJitterCelsius`: tiny variation added to walkback step size so nudges are not identical.
+- `NaturalWalkbackSafetyBandCelsius`: extra room warmth allowed before walkback stops being subtle.
 - `ManualComfortGraceEnabled`: lets a wall thermostat change rest while the room is still comfortable.
 - `ManualComfortGraceMinutes`: maximum time to leave that wall change alone.
 - `ManualComfortGraceBandCelsius`: extra room warmth allowed above target before the defender resumes.
@@ -145,6 +152,8 @@ Adaptive quiet levels are shown on the dashboard:
 - `Quiet`: repeated touches started, so waits and spacing begin increasing.
 - `Extra quiet`: more repeated touches, smaller nudges and higher hold chance.
 - `Softest`: maximum adaptive quietness before comfort safety overrides.
+
+Natural Walkback is the last command-shaping layer before a real setpoint command is sent. When recent wall touches reach the trigger count and the room is still inside the walkback safe band, the defender uses smaller safe-band nudges with tiny variation. If the room needs warm-room defense, it skips walkback and still commands one degree below current room temperature.
 
 Manual Comfort Grace is different from cooldown. Cooldown waits after a manual touch. Manual Comfort Grace can keep waiting after cooldown if the room is still within the comfort band. If the room rises above the band, the HVAC mode changes away from `cool`, or upstairs becomes severely hot, grace ends and the real thermostat correction path resumes.
 
