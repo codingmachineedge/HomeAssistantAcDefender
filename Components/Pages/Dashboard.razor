@@ -132,9 +132,12 @@
 
                 <MudGrid Spacing="2" Class="mt-2">
                     <MetricCard Label="Boost" Value="@Temp(Snapshot?.BoostOffsetCelsius)" Help="How much colder it may set the AC." />
+                    <MetricCard Label="Quiet level" Value="@QuietLevelText" Help="How soft comfort sync is being." />
                     <MetricCard Label="Quiet wait" Value="@NaturalWaitText" Help="How long comfort sync is waiting." />
                     <MetricCard Label="Touch count" Value="@RecentTouchText" Help="Wall thermostat changes counted right now." />
-                    <MetricCard Label="Nudge size" Value="@NaturalStepText" Help="The biggest gentle thermostat move." />
+                    <MetricCard Label="Nudge size" Value="@NaturalStepText" Help="The biggest gentle thermostat move right now." />
+                    <MetricCard Label="Hold chance" Value="@HoldChanceText" Help="Chance it waits one more beat." />
+                    <MetricCard Label="Command gap" Value="@CommandGapText" Help="Space between automatic nudges." />
                     <MetricCard Label="Updated" Value="@ShortTime(Snapshot?.HomeAssistantThermostat?.UpdatedAt)" Help="When this thermostat data was seen." />
                     <MetricCard Label="Entity" Value="@(Snapshot?.HomeAssistantEntityId ?? "--")" Help="The Home Assistant thermostat name." />
                 </MudGrid>
@@ -244,9 +247,12 @@
     private string CooldownText => Snapshot?.CooldownSeconds > 0 ? $"{Snapshot.CooldownSeconds}s" : "Ready";
     private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
     private string NaturalRecoveryText => Snapshot?.NaturalRecovery.Status ?? "Comfort sync is waiting for status.";
+    private string QuietLevelText => Snapshot?.NaturalRecovery.Enabled == true ? Snapshot.NaturalRecovery.QuietLevel : "Off";
     private string NaturalWaitText => Snapshot?.NaturalRecovery.Waiting == true ? $"{Snapshot.NaturalRecovery.SecondsRemaining}s" : "Ready";
     private string RecentTouchText => (Snapshot?.NaturalRecovery.RecentTouchCount ?? 0).ToString();
-    private string NaturalStepText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.StepCelsius:0.0} C" : "Off";
+    private string NaturalStepText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveStepCelsius:0.0} C" : "Off";
+    private string HoldChanceText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveHoldChancePercent}%" : "Off";
+    private string CommandGapText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveCommandGapSeconds}s" : "Off";
     private string LastCommandText => Snapshot?.LastCommand ?? "No commands yet";
     private string HomePresenceText => Snapshot?.Comfort.IsHome == true ? "Home" : "Away";
     private string GuardText => Snapshot?.Comfort.UpstairsTooHot == true ? "Active" : Snapshot?.Comfort.UpstairsComfortEnabled == true ? "Watching" : "Off";

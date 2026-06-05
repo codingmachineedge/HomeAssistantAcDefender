@@ -13,7 +13,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Detects when someone changes the thermostat outside the website.
 - Logs external thermostat touches with date, time, previous setpoint, new setpoint, room temperature, outdoor temperature, and weather condition when Home Assistant exposes those values.
 - Uses a dynamic cooldown after manual thermostat touches so corrections do not happen instantly every time.
-- Adds Comfort Sync quiet recovery: randomized extra waits, optional extra holds, command spacing, and small setpoint nudges so repeated wall changes do not create an obvious immediate tug-of-war.
+- Adds Comfort Sync quiet recovery: randomized extra waits, optional extra holds, command spacing, adaptive quiet levels, and small setpoint nudges so repeated wall changes do not create an obvious immediate tug-of-war.
 - Shows the next defender action in a live status label.
 - Supports a custom schedule for target temperatures.
 - Supports weather-based activation rules.
@@ -80,6 +80,12 @@ cooldown = min(maxCooldownSeconds, baseCooldownSeconds * recentTouchCount) + ran
 
 Comfort Sync is the natural-change algorithm. It only affects timing and setpoint step size for real Home Assistant commands.
 
+- `AdaptiveQuietnessEnabled`: lets repeated manual touches automatically increase quietness.
+- `AdaptiveQuietTouchThreshold`: number of recent wall touches needed before adaptive quietness starts.
+- `MaximumAdaptiveDelaySeconds`: longest random delay adaptive quietness may use.
+- `MinimumAdaptiveStepCelsius`: smallest automatic nudge size during repeated touches.
+- `MaximumAdaptiveHoldChancePercent`: highest chance of waiting one more short period.
+- `MaximumAdaptiveCommandGapSeconds`: longest spacing between automatic setpoint commands.
 - `MinimumNaturalDelaySeconds` and `MaximumNaturalDelaySeconds`: random extra wait after a manual wall thermostat change.
 - `NaturalStepCelsius`: biggest setpoint move per automatic correction.
 - `NaturalHoldChancePercent`: chance to wait one more short period after cooldown expires.
@@ -88,6 +94,14 @@ Comfort Sync is the natural-change algorithm. It only affects timing and setpoin
 - `NaturalSafetyOverrideCelsius`: if room temperature is this far above target, skip quiet waits and restore comfort faster.
 
 Example: if the room is `25.0 C`, the website target is `22.0 C`, and the thermostat was manually moved to `26.0 C`, the defender decision is `24.0 C` because it starts one degree below current room temperature. With a `1.0 C` nudge size, the first automatic command can move from `26.0 C` to `25.0 C`, then later to `24.0 C`. If Home Assistant says cooling has stopped while the room is still above target, later decisions continue down toward `22.0 C`.
+
+Adaptive quiet levels are shown on the dashboard:
+
+- `Calm`: no recent wall touches.
+- `Light`: a small number of recent wall touches, using base quiet settings.
+- `Quiet`: repeated touches started, so waits and spacing begin increasing.
+- `Extra quiet`: more repeated touches, smaller nudges and higher hold chance.
+- `Softest`: maximum adaptive quietness before comfort safety overrides.
 
 ## Schedule And Weather Rules
 

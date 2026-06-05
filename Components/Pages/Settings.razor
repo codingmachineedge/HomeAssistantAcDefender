@@ -78,7 +78,65 @@
                            Color="Color.Success" />
                 <MudText Typo="Typo.caption" Class="helper-text">On means the helper waits and nudges instead of jumping fast.</MudText>
 
+                <MudSwitch T="bool"
+                           Value="_adaptiveQuietnessEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _adaptiveQuietnessEnabled = v))"
+                           Label="Auto quiet level"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Lets repeated wall touches make the helper slower and softer by itself.</MudText>
+
                 <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_adaptiveQuietTouchThreshold"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _adaptiveQuietTouchThreshold = value))"
+                                         Label="Touches to quiet"
+                                         HelperText="How many wall changes start auto quiet."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_maximumAdaptiveDelaySeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _maximumAdaptiveDelaySeconds = value))"
+                                         Label="Max auto wait"
+                                         HelperText="Longest wait during repeated touches."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="7200" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_minimumAdaptiveStepCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _minimumAdaptiveStepCelsius = value))"
+                                         Label="Smallest auto nudge C"
+                                         HelperText="Softest move when touches keep happening."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_maximumAdaptiveHoldChancePercent"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _maximumAdaptiveHoldChancePercent = value))"
+                                         Label="Max auto hold %"
+                                         HelperText="Highest chance to wait again."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="100" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_maximumAdaptiveCommandGapSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _maximumAdaptiveCommandGapSeconds = value))"
+                                         Label="Max auto gap"
+                                         HelperText="Longest space between nudges."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="7200" />
+                    </MudItem>
                     <MudItem xs="12" sm="6">
                         <MudNumericField T="int"
                                          Value="_minimumNaturalDelaySeconds"
@@ -423,6 +481,12 @@
     private int _maxCooldownSeconds = 600;
     private int _touchFrequencyWindowMinutes = 30;
     private bool _naturalRecoveryEnabled = true;
+    private bool _adaptiveQuietnessEnabled = true;
+    private int _adaptiveQuietTouchThreshold = 2;
+    private int _maximumAdaptiveDelaySeconds = 900;
+    private double _minimumAdaptiveStepCelsius = 0.5;
+    private int _maximumAdaptiveHoldChancePercent = 75;
+    private int _maximumAdaptiveCommandGapSeconds = 180;
     private int _minimumNaturalDelaySeconds = 20;
     private int _maximumNaturalDelaySeconds = 180;
     private double _naturalStepCelsius = 1.0;
@@ -462,6 +526,12 @@
         _maxCooldownSeconds = settings.MaxCooldownSeconds;
         _touchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes;
         _naturalRecoveryEnabled = settings.NaturalRecoveryEnabled;
+        _adaptiveQuietnessEnabled = settings.AdaptiveQuietnessEnabled;
+        _adaptiveQuietTouchThreshold = settings.AdaptiveQuietTouchThreshold;
+        _maximumAdaptiveDelaySeconds = settings.MaximumAdaptiveDelaySeconds;
+        _minimumAdaptiveStepCelsius = settings.MinimumAdaptiveStepCelsius;
+        _maximumAdaptiveHoldChancePercent = settings.MaximumAdaptiveHoldChancePercent;
+        _maximumAdaptiveCommandGapSeconds = settings.MaximumAdaptiveCommandGapSeconds;
         _minimumNaturalDelaySeconds = settings.MinimumNaturalDelaySeconds;
         _maximumNaturalDelaySeconds = settings.MaximumNaturalDelaySeconds;
         _naturalStepCelsius = settings.NaturalStepCelsius;
@@ -548,6 +618,12 @@
             _maxCooldownSeconds,
             _touchFrequencyWindowMinutes,
             _naturalRecoveryEnabled,
+            _adaptiveQuietnessEnabled,
+            _adaptiveQuietTouchThreshold,
+            _maximumAdaptiveDelaySeconds,
+            _minimumAdaptiveStepCelsius,
+            _maximumAdaptiveHoldChancePercent,
+            _maximumAdaptiveCommandGapSeconds,
             _minimumNaturalDelaySeconds,
             _maximumNaturalDelaySeconds,
             _naturalStepCelsius,

@@ -22,3 +22,5 @@ The app records setpoints it commands itself and treats matching Home Assistant 
 ## Comfort Sync
 
 Comfort Sync is implemented inside `DefenderStateStore` and consumed by `AcDefenderService`. The worker still talks only to the real Home Assistant climate entity. Comfort Sync decides whether to wait, whether to hold briefly, and whether to cap a correction to a small nudge before `HomeAssistantClient` sends the command.
+
+Adaptive quietness is also calculated in `DefenderStateStore`. It turns recent external thermostat touches into a quiet level and effective delay, hold chance, command gap, and nudge size. The dashboard displays those effective values so the UI matches the worker decision.

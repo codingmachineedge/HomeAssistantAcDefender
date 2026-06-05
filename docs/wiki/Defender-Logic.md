@@ -43,9 +43,18 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Can hold briefly one or more times based on hold chance and max holds.
 - Spaces commands by the configured minimum command gap.
 - Caps each automatic setpoint change to the configured nudge size.
+- Automatically changes quiet level when repeated wall touches happen, shrinking nudge size and increasing wait/hold/command spacing.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
 Quiet recovery does not fake thermostat state and does not run a simulator. It only changes the timing and size of commands sent to the real Home Assistant climate entity.
+
+Adaptive quiet levels:
+
+- `Calm`: no recent wall touches.
+- `Light`: a small number of recent wall touches.
+- `Quiet`: repeated touches crossed the configured threshold.
+- `Extra quiet`: repeated touches are continuing.
+- `Softest`: maximum adaptive quietness before safety override wins.
 
 ## Upstairs Comfort
 

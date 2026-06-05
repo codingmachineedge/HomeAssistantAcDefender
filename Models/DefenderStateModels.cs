@@ -75,8 +75,12 @@ public sealed record NaturalRecoverySnapshot(
     int SecondsRemaining,
     int RecentTouchCount,
     string Status,
+    string QuietLevel,
     double StepCelsius,
-    int HoldChancePercent);
+    double EffectiveStepCelsius,
+    int HoldChancePercent,
+    int EffectiveHoldChancePercent,
+    int EffectiveCommandGapSeconds);
 
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,
@@ -111,6 +115,18 @@ public sealed class DefenderSettings
     public int TouchFrequencyWindowMinutes { get; set; } = 30;
 
     public bool NaturalRecoveryEnabled { get; set; } = true;
+
+    public bool AdaptiveQuietnessEnabled { get; set; } = true;
+
+    public int AdaptiveQuietTouchThreshold { get; set; } = 2;
+
+    public int MaximumAdaptiveDelaySeconds { get; set; } = 900;
+
+    public double MinimumAdaptiveStepCelsius { get; set; } = 0.5;
+
+    public int MaximumAdaptiveHoldChancePercent { get; set; } = 75;
+
+    public int MaximumAdaptiveCommandGapSeconds { get; set; } = 180;
 
     public int MinimumNaturalDelaySeconds { get; set; } = 20;
 

@@ -13,7 +13,7 @@ GET /api/status/stream
 The status snapshot includes:
 
 - `cooldownSeconds`: remaining dynamic/manual-touch cooldown.
-- `naturalRecovery`: quiet recovery status, wait seconds, recent touch count, nudge size, and hold chance.
+- `naturalRecovery`: quiet recovery status, quiet level, wait seconds, recent touch count, base/effective nudge size, base/effective hold chance, and effective command gap.
 - `thermostatChanges`: external thermostat touch audit log.
 - `comfort`: upstairs comfort and presence status.
 

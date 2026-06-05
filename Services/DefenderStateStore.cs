@@ -86,15 +86,36 @@ public sealed class DefenderStateStore
             state.Settings.MaxCooldownSeconds = Math.Clamp(request.MaxCooldownSeconds, 0, 7200);
             state.Settings.TouchFrequencyWindowMinutes = Math.Clamp(request.TouchFrequencyWindowMinutes, 1, 1440);
             state.Settings.NaturalRecoveryEnabled = request.NaturalRecoveryEnabled;
+            state.Settings.AdaptiveQuietnessEnabled = request.AdaptiveQuietnessEnabled;
+            state.Settings.AdaptiveQuietTouchThreshold = Math.Clamp(request.AdaptiveQuietTouchThreshold, 1, 20);
             state.Settings.MinimumNaturalDelaySeconds = Math.Clamp(request.MinimumNaturalDelaySeconds, 0, 3600);
             state.Settings.MaximumNaturalDelaySeconds = Math.Clamp(
                 request.MaximumNaturalDelaySeconds,
                 state.Settings.MinimumNaturalDelaySeconds,
                 7200);
+            state.Settings.MaximumAdaptiveDelaySeconds = Math.Clamp(
+                request.MaximumAdaptiveDelaySeconds,
+                state.Settings.MaximumNaturalDelaySeconds,
+                7200);
+            state.Settings.MinimumAdaptiveStepCelsius = Math.Round(Math.Clamp(request.MinimumAdaptiveStepCelsius, 0.1, 5.0), 1);
+            state.Settings.MaximumAdaptiveHoldChancePercent = Math.Clamp(request.MaximumAdaptiveHoldChancePercent, 0, 100);
+            state.Settings.MaximumAdaptiveCommandGapSeconds = Math.Clamp(request.MaximumAdaptiveCommandGapSeconds, 0, 7200);
+            state.Settings.MaximumAdaptiveDelaySeconds = Math.Max(
+                state.Settings.MaximumNaturalDelaySeconds,
+                state.Settings.MaximumAdaptiveDelaySeconds);
             state.Settings.NaturalStepCelsius = Math.Round(Math.Clamp(request.NaturalStepCelsius, 0.1, 5.0), 1);
+            state.Settings.MinimumAdaptiveStepCelsius = Math.Min(
+                state.Settings.NaturalStepCelsius,
+                state.Settings.MinimumAdaptiveStepCelsius);
             state.Settings.NaturalHoldChancePercent = Math.Clamp(request.NaturalHoldChancePercent, 0, 100);
+            state.Settings.MaximumAdaptiveHoldChancePercent = Math.Max(
+                state.Settings.NaturalHoldChancePercent,
+                state.Settings.MaximumAdaptiveHoldChancePercent);
             state.Settings.MaxNaturalHolds = Math.Clamp(request.MaxNaturalHolds, 0, 10);
             state.Settings.MinimumCommandGapSeconds = Math.Clamp(request.MinimumCommandGapSeconds, 0, 3600);
+            state.Settings.MaximumAdaptiveCommandGapSeconds = Math.Max(
+                state.Settings.MinimumCommandGapSeconds,
+                state.Settings.MaximumAdaptiveCommandGapSeconds);
             state.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(request.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
             state.Settings.FanEnergySaverEnabled = request.FanEnergySaverEnabled;
             state.Settings.FanEnergySaverThresholdCelsius = Math.Clamp(request.FanEnergySaverThresholdCelsius, 0.1, 5.0);
@@ -270,10 +291,11 @@ public sealed class DefenderStateStore
                 return false;
             }
 
+            var plan = BuildNaturalRecoveryPlan(now);
             if (bypassNaturalTiming || ShouldBypassNaturalRecovery(reading))
             {
                 state.NaturalHoldUntil = null;
-                state.NaturalRecoveryStatus = "Comfort is too warm, so quiet recovery is stepping aside.";
+                state.NaturalRecoveryStatus = $"Comfort is too warm, so {plan.QuietLevel.ToLowerInvariant()} recovery is stepping aside.";
                 SaveState();
                 return false;
             }
@@ -289,20 +311,20 @@ public sealed class DefenderStateStore
 
             if (state.LastDefenderCommandAt is { } lastCommandAt)
             {
-                var minimumGap = TimeSpan.FromSeconds(Math.Max(0, state.Settings.MinimumCommandGapSeconds));
+                var minimumGap = TimeSpan.FromSeconds(Math.Max(0, plan.CommandGapSeconds));
                 var nextAllowed = lastCommandAt.Add(minimumGap);
                 if (nextAllowed > now)
                 {
                     waitUntil = nextAllowed;
-                    message = $"Comfort sync is spacing commands until {nextAllowed.ToLocalTime():HH:mm:ss}.";
+                    message = $"Comfort sync is in {plan.QuietLevel.ToLowerInvariant()} mode and spacing commands until {nextAllowed.ToLocalTime():HH:mm:ss}.";
                     state.NaturalRecoveryStatus = message;
                     SaveState();
                     return true;
                 }
             }
 
-            if (state.NaturalHoldCount < state.Settings.MaxNaturalHolds
-                && random.Next(100) < state.Settings.NaturalHoldChancePercent)
+            if (state.NaturalHoldCount < plan.MaxHolds
+                && random.Next(100) < plan.HoldChancePercent)
             {
                 var holdSeconds = CalculateNaturalHoldSeconds();
                 if (holdSeconds > 0)
@@ -310,7 +332,7 @@ public sealed class DefenderStateStore
                     state.NaturalHoldCount++;
                     state.NaturalHoldUntil = now.AddSeconds(holdSeconds);
                     waitUntil = state.NaturalHoldUntil.Value;
-                    message = $"Quiet recovery is holding briefly until {waitUntil.ToLocalTime():HH:mm:ss}.";
+                    message = $"{plan.QuietLevel} recovery is holding briefly until {waitUntil.ToLocalTime():HH:mm:ss}.";
                     state.NaturalRecoveryStatus = message;
                     SaveState();
                     return true;
@@ -318,7 +340,7 @@ public sealed class DefenderStateStore
             }
 
             state.NaturalHoldUntil = null;
-            message = $"Quiet recovery ready; next nudge aims for {expectedSetPointCelsius:0.0} C in gentle steps.";
+            message = $"{plan.QuietLevel} recovery ready; next nudge aims for {expectedSetPointCelsius:0.0} C with {plan.StepCelsius:0.0} C steps.";
             state.NaturalRecoveryStatus = message;
             SaveState();
             return false;
@@ -339,7 +361,8 @@ public sealed class DefenderStateStore
                 return Math.Round(expectedSetPointCelsius, 1);
             }
 
-            var step = Math.Max(0.1, state.Settings.NaturalStepCelsius);
+            var plan = BuildNaturalRecoveryPlan(DateTimeOffset.UtcNow);
+            var step = Math.Max(0.1, plan.StepCelsius);
             var delta = expectedSetPointCelsius - reading.SetPointCelsius;
             if (Math.Abs(delta) <= step)
             {
@@ -537,7 +560,8 @@ public sealed class DefenderStateStore
         state.BoostOffsetCelsius = 0.0;
         state.NaturalHoldUntil = null;
         state.NaturalHoldCount = 0;
-        var cooldownSeconds = CalculateDynamicCooldownSeconds(now) + CalculateNaturalDelaySeconds();
+        var plan = BuildNaturalRecoveryPlan(now);
+        var cooldownSeconds = CalculateDynamicCooldownSeconds(now) + CalculateNaturalDelaySeconds(now);
         if (cooldownSeconds > 0)
         {
             state.CooldownUntil = now.AddSeconds(cooldownSeconds);
@@ -548,7 +572,7 @@ public sealed class DefenderStateStore
         }
 
         state.NaturalRecoveryStatus = state.Settings.NaturalRecoveryEnabled
-            ? $"Manual thermostat touch noticed; comfort sync will wait {cooldownSeconds}s before a quiet nudge."
+            ? $"Manual thermostat touch noticed; comfort sync is in {plan.QuietLevel.ToLowerInvariant()} mode and will wait {cooldownSeconds}s before a quiet nudge."
             : "Manual thermostat touch noticed; quiet recovery is off.";
 
         var audit = new ThermostatChangeAudit(
@@ -579,18 +603,17 @@ public sealed class DefenderStateStore
         return Math.Min(maxSeconds, baseSeconds * touches);
     }
 
-    private int CalculateNaturalDelaySeconds()
+    private int CalculateNaturalDelaySeconds(DateTimeOffset now)
     {
         if (!state.Settings.NaturalRecoveryEnabled)
         {
             return 0;
         }
 
-        var minSeconds = Math.Max(0, state.Settings.MinimumNaturalDelaySeconds);
-        var maxSeconds = Math.Max(minSeconds, state.Settings.MaximumNaturalDelaySeconds);
-        return maxSeconds == minSeconds
-            ? minSeconds
-            : random.Next(minSeconds, maxSeconds + 1);
+        var plan = BuildNaturalRecoveryPlan(now);
+        return plan.MaximumDelaySeconds == plan.MinimumDelaySeconds
+            ? plan.MinimumDelaySeconds
+            : random.Next(plan.MinimumDelaySeconds, plan.MaximumDelaySeconds + 1);
     }
 
     private int CalculateNaturalHoldSeconds()
@@ -600,14 +623,95 @@ public sealed class DefenderStateStore
             return 0;
         }
 
-        var minSeconds = Math.Max(5, state.Settings.MinimumNaturalDelaySeconds / 2);
+        var plan = BuildNaturalRecoveryPlan(DateTimeOffset.UtcNow);
+        var minSeconds = Math.Max(5, plan.MinimumDelaySeconds / 2);
         var maxSeconds = Math.Max(minSeconds, Math.Min(
-            Math.Max(minSeconds, state.Settings.MaximumNaturalDelaySeconds),
-            Math.Max(minSeconds, state.Settings.MinimumNaturalDelaySeconds + state.Settings.BaseCooldownSeconds)));
+            Math.Max(minSeconds, plan.MaximumDelaySeconds),
+            Math.Max(minSeconds, plan.MinimumDelaySeconds + state.Settings.BaseCooldownSeconds)));
 
         return maxSeconds == minSeconds
             ? minSeconds
             : random.Next(minSeconds, maxSeconds + 1);
+    }
+
+    private NaturalRecoveryPlan BuildNaturalRecoveryPlan(DateTimeOffset now)
+    {
+        PruneTouchTimes(now);
+
+        var recentTouches = state.ExternalTouchTimes.Count;
+        var minDelay = Math.Max(0, state.Settings.MinimumNaturalDelaySeconds);
+        var maxDelay = Math.Max(minDelay, state.Settings.MaximumNaturalDelaySeconds);
+        var step = Math.Round(Math.Max(0.1, state.Settings.NaturalStepCelsius), 1);
+        var holdChance = Math.Clamp(state.Settings.NaturalHoldChancePercent, 0, 100);
+        var maxHolds = Math.Clamp(state.Settings.MaxNaturalHolds, 0, 10);
+        var commandGap = Math.Max(0, state.Settings.MinimumCommandGapSeconds);
+
+        if (!state.Settings.NaturalRecoveryEnabled)
+        {
+            return new NaturalRecoveryPlan(
+                recentTouches,
+                "Off",
+                minDelay,
+                maxDelay,
+                step,
+                holdChance,
+                maxHolds,
+                commandGap,
+                false);
+        }
+
+        var threshold = Math.Max(1, state.Settings.AdaptiveQuietTouchThreshold);
+        if (!state.Settings.AdaptiveQuietnessEnabled || recentTouches < threshold)
+        {
+            var baseQuietLevel = recentTouches == 0 ? "Calm" : "Light";
+            return new NaturalRecoveryPlan(
+                recentTouches,
+                baseQuietLevel,
+                minDelay,
+                maxDelay,
+                step,
+                holdChance,
+                maxHolds,
+                commandGap,
+                false);
+        }
+
+        var excessTouches = Math.Max(1, recentTouches - threshold + 1);
+        var intensity = Math.Min(1.0, excessTouches / 4.0);
+        var adaptiveMaxDelay = Math.Max(maxDelay, state.Settings.MaximumAdaptiveDelaySeconds);
+        var adaptiveMinDelay = Math.Min(adaptiveMaxDelay, (int)Math.Round(Lerp(minDelay, Math.Min(adaptiveMaxDelay, maxDelay), intensity)));
+        var adaptiveStep = Math.Round(Lerp(
+            step,
+            Math.Min(step, Math.Max(0.1, state.Settings.MinimumAdaptiveStepCelsius)),
+            intensity), 1);
+        var adaptiveHoldChance = (int)Math.Round(Lerp(
+            holdChance,
+            Math.Max(holdChance, state.Settings.MaximumAdaptiveHoldChancePercent),
+            intensity));
+        var adaptiveCommandGap = (int)Math.Round(Lerp(
+            commandGap,
+            Math.Max(commandGap, state.Settings.MaximumAdaptiveCommandGapSeconds),
+            intensity));
+        var adaptiveMaxHolds = Math.Clamp(maxHolds + (int)Math.Ceiling(excessTouches / 2.0), 0, 10);
+        var quietLevel = intensity >= 1.0
+            ? "Softest"
+            : intensity >= 0.5 ? "Extra quiet" : "Quiet";
+
+        return new NaturalRecoveryPlan(
+            recentTouches,
+            quietLevel,
+            adaptiveMinDelay,
+            (int)Math.Round(Lerp(maxDelay, adaptiveMaxDelay, intensity)),
+            adaptiveStep,
+            Math.Clamp(adaptiveHoldChance, 0, 100),
+            adaptiveMaxHolds,
+            adaptiveCommandGap,
+            true);
+    }
+
+    private static double Lerp(double start, double end, double amount)
+    {
+        return start + (end - start) * Math.Clamp(amount, 0.0, 1.0);
     }
 
     private bool ShouldBypassNaturalRecovery(ThermostatReading reading)
@@ -659,10 +763,25 @@ public sealed class DefenderStateStore
         saved.Settings.MaximumNaturalDelaySeconds = Math.Max(
             saved.Settings.MinimumNaturalDelaySeconds,
             saved.Settings.MaximumNaturalDelaySeconds);
+        saved.Settings.AdaptiveQuietTouchThreshold = Math.Clamp(saved.Settings.AdaptiveQuietTouchThreshold, 1, 20);
+        saved.Settings.MaximumAdaptiveDelaySeconds = Math.Max(
+            saved.Settings.MaximumNaturalDelaySeconds,
+            saved.Settings.MaximumAdaptiveDelaySeconds);
         saved.Settings.NaturalStepCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalStepCelsius, 0.1, 5.0), 1);
+        saved.Settings.MinimumAdaptiveStepCelsius = Math.Round(Math.Clamp(
+            Math.Min(saved.Settings.NaturalStepCelsius, saved.Settings.MinimumAdaptiveStepCelsius),
+            0.1,
+            saved.Settings.NaturalStepCelsius), 1);
         saved.Settings.NaturalHoldChancePercent = Math.Clamp(saved.Settings.NaturalHoldChancePercent, 0, 100);
+        saved.Settings.MaximumAdaptiveHoldChancePercent = Math.Clamp(
+            Math.Max(saved.Settings.NaturalHoldChancePercent, saved.Settings.MaximumAdaptiveHoldChancePercent),
+            0,
+            100);
         saved.Settings.MaxNaturalHolds = Math.Clamp(saved.Settings.MaxNaturalHolds, 0, 10);
         saved.Settings.MinimumCommandGapSeconds = Math.Max(0, saved.Settings.MinimumCommandGapSeconds);
+        saved.Settings.MaximumAdaptiveCommandGapSeconds = Math.Max(
+            saved.Settings.MinimumCommandGapSeconds,
+            saved.Settings.MaximumAdaptiveCommandGapSeconds);
         saved.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
         saved.Settings.DefenderRunsContinuously = true;
         saved.Schedule ??= [];
@@ -692,6 +811,7 @@ public sealed class DefenderStateStore
             ? (int)Math.Ceiling((holdUntil - now).TotalSeconds)
             : 0;
         var naturalSeconds = Math.Max(cooldownSeconds, holdSeconds);
+        var naturalPlan = BuildNaturalRecoveryPlan(now);
         return new DefenderSnapshot(
             state.TargetTemperatureCelsius,
             state.DefenderEnabled,
@@ -715,8 +835,12 @@ public sealed class DefenderStateStore
                 string.IsNullOrWhiteSpace(state.NaturalRecoveryStatus)
                     ? "Comfort sync is ready."
                     : state.NaturalRecoveryStatus,
+                naturalPlan.QuietLevel,
                 state.Settings.NaturalStepCelsius,
-                state.Settings.NaturalHoldChancePercent),
+                naturalPlan.StepCelsius,
+                state.Settings.NaturalHoldChancePercent,
+                naturalPlan.HoldChancePercent,
+                naturalPlan.CommandGapSeconds),
             new ComfortSnapshot(
                 state.Settings.UpstairsComfortEnabled,
                 state.Settings.HomePresenceRequired,
@@ -856,6 +980,12 @@ public sealed class DefenderStateStore
             MaxCooldownSeconds = settings.MaxCooldownSeconds,
             TouchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes,
             NaturalRecoveryEnabled = settings.NaturalRecoveryEnabled,
+            AdaptiveQuietnessEnabled = settings.AdaptiveQuietnessEnabled,
+            AdaptiveQuietTouchThreshold = settings.AdaptiveQuietTouchThreshold,
+            MaximumAdaptiveDelaySeconds = settings.MaximumAdaptiveDelaySeconds,
+            MinimumAdaptiveStepCelsius = settings.MinimumAdaptiveStepCelsius,
+            MaximumAdaptiveHoldChancePercent = settings.MaximumAdaptiveHoldChancePercent,
+            MaximumAdaptiveCommandGapSeconds = settings.MaximumAdaptiveCommandGapSeconds,
             MinimumNaturalDelaySeconds = settings.MinimumNaturalDelaySeconds,
             MaximumNaturalDelaySeconds = settings.MaximumNaturalDelaySeconds,
             NaturalStepCelsius = settings.NaturalStepCelsius,
@@ -989,6 +1119,17 @@ public sealed class DefenderStateStore
 
         public List<DefenderEvent> Events { get; set; } = [];
     }
+
+    private sealed record NaturalRecoveryPlan(
+        int RecentTouchCount,
+        string QuietLevel,
+        int MinimumDelaySeconds,
+        int MaximumDelaySeconds,
+        double StepCelsius,
+        int HoldChancePercent,
+        int MaxHolds,
+        int CommandGapSeconds,
+        bool IsAdaptive);
 
     private sealed class ThermostatRuntimeState
     {

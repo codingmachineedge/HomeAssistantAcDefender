@@ -13,6 +13,12 @@ The MudBlazor settings page controls defender behavior without editing configura
 ## Comfort Sync
 
 - Use quiet recovery: turns natural delayed corrections on or off.
+- Auto quiet level: lets the defender get slower and softer when wall touches repeat.
+- Touches to quiet: how many recent wall changes start the automatic quiet level.
+- Max auto wait: longest wait the automatic quiet level can choose.
+- Smallest auto nudge C: smallest setpoint move during repeated wall touches.
+- Max auto hold %: highest chance to pause again before nudging.
+- Max auto gap: longest spacing between automatic nudges.
 - Min quiet wait: smallest random extra wait after someone changes the wall thermostat.
 - Max quiet wait: largest random extra wait after someone changes the wall thermostat.
 - Nudge size C: biggest temperature step the defender can send in one automatic command.
