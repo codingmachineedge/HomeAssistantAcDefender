@@ -23,7 +23,7 @@
     <SectionCard Title="Automation" Help="Schedule, weather activation, cooldown, cool restore, conflict quiet, and weather drift.">
         <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
             @if (Show("schedule weather activation always automation")) {
-                <MudExpansionPanel Text="Schedule & weather">
+                <MudExpansionPanel Text="Schedule & weather" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Use custom schedule" Value="_scheduleEnabled" ValueChanged="@(v => SetDirty(v, x => _scheduleEnabled = x))" Help="Turn on the time-of-day target rules edited at the bottom of this page." />
                         <MudItem xs="12" sm="8">
@@ -38,7 +38,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("base cooldown max touch frequency window")) {
-                <MudExpansionPanel Text="Cooldown">
+                <MudExpansionPanel Text="Cooldown" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingInt Label="Base cooldown" Unit="s" Value="_baseCooldownSeconds" ValueChanged="@(v => SetDirty(v, x => _baseCooldownSeconds = x))" Min="0" Max="3600" Help="Quiet period after a manual change." />
                         <SettingInt Label="Max cooldown" Unit="s" Value="_maxCooldownSeconds" ValueChanged="@(v => SetDirty(v, x => _maxCooldownSeconds = x))" Min="0" Max="7200" Help="Longest cooldown after many touches." />
@@ -47,7 +47,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("cool mode restore delay band")) {
-                <MudExpansionPanel Text="Cool mode restore">
+                <MudExpansionPanel Text="Cool mode restore" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Delay cool restore" Value="_coolModeRestoreDelayEnabled" ValueChanged="@(v => SetDirty(v, x => _coolModeRestoreDelayEnabled = x))" Help="Wait briefly before forcing cool mode back." />
                         <SettingInt Label="Min wait" Unit="s" Value="_coolModeRestoreMinimumDelaySeconds" ValueChanged="@(v => SetDirty(v, x => _coolModeRestoreMinimumDelaySeconds = x))" Min="0" Max="3600" />
@@ -57,7 +57,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("conflict quiet tug of war stand down")) {
-                <MudExpansionPanel Text="Conflict quiet">
+                <MudExpansionPanel Text="Conflict quiet" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Conflict quiet mode" Value="_conflictQuietModeEnabled" ValueChanged="@(v => SetDirty(v, x => _conflictQuietModeEnabled = x))" Help="Stand down during an obvious thermostat fight." />
                         <SettingInt Label="Touches to stand down" Value="_conflictQuietTouchThreshold" ValueChanged="@(v => SetDirty(v, x => _conflictQuietTouchThreshold = x))" Min="2" Max="20" />
@@ -67,7 +67,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("weather drift outdoor timing")) {
-                <MudExpansionPanel Text="Weather drift timing">
+                <MudExpansionPanel Text="Weather drift timing" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Weather drift timing" Value="_weatherDriftGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _weatherDriftGuardEnabled = x))" Help="Time safe corrections to real outdoor movement." />
                         <SettingInt Label="Window" Unit="min" Value="_weatherDriftWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _weatherDriftWindowMinutes = x))" Min="5" Max="1440" />
@@ -78,7 +78,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("super defender phone home assistant remote wifi lockdown strict")) {
-                <MudExpansionPanel Text="Super Defender">
+                <MudExpansionPanel Text="Super Defender" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Super Defender" Value="_superDefenderModeEnabled" ValueChanged="@(v => SetDirty(v, x => _superDefenderModeEnabled = x))" Help="Watch repeated phone or Home Assistant changes and tighten response." />
                         <SettingSwitch Label="Bypass quiet waits" Value="_superDefenderBypassQuietTiming" ValueChanged="@(v => SetDirty(v, x => _superDefenderBypassQuietTiming = x))" Help="Skip subtle timing holds while Super Defender is active and cooling is needed." />
@@ -99,7 +99,7 @@
     <SectionCard Title="Recovery" Help="Comfort Sync quiet recovery and natural walkback.">
         <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
             @if (Show("comfort sync quiet recovery adaptive nudge hold command gap")) {
-                <MudExpansionPanel Text="Comfort Sync (quiet recovery)">
+                <MudExpansionPanel Text="Comfort Sync (quiet recovery)" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Use quiet recovery" Value="_naturalRecoveryEnabled" ValueChanged="@(v => SetDirty(v, x => _naturalRecoveryEnabled = x))" Help="Space out and soften corrections." />
                         <SettingSwitch Label="Auto quiet level" Value="_adaptiveQuietnessEnabled" ValueChanged="@(v => SetDirty(v, x => _adaptiveQuietnessEnabled = x))" Help="Let repeated touches raise the quiet level." />
@@ -119,7 +119,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("natural walkback step jitter")) {
-                <MudExpansionPanel Text="Natural walkback">
+                <MudExpansionPanel Text="Natural walkback" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Natural walkback" Value="_naturalWalkbackEnabled" ValueChanged="@(v => SetDirty(v, x => _naturalWalkbackEnabled = x))" Help="Walk corrections back in small, varied steps." />
                         <SettingInt Label="Walkback touches" Value="_naturalWalkbackTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _naturalWalkbackTriggerTouches = x))" Min="1" Max="20" />
@@ -136,7 +136,7 @@
     <SectionCard Title="Wall touch" Help="How the defender reacts to people changing the wall thermostat.">
         <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
             @if (Show("wall settling tapping")) {
-                <MudExpansionPanel Text="Wall settling">
+                <MudExpansionPanel Text="Wall settling" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Wall settling guard" Value="_wallSettlingGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _wallSettlingGuardEnabled = x))" Help="Wait for tapping to stop before correcting." />
                         <SettingInt Label="Settle touches" Value="_wallSettlingMinimumTouches" ValueChanged="@(v => SetDirty(v, x => _wallSettlingMinimumTouches = x))" Min="1" Max="20" />
@@ -148,7 +148,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("touch signature learned step")) {
-                <MudExpansionPanel Text="Touch signature">
+                <MudExpansionPanel Text="Touch signature" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Touch signature" Value="_touchSignatureEnabled" ValueChanged="@(v => SetDirty(v, x => _touchSignatureEnabled = x))" Help="Match nudges to the way the wall is changed." />
                         <SettingInt Label="Signature touches" Value="_touchSignatureTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _touchSignatureTriggerTouches = x))" Min="1" Max="20" />
@@ -160,7 +160,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("visibility guard noticed")) {
-                <MudExpansionPanel Text="Visibility guard">
+                <MudExpansionPanel Text="Visibility guard" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Visibility guard" Value="_visibilityGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _visibilityGuardEnabled = x))" Help="Slow down when a touch lands right after a command." />
                         <SettingInt Label="Notice trigger" Value="_visibilityGuardTriggerNotices" ValueChanged="@(v => SetDirty(v, x => _visibilityGuardTriggerNotices = x))" Min="1" Max="20" />
@@ -173,7 +173,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("routine timing rhythm")) {
-                <MudExpansionPanel Text="Routine timing">
+                <MudExpansionPanel Text="Routine timing" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Routine timing" Value="_routineTimingEnabled" ValueChanged="@(v => SetDirty(v, x => _routineTimingEnabled = x))" Help="Line corrections up with a normal rhythm." />
                         <SettingInt Label="Routine touches" Value="_routineTimingTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _routineTimingTriggerTouches = x))" Min="1" Max="20" />
@@ -185,7 +185,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("comfort budget rolling limit")) {
-                <MudExpansionPanel Text="Comfort budget">
+                <MudExpansionPanel Text="Comfort budget" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Comfort budget" Value="_comfortBudgetEnabled" ValueChanged="@(v => SetDirty(v, x => _comfortBudgetEnabled = x))" Help="Cap safe corrections inside a window." />
                         <SettingInt Label="Window" Unit="min" Value="_comfortBudgetWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _comfortBudgetWindowMinutes = x))" Min="1" Max="240" />
@@ -195,7 +195,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("natural cadence slot")) {
-                <MudExpansionPanel Text="Natural cadence">
+                <MudExpansionPanel Text="Natural cadence" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Natural cadence" Value="_naturalCadenceEnabled" ValueChanged="@(v => SetDirty(v, x => _naturalCadenceEnabled = x))" Help="Pick a varied future slot for safe nudges." />
                         <SettingInt Label="Cadence touches" Value="_naturalCadenceTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _naturalCadenceTriggerTouches = x))" Min="1" Max="20" />
@@ -207,7 +207,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("comfort pace planner high frequency climate slot")) {
-                <MudExpansionPanel Text="Comfort Pace">
+                <MudExpansionPanel Text="Comfort Pace" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Comfort Pace" Value="_naturalChangePlannerEnabled" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerEnabled = x))" Help="Pace heavy wall fighting into calm slots." />
                         <SettingInt Label="Pace touches" Value="_naturalChangePlannerTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerTriggerTouches = x))" Min="1" Max="20" />
@@ -221,7 +221,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("comfort envelope range")) {
-                <MudExpansionPanel Text="Comfort envelope">
+                <MudExpansionPanel Text="Comfort envelope" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Comfort envelope" Value="_comfortEnvelopeEnabled" ValueChanged="@(v => SetDirty(v, x => _comfortEnvelopeEnabled = x))" Help="Let tiny safe wall preferences rest." />
                         <SettingInt Label="Envelope touches" Value="_comfortEnvelopeTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _comfortEnvelopeTriggerTouches = x))" Min="1" Max="20" />
@@ -232,7 +232,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("comfort compromise blend fade")) {
-                <MudExpansionPanel Text="Comfort compromise">
+                <MudExpansionPanel Text="Comfort compromise" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Comfort compromise" Value="_comfortCompromiseEnabled" ValueChanged="@(v => SetDirty(v, x => _comfortCompromiseEnabled = x))" Help="Blend a wall choice in, then fade it back." />
                         <SettingInt Label="Compromise touches" Value="_comfortCompromiseTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _comfortCompromiseTriggerTouches = x))" Min="1" Max="20" />
@@ -244,7 +244,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("comfort memory time of day learn")) {
-                <MudExpansionPanel Text="Comfort memory">
+                <MudExpansionPanel Text="Comfort memory" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Comfort memory" Value="_comfortMemoryEnabled" ValueChanged="@(v => SetDirty(v, x => _comfortMemoryEnabled = x))" Help="Learn a small time-of-day target bias." />
                         <SettingInt Label="Memory touches" Value="_comfortMemoryLearningTouches" ValueChanged="@(v => SetDirty(v, x => _comfortMemoryLearningTouches = x))" Min="1" Max="20" />
@@ -255,7 +255,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("manual comfort grace respect wall changes")) {
-                <MudExpansionPanel Text="Manual comfort grace">
+                <MudExpansionPanel Text="Manual comfort grace" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Respect wall changes" Value="_manualComfortGraceEnabled" ValueChanged="@(v => SetDirty(v, x => _manualComfortGraceEnabled = x))" Help="Leave a wall change alone while comfortable." />
                         <SettingInt Label="Grace" Unit="min" Value="_manualComfortGraceMinutes" ValueChanged="@(v => SetDirty(v, x => _manualComfortGraceMinutes = x))" Min="0" Max="240" />
@@ -264,7 +264,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("touch intent warmer cooler direction")) {
-                <MudExpansionPanel Text="Touch intent">
+                <MudExpansionPanel Text="Touch intent" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Touch intent" Value="_touchIntentEnabled" ValueChanged="@(v => SetDirty(v, x => _touchIntentEnabled = x))" Help="Extend grace for a clear warmer pattern." />
                         <SettingInt Label="Intent touches" Value="_touchIntentMinimumTouches" ValueChanged="@(v => SetDirty(v, x => _touchIntentMinimumTouches = x))" Min="1" Max="20" />
@@ -276,7 +276,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("cooler intent fast lane")) {
-                <MudExpansionPanel Text="Cooler intent fast lane">
+                <MudExpansionPanel Text="Cooler intent fast lane" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Cooler intent fast lane" Value="_coolerIntentFastLaneEnabled" ValueChanged="@(v => SetDirty(v, x => _coolerIntentFastLaneEnabled = x))" Help="Skip quiet waits when people keep dialing cooler." />
                         <SettingInt Label="Cooler touches" Value="_coolerIntentMinimumTouches" ValueChanged="@(v => SetDirty(v, x => _coolerIntentMinimumTouches = x))" Min="1" Max="20" />
@@ -294,7 +294,7 @@
     <SectionCard Title="Sensor timing" Help="Lining corrections up with real Home Assistant sensor signals.">
         <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
             @if (Show("setpoint echo confirm")) {
-                <MudExpansionPanel Text="Setpoint echo">
+                <MudExpansionPanel Text="Setpoint echo" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Setpoint echo" Value="_setpointEchoGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _setpointEchoGuardEnabled = x))" Help="Wait for Home Assistant to confirm the last setpoint." />
                         <SettingInt Label="Echo wait" Unit="s" Value="_setpointEchoGraceSeconds" ValueChanged="@(v => SetDirty(v, x => _setpointEchoGraceSeconds = x))" Min="5" Max="300" />
@@ -303,7 +303,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("repeat command quiet identical")) {
-                <MudExpansionPanel Text="Repeat quiet">
+                <MudExpansionPanel Text="Repeat quiet" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Repeat quiet" Value="_repeatCommandGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _repeatCommandGuardEnabled = x))" Help="Wait before sending the same number again." />
                         <SettingInt Label="Min wait" Unit="s" Value="_repeatCommandMinimumWaitSeconds" ValueChanged="@(v => SetDirty(v, x => _repeatCommandMinimumWaitSeconds = x))" Min="0" Max="1800" />
@@ -313,7 +313,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("sensor rhythm beat interval")) {
-                <MudExpansionPanel Text="Sensor rhythm">
+                <MudExpansionPanel Text="Sensor rhythm" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Sensor rhythm" Value="_sensorRhythmGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _sensorRhythmGuardEnabled = x))" Help="Time nudges to the normal reading beat." />
                         <SettingInt Label="Samples" Value="_sensorRhythmMinimumSamples" ValueChanged="@(v => SetDirty(v, x => _sensorRhythmMinimumSamples = x))" Min="2" Max="60" />
@@ -324,7 +324,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("cooling runway hvac action")) {
-                <MudExpansionPanel Text="Cooling runway">
+                <MudExpansionPanel Text="Cooling runway" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Cooling runway" Value="_coolingRunwayGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _coolingRunwayGuardEnabled = x))" Help="Give the AC time to work after cooling starts." />
                         <SettingInt Label="Min wait" Unit="s" Value="_coolingRunwayMinimumSeconds" ValueChanged="@(v => SetDirty(v, x => _coolingRunwayMinimumSeconds = x))" Min="0" Max="1800" />
@@ -334,7 +334,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("room trend warming cooling")) {
-                <MudExpansionPanel Text="Room trend guard">
+                <MudExpansionPanel Text="Room trend guard" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Watch room trend" Value="_roomTrendGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _roomTrendGuardEnabled = x))" Help="Keep observing when the room is already cooling." />
                         <SettingInt Label="Window" Unit="min" Value="_roomTrendWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _roomTrendWindowMinutes = x))" Min="2" Max="240" />
@@ -344,7 +344,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("thermal momentum cooling rate")) {
-                <MudExpansionPanel Text="Thermal momentum">
+                <MudExpansionPanel Text="Thermal momentum" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Use cooling momentum" Value="_thermalMomentumGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _thermalMomentumGuardEnabled = x))" Help="Wait when the room is cooling fast toward target." />
                         <SettingDouble Label="Cooling rate" Unit="C/h" Value="_thermalMomentumMinimumCoolingRateCelsiusPerHour" ValueChanged="@(v => SetDirty(v, x => _thermalMomentumMinimumCoolingRateCelsiusPerHour = x))" Min="0.1" Max="5" />
@@ -360,7 +360,7 @@
     <SectionCard Title="Comfort" Help="Fan saver, upstairs comfort, and presence.">
         <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
             @if (Show("fan energy saver mode")) {
-                <MudExpansionPanel Text="Fan energy saver">
+                <MudExpansionPanel Text="Fan energy saver" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Adjust fan near target" Value="_fanEnergySaverEnabled" ValueChanged="@(v => SetDirty(v, x => _fanEnergySaverEnabled = x))" Help="Move the fan to a saver mode when near target." />
                         <SettingDouble Label="Near-target" Value="_fanEnergySaverThresholdCelsius" ValueChanged="@(v => SetDirty(v, x => _fanEnergySaverThresholdCelsius = x))" Min="0.1" Max="5" />
@@ -371,7 +371,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("upstairs comfort temperature sensors boost")) {
-                <MudExpansionPanel Text="Upstairs comfort">
+                <MudExpansionPanel Text="Upstairs comfort" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Protect upstairs comfort" Value="_upstairsComfortEnabled" ValueChanged="@(v => SetDirty(v, x => _upstairsComfortEnabled = x))" Help="Cool harder when upstairs gets hot." />
                         <MudItem xs="12">
@@ -384,7 +384,7 @@
                 </MudExpansionPanel>
             }
             @if (Show("home presence away person device tracker")) {
-                <MudExpansionPanel Text="Home presence">
+                <MudExpansionPanel Text="Home presence" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Only prioritize upstairs when home" Value="_homePresenceRequired" ValueChanged="@(v => SetDirty(v, x => _homePresenceRequired = x))" Help="Require a present person before upstairs priority." />
                         <MudItem xs="12">
@@ -653,6 +653,8 @@
         : string.IsNullOrWhiteSpace(_settingsStatus) ? "No changes saved yet" : _settingsStatus;
 
     private bool Show(string keywords) => MatchesSettingsSearch(_settingsSearch, keywords);
+
+    private bool IsSettingsSearchActive => !string.IsNullOrWhiteSpace(_settingsSearch);
 
     private IEnumerable<ScheduleEntry> FilteredSchedule =>
         _schedule.Where(entry => MatchesSettingsSearch(
