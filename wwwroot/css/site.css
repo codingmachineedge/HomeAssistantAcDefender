@@ -424,6 +424,28 @@ body {
   border-radius: 12px;
   background: var(--mud-palette-surface);
   padding: 4px;
+  overflow: hidden;
+}
+
+.ops-tabs .mud-tabs-tabbar {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ops-tabs .mud-tabs-tabbar-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.ops-tabs .mud-tab {
+  min-width: 136px;
+}
+
+.metric-tile .helper-text {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .energy-banner {
