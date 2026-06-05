@@ -1,0 +1,15 @@
+@* Flat label / value / help tile (not a grid item) for hero reading rows. *@
+<div class="stat-tile">
+    <span class="stat-tile__label">@Label</span>
+    <span class="stat-tile__value">@Value</span>
+    @if (!string.IsNullOrWhiteSpace(Help))
+    {
+        <span class="helper-text stat-tile__help">@Help</span>
+    }
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string Value { get; set; } = "--";
+    [Parameter] public string? Help { get; set; }
+}

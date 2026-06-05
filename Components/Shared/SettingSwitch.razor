@@ -1,0 +1,15 @@
+@* One toggle setting; raises ValueChanged so the page can mark itself dirty. *@
+<MudItem xs="12">
+    <MudSwitch T="bool" Value="Value" ValueChanged="ValueChanged" Color="Color.Success" Label="@Label" />
+    @if (!string.IsNullOrWhiteSpace(Help))
+    {
+        <MudText Typo="Typo.caption" Class="helper-text">@Help</MudText>
+    }
+</MudItem>
+
+@code {
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string? Help { get; set; }
+    [Parameter] public bool Value { get; set; }
+    [Parameter] public EventCallback<bool> ValueChanged { get; set; }
+}

@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "acdefender",
+      "runtimeExecutable": "C:\\Program Files\\dotnet\\dotnet.exe",
+      "runtimeArgs": ["run", "--project", "HomeAssistantAcDefender.csproj", "--urls", "http://127.0.0.1:8899", "--no-launch-profile"],
+      "env": { "ASPNETCORE_ENVIRONMENT": "Development" },
+      "port": 8899
+    }
+  ]
+}

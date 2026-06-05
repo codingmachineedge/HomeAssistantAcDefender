@@ -1,0 +1,266 @@
+@page "/controls"
+@implements IDisposable
+@inject DefenderStateProvider State
+@inject DefenderStateStore StateStore
+@inject AcDefenderService Defender
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<PageTitle>Controls - AC Defender</PageTitle>
+
+<MudStack Spacing="3">
+    <SectionCard Title="Defender"
+                 Subtitle="@(Snapshot?.DefenderEnabled == true ? "Active" : "Paused")"
+                 Help="The switch turns the helper on or pauses it. Pausing offers to turn the real thermostat off.">
+        <Actions>
+            <MudSwitch T="bool" Value="@(Snapshot?.DefenderEnabled ?? false)" ValueChanged="SetDefenderEnabled" Color="Color.Success" Label="Defender active" />
+        </Actions>
+        <ChildContent>
+            @if (Snapshot?.WebsiteCommandDebounce.Active == true)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot.WebsiteCommandDebounce.Status</MudAlert>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Class="helper-text">No website lock active.</MudText>
+            }
+        </ChildContent>
+    </SectionCard>
+
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="6">
+            <SectionCard Title="Target" Help="The cool number the defender keeps.">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12">
+                        <MudNumericField T="double" Value="_targetInput" ValueChanged="OnTargetInputChanged" Label="Set target"
+                                         HelperText="Type the temperature you want." Variant="Variant.Outlined"
+                                         Min="10" Max="35" Step="0.1" Adornment="Adornment.End" AdornmentText="C" />
+                    </MudItem>
+                    <MudItem xs="6">
+                        <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ApplyTarget" StartIcon="@Icons.Material.Filled.Check">Apply</MudButton>
+                    </MudItem>
+                    <MudItem xs="6">
+                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="GenerateTarget" StartIcon="@Icons.Material.Filled.AutoAwesome">Generate</MudButton>
+                    </MudItem>
+                </MudGrid>
+            </SectionCard>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <SectionCard Title="Fan" Help="Send a fan mode to the real thermostat.">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12">
+                        <MudSelect T="string" @bind-Value="_fanMode" Label="Fan mode" HelperText="Pick how the fan should blow air." Variant="Variant.Outlined">
+                            @foreach (var mode in FanModes)
+                            {
+                                <MudSelectItem T="string" Value="@mode">@mode</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyFanMode" StartIcon="@Icons.Material.Filled.Air">Set fan</MudButton>
+                    </MudItem>
+                </MudGrid>
+            </SectionCard>
+        </MudItem>
+    </MudGrid>
+
+    <SectionCard Title="Real thermostat actions" Help="These buttons send real Home Assistant service calls now.">
+        <MudGrid Spacing="2">
+            <MudItem xs="12" sm="4">
+                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
+                <MudText Typo="Typo.caption" Class="helper-text">Ask Home Assistant for the newest reading.</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ForceTarget" StartIcon="@Icons.Material.Filled.TrackChanges">Force target</MudButton>
+                <MudText Typo="Typo.caption" Class="helper-text">Set the thermostat to the exact target now.</MudText>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ForceBoost" StartIcon="@Icons.Material.Filled.AcUnit">Force cooling</MudButton>
+                <MudText Typo="Typo.caption" Class="helper-text">Use the room-minus-1 C cooling push right now.</MudText>
+            </MudItem>
+        </MudGrid>
+    </SectionCard>
+
+    <SectionCard Title="Emergency" Help="Urgent quiet actions. These bypass the website lock.">
+        <MudGrid Spacing="2">
+            <MudItem xs="12" md="7">
+                <MudSelect T="string" @bind-Value="_emergencyProtocol" Label="Emergency protocol" HelperText="@EmergencyProtocolHelp" Variant="Variant.Outlined">
+                    @foreach (var option in EmergencyProtocols)
+                    {
+                        <MudSelectItem T="string" Value="@option.Value">@option.Label</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="5" Class="d-flex align-center">
+                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Error" OnClick="RunEmergencyProtocol" StartIcon="@Icons.Material.Filled.ReportProblem">Run emergency</MudButton>
+            </MudItem>
+        </MudGrid>
+        @if (Snapshot?.Emergency.Active == true)
+        {
+            <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined">@Snapshot.Emergency.Status</MudAlert>
+        }
+    </SectionCard>
+</MudStack>
+
+@code {
+    private double _targetInput = 22.0;
+    private bool _targetDirty;
+    private string? _fanMode;
+    private string _emergencyProtocol = "suspicion";
+
+    private static readonly (string Value, string Label, string Help)[] EmergencyProtocols =
+    [
+        ("too-cold", "Too cold", "Pauses the defender and turns the real thermostat off."),
+        ("someone-upset", "Someone upset", "Starts quiet observe-only mode so wall changes are not fought."),
+        ("suspicion", "Suspicion quiet", "Starts a longer quiet window where corrections stand down but readings continue.")
+    ];
+
+    private DefenderSnapshot? Snapshot => State.Snapshot;
+    private string EmergencyProtocolHelp => EmergencyProtocols.FirstOrDefault(o => o.Value == _emergencyProtocol).Help ?? "Pick an emergency action.";
+
+    private IReadOnlyList<string> FanModes
+    {
+        get
+        {
+            var modes = Snapshot?.HomeAssistantThermostat?.AvailableFanModes;
+            if (modes is { Count: > 0 })
+            {
+                return modes;
+            }
+
+            return string.IsNullOrWhiteSpace(Snapshot?.HomeAssistantThermostat?.FanMode)
+                ? ["auto"]
+                : [Snapshot.HomeAssistantThermostat.FanMode!];
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        _targetInput = Snapshot?.TargetTemperatureCelsius ?? 22.0;
+        _fanMode = Snapshot?.HomeAssistantThermostat?.FanMode ?? FanModes.FirstOrDefault();
+        State.Changed += OnStateChanged;
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    private void OnTargetInputChanged(double value)
+    {
+        _targetInput = value;
+        _targetDirty = true;
+    }
+
+    private void GenerateTarget()
+    {
+        if (!TryBeginWebsiteCommand("generate target"))
+        {
+            return;
+        }
+
+        var snapshot = StateStore.GenerateTarget();
+        State.Refresh();
+        _targetInput = snapshot.TargetTemperatureCelsius;
+        _targetDirty = false;
+        Snackbar.Add("Generated a new target.", Severity.Success);
+    }
+
+    private void ApplyTarget()
+    {
+        if (!TryBeginWebsiteCommand("set target"))
+        {
+            return;
+        }
+
+        var snapshot = StateStore.SetTarget(_targetInput);
+        State.Refresh();
+        _targetInput = snapshot.TargetTemperatureCelsius;
+        _targetDirty = false;
+        Snackbar.Add("Target saved.", Severity.Success);
+    }
+
+    private async Task SetDefenderEnabled(bool enabled)
+    {
+        if (!TryBeginWebsiteCommand(enabled ? "turn defender on" : "pause defender"))
+        {
+            return;
+        }
+
+        StateStore.SetDefenderEnabled(enabled);
+        State.Refresh();
+        Snackbar.Add(enabled ? "Defender turned on." : "Defender paused.", Severity.Info);
+
+        if (enabled)
+        {
+            return;
+        }
+
+        var turnOff = await DialogService.ShowMessageBoxAsync(
+            "Turn off the real thermostat too?",
+            "The defender is paused now. Do you also want to send a real Home Assistant command to turn the thermostat off?",
+            yesText: "Turn thermostat off",
+            cancelText: "Leave thermostat on");
+
+        if (turnOff == true)
+        {
+            await TurnThermostatOff(bypassDebounce: true);
+        }
+    }
+
+    private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat");
+    private Task ForceTarget() => RunThermostatAction(() => Defender.ForceTargetAsync(CancellationToken.None), "Exact target sent.", "force exact target");
+    private Task ForceBoost() => RunThermostatAction(() => Defender.ForceCoolingBoostAsync(CancellationToken.None), "Cooling boost sent.", "force cooling");
+    private Task RunEmergencyProtocol() => RunThermostatAction(() => Defender.ApplyEmergencyProtocolAsync(_emergencyProtocol, CancellationToken.None), "Emergency protocol started.", $"emergency {_emergencyProtocol}", bypassDebounce: true);
+    private Task TurnThermostatOff(bool bypassDebounce = false) => RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off", bypassDebounce);
+
+    private async Task ApplyFanMode()
+    {
+        if (string.IsNullOrWhiteSpace(_fanMode))
+        {
+            Snackbar.Add("Pick a fan mode first.", Severity.Warning);
+            return;
+        }
+
+        await RunThermostatAction(() => Defender.ForceFanModeAsync(_fanMode, CancellationToken.None), "Fan mode sent.", $"set fan to {_fanMode}");
+    }
+
+    private bool TryBeginWebsiteCommand(string actionName, bool bypassDebounce = false)
+    {
+        var gate = StateStore.TryBeginWebsiteCommand(actionName, bypassDebounce);
+        State.Refresh();
+        if (gate.Accepted)
+        {
+            return true;
+        }
+
+        Snackbar.Add(gate.Message, Severity.Warning);
+        return false;
+    }
+
+    private async Task RunThermostatAction(Func<Task> action, string successMessage, string actionName, bool bypassDebounce = false)
+    {
+        if (!TryBeginWebsiteCommand(actionName, bypassDebounce))
+        {
+            return;
+        }
+
+        try
+        {
+            await action();
+            State.Refresh();
+            if (!_targetDirty)
+            {
+                _targetInput = Snapshot?.TargetTemperatureCelsius ?? _targetInput;
+            }
+
+            Snackbar.Add(successMessage, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            StateStore.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+            State.Refresh();
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    public void Dispose() => State.Changed -= OnStateChanged;
+}

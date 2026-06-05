@@ -1,0 +1,99 @@
+@page "/guide"
+
+<PageTitle>Guide - AC Defender</PageTitle>
+
+<MudStack Spacing="3">
+    <SectionCard Title="How the defender thinks"
+                 Subtitle="The 24/7 decision cycle"
+                 Help="Every few seconds the worker reads real Home Assistant data and walks this sequence. The first guard that wants to wait stops the cycle until its moment arrives.">
+        <MudList T="string" Dense="true" Class="cycle-list">
+            @foreach (var (i, step) in CycleSteps.Select((s, i) => (i + 1, s)))
+            {
+                <MudListItem T="string" Icon="@Icons.Material.Filled.ArrowRight">
+                    <span class="cycle-list__n">@i.</span> @step
+                </MudListItem>
+            }
+        </MudList>
+    </SectionCard>
+
+    <SectionCard Title="Warm-room cooling"
+                 Subtitle="The “1 °C below room” rule">
+        <MudText Typo="Typo.body2">
+            When the room is above target, a fresh correction commands a setpoint exactly <strong>1 °C below the current room
+            temperature</strong> to force cooling — not 1 °C below the wall setting. If Home Assistant reports cooling is
+            idle/off while the room is still above target, it lowers the setpoint one more degree each cycle. It never goes
+            below the website target, and once the room reaches target the setpoint returns to the exact target.
+        </MudText>
+        <MudText Typo="Typo.body2" Class="mt-2 helper-text">
+            Example: room 25.0 °C, website target 22.0 °C, wall moved to 26.0 °C → the first command is 24.0 °C (room − 1),
+            then 23.0 °C, then 22.0 °C if cooling keeps stalling.
+        </MudText>
+    </SectionCard>
+
+    <SectionCard Title="Quiet levels"
+                 Subtitle="How adaptive quietness ramps up">
+        <div class="quiet-levels">
+            <div><MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Filled">Calm</MudChip> no recent wall touches</div>
+            <div><MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled">Light</MudChip> a few touches, base settings</div>
+            <div><MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Filled">Quiet</MudChip> repeated touches, waits grow</div>
+            <div><MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Extra quiet</MudChip> smaller nudges, higher hold chance</div>
+            <div><MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Softest</MudChip> maximum quietness before safety overrides</div>
+        </div>
+    </SectionCard>
+
+    @foreach (var group in Groups)
+    {
+        var guards = GuardCatalog.All.Where(g => g.Category == group.Category).ToList();
+        if (guards.Count == 0)
+        {
+            continue;
+        }
+
+        <MudText Typo="Typo.h6" Class="guide-group__title">@group.Title</MudText>
+        <div class="guide-grid">
+            @foreach (var guard in guards)
+            {
+                <MudPaper Class="guide-entry" Elevation="0">
+                    <MudText Typo="Typo.subtitle1" Class="guide-entry__name">@guard.Name</MudText>
+                    <MudText Typo="Typo.body2" Class="guide-entry__summary">@guard.Summary</MudText>
+                    <p><span class="guard-help__tag">Watches</span> @guard.Watches</p>
+                    <p><span class="guard-help__tag">Logic</span> @guard.Logic</p>
+                    <p><span class="guard-help__tag">Does</span> @guard.Output</p>
+                    @if (guard.Settings.Count > 0)
+                    {
+                        <p class="helper-text"><span class="guard-help__tag">Settings</span> @string.Join(" · ", guard.Settings)</p>
+                    }
+                </MudPaper>
+            }
+        </div>
+    }
+</MudStack>
+
+@code {
+    private static readonly (GuardCategory Category, string Title)[] Groups =
+    [
+        (GuardCategory.Core, "Core cooling"),
+        (GuardCategory.WallTouch, "Wall-touch response"),
+        (GuardCategory.Sensor, "Sensor timing"),
+        (GuardCategory.System, "Safety & system"),
+    ];
+
+    private static readonly string[] CycleSteps =
+    [
+        "Pull weather and outdoor temperature from Home Assistant.",
+        "Pull the real dining-room climate entity.",
+        "Emergency protocols — stand down if a too-cold, someone-upset, or suspicion window is active.",
+        "If the defender is paused, keep reading 24/7 but send nothing.",
+        "Cool Mode Restore — bring the HVAC mode back to cool (after a short safe delay).",
+        "Apply the active schedule target and evaluate the weather activation rule.",
+        "Upstairs Comfort Guard — lower the target and add boost when upstairs is hot.",
+        "Decide whether severe upstairs heat or Cooler Intent should bypass quiet timing.",
+        "Wall Settling, Conflict Quiet, Manual Comfort Grace, and Dynamic Cooldown each may hold.",
+        "Fan Energy Saver — move the fan to a saver mode when near target.",
+        "Compute the expected setpoint (1 °C below room when the room is warm).",
+        "If the setpoint needs to change, walk the timing guards: Comfort Envelope, Room Trend, Thermal Momentum, Weather Drift, Setpoint Echo, Cooling Runway, Sensor Rhythm, Comfort Sync, Comfort Pace, Routine Timing, Comfort Budget, Visibility Guard, Natural Cadence.",
+        "Shape the command size with Natural Walkback and Touch Signature, then Repeat Quiet.",
+        "Send the corrected setpoint to Home Assistant.",
+        "Cooling Failure Watch runs alongside and raises a mega-alert if cooling is demanded but not real.",
+    ];
+}

@@ -1,0 +1,64 @@
+@* One defender guard: live state chip + metrics, with an inline "How this works" explainer. *@
+<MudPaper Class="@($"guard-card guard-card--{Tone.Css()}")" Elevation="0">
+    <div class="guard-card__head">
+        <div class="guard-card__title">
+            <span class="guard-dot guard-dot--@Tone.Css()"></span>
+            <MudText Typo="Typo.subtitle1">@Info.Name</MudText>
+        </div>
+        <MudChip T="string" Size="Size.Small" Color="@Tone.ToColor()" Variant="Variant.Filled">@view.StateLabel</MudChip>
+    </div>
+
+    <MudText Typo="Typo.body2" Class="guard-card__status">@view.StatusText</MudText>
+
+    @if (view.Metrics.Count > 0)
+    {
+        <div class="guard-card__metrics">
+            @foreach (var metric in view.Metrics)
+            {
+                <MudTooltip Text="@metric.Help" Disabled="@string.IsNullOrWhiteSpace(metric.Help)">
+                    <div class="guard-metric">
+                        <span class="guard-metric__label">@metric.Label</span>
+                        <span class="guard-metric__value">@metric.Value</span>
+                    </div>
+                </MudTooltip>
+            }
+        </div>
+    }
+
+    <MudButton Class="guard-card__more"
+               Variant="Variant.Text"
+               Size="Size.Small"
+               OnClick="@(() => _open = !_open)"
+               EndIcon="@(_open ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
+        How this works
+    </MudButton>
+
+    <MudCollapse Expanded="_open">
+        <div class="guard-help">
+            <p class="guard-help__summary">@Info.Summary</p>
+            <p><span class="guard-help__tag">Watches</span> @Info.Watches</p>
+            <p><span class="guard-help__tag">Logic</span> @Info.Logic</p>
+            <p><span class="guard-help__tag">Does</span> @Info.Output</p>
+            @if (Info.Settings.Count > 0)
+            {
+                <p class="helper-text"><span class="guard-help__tag">Settings</span> @string.Join(" · ", Info.Settings)</p>
+            }
+        </div>
+    </MudCollapse>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public GuardInfo Info { get; set; } = default!;
+    [Parameter, EditorRequired] public DefenderSnapshot Snapshot { get; set; } = default!;
+
+    private bool _open;
+    private GuardLiveView view = default!;
+    private GuardTone Tone => view.Tone;
+
+    protected override void OnParametersSet()
+    {
+        view = Info.Project is null
+            ? new GuardLiveView(false, false, "Reference", GuardTone.Off, Info.Summary, Array.Empty<MetricItem>())
+            : Info.Project(Snapshot);
+    }
+}

@@ -1,0 +1,19 @@
+@* One whole-number setting field as a responsive grid item. *@
+<MudItem xs="6" sm="@Sm" md="@Md">
+    <MudNumericField T="int" Value="Value" ValueChanged="ValueChanged" Label="@Label" HelperText="@Help"
+                     Variant="Variant.Outlined" Margin="Margin.Dense" Min="Min" Max="Max" Step="Step"
+                     Adornment="@(string.IsNullOrEmpty(Unit) ? Adornment.None : Adornment.End)" AdornmentText="@Unit" />
+</MudItem>
+
+@code {
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string? Help { get; set; }
+    [Parameter] public string? Unit { get; set; }
+    [Parameter] public int Value { get; set; }
+    [Parameter] public EventCallback<int> ValueChanged { get; set; }
+    [Parameter] public int Min { get; set; } = 0;
+    [Parameter] public int Max { get; set; } = 100000;
+    [Parameter] public int Step { get; set; } = 1;
+    [Parameter] public int Sm { get; set; } = 6;
+    [Parameter] public int Md { get; set; } = 4;
+}

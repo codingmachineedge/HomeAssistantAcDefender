@@ -1,1126 +1,155 @@
 @page "/"
 @implements IDisposable
-@using System.Text.Json
+@inject DefenderStateProvider State
 @inject DefenderStateStore StateStore
 @inject AcDefenderService Defender
-@inject HomeAssistantClient HomeAssistant
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
-<PageTitle>Dashboard - Home Assistant AC Defender</PageTitle>
+<PageTitle>Dashboard - AC Defender</PageTitle>
 
-<MudStack Spacing="2" Class="dashboard-shell">
-    <MudPaper Class="panel-card compact-panel dashboard-status-panel">
-        <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
-            <div>
-                <MudText Typo="Typo.overline">Generated Target</MudText>
-                <MudText Typo="Typo.h2" Class="target-readout">@TargetText</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">This is the cool number the defender is trying to keep.</MudText>
+<MudStack Spacing="3">
+    @* ---------- Hero ---------- *@
+    <MudPaper Class="hero" Elevation="0">
+        <div class="hero__main">
+            <MudText Typo="Typo.overline">Generated target</MudText>
+            <div class="hero__target">@TargetText</div>
+            <MudText Typo="Typo.body2" Class="helper-text">The cool number the defender is keeping for the dining room.</MudText>
+
+            <div class="hero__target-edit">
+                <MudNumericField T="double" Value="_targetInput" ValueChanged="OnTargetInputChanged"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Min="10" Max="35" Step="0.1"
+                                 Adornment="Adornment.End" AdornmentText="C" Class="hero__target-field" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ApplyTarget" StartIcon="@Icons.Material.Filled.Check">Apply</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="GenerateTarget" StartIcon="@Icons.Material.Filled.AutoAwesome">Generate</MudButton>
             </div>
-            <div>
-                <MudChip T="string" Color="@ConnectionColor" Variant="Variant.Filled">@ConnectionText</MudChip>
-                <MudSwitch T="bool"
-                           Value="@(Snapshot?.DefenderEnabled ?? false)"
-                           ValueChanged="SetDefenderEnabled"
-                           Label="Defender active"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">The switch turns the helper on or pauses it.</MudText>
-            </div>
-        </MudStack>
+        </div>
 
-        <MudGrid Spacing="2" Class="mt-2 compact-reading-grid">
-            @foreach (var metric in SummaryMetrics)
-            {
-                <MudItem xs="3">
-                    <div class="reading-tile">
-                        <MudText Typo="Typo.overline">@metric.Label</MudText>
-                        <MudText Typo="Typo.subtitle1">@metric.Value</MudText>
-                        <MudText Typo="Typo.caption" Class="helper-text">@metric.Help</MudText>
-                    </div>
-                </MudItem>
-            }
-        </MudGrid>
-
-        @if (Snapshot?.CoolingFailure.Alerting == true)
-        {
-            <MudAlert Class="mt-2" Severity="Severity.Error" Variant="Variant.Filled" Dense="false">@Snapshot.CoolingFailure.Status</MudAlert>
-            <MudText Typo="Typo.caption" Class="helper-text">This repeats because cool mode is asking for cooling but the real thermostat readings do not look right.</MudText>
-        }
-
-        <MudAlert Class="mt-2" Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">@NextActionText</MudAlert>
-        <MudText Typo="Typo.caption" Class="helper-text">This tells what the defender plans to do next.</MudText>
-        @if (Snapshot?.WebsiteCommandDebounce.Active == true)
-        {
-            <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot.WebsiteCommandDebounce.Status</MudAlert>
-            <MudText Typo="Typo.caption" Class="helper-text">The website waits two minutes after a button press so fast tapping does not spam Home Assistant.</MudText>
-        }
-
+        <div class="hero__side">
+            <MudChip T="string" Color="@ConnectionColor" Variant="Variant.Filled">@ConnectionText</MudChip>
+            <MudSwitch T="bool" Value="@(Snapshot?.DefenderEnabled ?? false)" ValueChanged="SetDefenderEnabled" Color="Color.Success" Label="Defender active" />
+            <MudText Typo="Typo.caption" Class="helper-text">Switch the helper on, or pause it.</MudText>
+        </div>
     </MudPaper>
 
-    <MudTabs Class="app-tabs" Elevation="0" Rounded="true">
-        <MudTabPanel Text="Overview">
-            <MudGrid Spacing="2">
-                <MudItem xs="12" lg="7">
-                    <MudPaper Class="panel-card">
-                        <MudText Typo="Typo.overline">Priority Status</MudText>
-                        <MudText Typo="Typo.body2" Class="helper-text">The few messages most worth seeing first.</MudText>
-                        <MudStack Spacing="1" Class="mt-2">
-                            @foreach (var item in PriorityStatuses)
-                            {
-                                <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
-                                    <MudText Typo="Typo.subtitle2">@item.Name</MudText>
-                                    <MudText Typo="Typo.body2">@item.Status</MudText>
-                                </MudAlert>
-                                <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
-                            }
-                        </MudStack>
-                    </MudPaper>
-                </MudItem>
+    @* ---------- Priority alerts ---------- *@
+    @if (Snapshot?.CoolingFailure.Alerting == true)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled">@Snapshot.CoolingFailure.Status</MudAlert>
+    }
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">@NextActionText</MudAlert>
+    @if (Snapshot?.WebsiteCommandDebounce.Active == true)
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot.WebsiteCommandDebounce.Status</MudAlert>
+    }
+    @if (Snapshot?.Emergency.Active == true)
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot.Emergency.Status</MudAlert>
+    }
 
-                <MudItem xs="12" lg="5">
-                    <MudPaper Class="panel-card">
-                        <MudText Typo="Typo.overline">Quick Real Controls</MudText>
-                        <MudText Typo="Typo.body2" Class="helper-text">These buttons talk to the real dining room thermostat.</MudText>
-                        <MudGrid Spacing="2" Class="mt-2">
-                            <MudItem xs="12" sm="4" lg="12">
-                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Asks Home Assistant for the newest thermostat reading.</MudText>
-                            </MudItem>
-                            <MudItem xs="12" sm="4" lg="12">
-                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ForceTarget" StartIcon="@Icons.Material.Filled.TrackChanges">Force target</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Sets the thermostat to the exact website target now.</MudText>
-                            </MudItem>
-                            <MudItem xs="12" sm="4" lg="12">
-                                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ForceBoost" StartIcon="@Icons.Material.Filled.AcUnit">Force cooling</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Uses the current-room-minus-1 C cooling push right now.</MudText>
-                            </MudItem>
-                        </MudGrid>
-                    </MudPaper>
-                </MudItem>
-            </MudGrid>
-        </MudTabPanel>
+    @* ---------- Live readings ---------- *@
+    <SectionCard Title="Live readings" Help="The real dining-room thermostat right now.">
+        <MudGrid Spacing="2">
+            @foreach (var metric in ReadingMetrics)
+            {
+                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" Sm="4" Md="3" Lg="3" />
+            }
+        </MudGrid>
+    </SectionCard>
 
-        <MudTabPanel Text="Defense">
-            <MudPaper Class="panel-card">
-                <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
-                    <div>
-                        <MudText Typo="Typo.overline">Natural Defender</MudText>
-                        <MudText Typo="Typo.h5">Searchable timing, touch, and safety guards</MudText>
-                        <MudText Typo="Typo.body2" Class="helper-text">Search for words like cooldown, touch, weather, fan, runway, or echo.</MudText>
-                    </div>
-                    <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined">@DefenseResultText</MudChip>
-                </MudStack>
-                <MudTextField T="string"
-                              @bind-Value="_defenseSearch"
-                              Immediate="true"
-                              Clearable="true"
-                              Placeholder="Search defender guards"
-                              Adornment="Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Filled.Search"
-                              Variant="Variant.Outlined"
-                              Class="mt-2" />
-
-                <MudTabs Class="app-tabs compact-subtabs" Elevation="0" Rounded="true">
-                    <MudTabPanel Text="Core">
-                        <MudGrid Spacing="2" Class="mt-2">
-                            @foreach (var metric in FilterMetrics(CoreDefenseMetrics))
-                            {
-                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                            }
-                        </MudGrid>
-                        <MudStack Spacing="1" Class="scroll-list compact-list mt-3">
-                            @foreach (var item in FilterStatuses(CoreDefenseStatuses))
-                            {
-                                <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
-                                    <MudText Typo="Typo.subtitle2">@item.Name</MudText>
-                                    <MudText Typo="Typo.body2">@item.Status</MudText>
-                                </MudAlert>
-                                <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
-                            }
-                            @if (!FilterStatuses(CoreDefenseStatuses).Any())
-                            {
-                                <MudText Class="helper-text">No core status matches that search.</MudText>
-                            }
-                        </MudStack>
-                    </MudTabPanel>
-                    <MudTabPanel Text="Wall Touch">
-                        <MudGrid Spacing="2" Class="mt-2">
-                            @foreach (var metric in FilterMetrics(WallTouchDefenseMetrics))
-                            {
-                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                            }
-                        </MudGrid>
-                        <MudStack Spacing="1" Class="scroll-list compact-list mt-3">
-                            @foreach (var item in FilterStatuses(WallTouchDefenseStatuses))
-                            {
-                                <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
-                                    <MudText Typo="Typo.subtitle2">@item.Name</MudText>
-                                    <MudText Typo="Typo.body2">@item.Status</MudText>
-                                </MudAlert>
-                                <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
-                            }
-                            @if (!FilterStatuses(WallTouchDefenseStatuses).Any())
-                            {
-                                <MudText Class="helper-text">No wall-touch status matches that search.</MudText>
-                            }
-                        </MudStack>
-                    </MudTabPanel>
-                    <MudTabPanel Text="Sensors">
-                        <MudGrid Spacing="2" Class="mt-2">
-                            @foreach (var metric in FilterMetrics(SensorDefenseMetrics))
-                            {
-                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                            }
-                        </MudGrid>
-                        <MudStack Spacing="1" Class="scroll-list compact-list mt-3">
-                            @foreach (var item in FilterStatuses(SensorDefenseStatuses))
-                            {
-                                <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
-                                    <MudText Typo="Typo.subtitle2">@item.Name</MudText>
-                                    <MudText Typo="Typo.body2">@item.Status</MudText>
-                                </MudAlert>
-                                <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
-                            }
-                            @if (!FilterStatuses(SensorDefenseStatuses).Any())
-                            {
-                                <MudText Class="helper-text">No sensor status matches that search.</MudText>
-                            }
-                        </MudStack>
-                    </MudTabPanel>
-                    <MudTabPanel Text="All">
-                        <MudGrid Spacing="2" Class="mt-2">
-                            @foreach (var metric in FilteredDefenseMetrics)
-                            {
-                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                            }
-                        </MudGrid>
-
-                        <MudStack Spacing="1" Class="scroll-list tall-list mt-3">
-                            @foreach (var item in FilteredDefenseStatuses)
-                            {
-                                <MudAlert Severity="@item.Severity" Variant="Variant.Outlined" Dense="true">
-                                    <MudText Typo="Typo.subtitle2">@item.Name</MudText>
-                                    <MudText Typo="Typo.body2">@item.Status</MudText>
-                                </MudAlert>
-                                <MudText Typo="Typo.caption" Class="helper-text">@item.Help</MudText>
-                            }
-                            @if (!FilteredDefenseStatuses.Any())
-                            {
-                                <MudText Class="helper-text">No defender status matches that search.</MudText>
-                            }
-                        </MudStack>
-                    </MudTabPanel>
-                </MudTabs>
-            </MudPaper>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Comfort">
-            <MudGrid Spacing="2">
-                <MudItem xs="12" lg="6">
-                    <MudPaper Class="panel-card">
-                        <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
-                            <div>
-                                <MudText Typo="Typo.overline">Upstairs Comfort</MudText>
-                                <MudText Typo="Typo.h5">@(Snapshot?.Comfort.Status ?? "Waiting for upstairs readings")</MudText>
-                                <MudText Typo="Typo.body2" Class="helper-text">This helps stop upstairs from feeling too hot.</MudText>
-                            </div>
-                            <MudChip T="string" Color="@(Snapshot?.Comfort.IsHome == true ? Color.Success : Color.Warning)" Variant="Variant.Filled">@HomePresenceText</MudChip>
-                        </MudStack>
-
-                        <MudGrid Spacing="2" Class="mt-2">
-                            @foreach (var metric in ComfortMetrics)
-                            {
-                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                            }
-                        </MudGrid>
-                    </MudPaper>
-                </MudItem>
-
-                <MudItem xs="12" lg="6">
-                    <MudPaper Class="panel-card">
-                        <MudText Typo="Typo.overline">Upstairs Sensors</MudText>
-                        <MudText Typo="Typo.body2" Class="helper-text">The warmest sensors are easiest to scan here.</MudText>
-                        <MudStack Spacing="1" Class="scroll-list mt-2">
-                            @if (Snapshot?.Comfort.UpstairsSensors?.Count > 0)
-                            {
-                                @foreach (var sensor in Snapshot.Comfort.UpstairsSensors)
-                                {
-                                    <MudPaper Class="sensor-row" Outlined="true">
-                                        <MudText Typo="Typo.subtitle2">@sensor.Name</MudText>
-                                        <MudText Typo="Typo.body2">@SensorValue(sensor)</MudText>
-                                    </MudPaper>
-                                }
-                            }
-                            else
-                            {
-                                <MudText Class="helper-text">No upstairs sensors found or configured.</MudText>
-                            }
-                        </MudStack>
-                    </MudPaper>
-                </MudItem>
-            </MudGrid>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Energy">
-            <MudPaper Class="panel-card">
-                <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
-                    <div>
-                        <MudText Typo="Typo.overline">Energy Usage</MudText>
-                        <MudText Typo="Typo.h5">Home Assistant live sensors</MudText>
-                        <MudText Typo="Typo.body2" Class="helper-text">Reads configured usage sensors, such as the Alectra Hui power, energy, and cost entities.</MudText>
-                    </div>
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshUsageNow" StartIcon="@Icons.Material.Filled.Refresh">Refresh usage</MudButton>
-                </MudStack>
-                <MudText Typo="Typo.caption" Class="helper-text">Pulls fresh usage and history from Home Assistant.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-2">
-                    @foreach (var metric in EnergyMetrics)
+    <MudGrid Spacing="3">
+        @* ---------- Defense at a glance ---------- *@
+        <MudItem xs="12" lg="7">
+            <SectionCard Title="Defense at a glance"
+                         Subtitle="@($"{BusyGuards.Count} guard{(BusyGuards.Count == 1 ? "" : "s")} acting")"
+                         Help="The guards currently holding, waiting, or shaping a correction.">
+                <Actions>
+                    <MudButton Href="/defense" Variant="Variant.Text" Size="Size.Small" EndIcon="@Icons.Material.Filled.ArrowForward">Open board</MudButton>
+                </Actions>
+                <ChildContent>
+                    @if (BusyGuards.Count > 0)
                     {
-                        <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                    }
-                </MudGrid>
-
-                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="wrap-gap mt-3">
-                    <div>
-                        <MudText Typo="Typo.overline">Alectra Hui Entities</MudText>
-                        <MudText Typo="Typo.body2" Class="helper-text">All Home Assistant entities whose entity ID contains alectra_hui.</MudText>
-                    </div>
-                    <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined">@AlectraHuiEntityCount</MudChip>
-                </MudStack>
-                <MudStack Spacing="1" Class="scroll-list compact-list mt-2">
-                    @if (AlectraHuiEntities.Any())
-                    {
-                        @foreach (var entity in AlectraHuiEntities)
-                        {
-                            <div class="sensor-row">
-                                <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
-                                    <div>
-                                        <MudText Typo="Typo.subtitle2">@entity.Name</MudText>
-                                        <MudText Typo="Typo.caption">@entity.EntityId</MudText>
-                                    </div>
-                                    <div class="text-right">
-                                        <MudText Typo="Typo.subtitle2">@UsageValue(entity)</MudText>
-                                        <MudText Typo="Typo.caption">@ShortTime(entity.LastChanged)</MudText>
-                                    </div>
-                                </MudStack>
-                            </div>
-                        }
+                        <MudStack Spacing="1">
+                            @foreach (var item in BusyGuards)
+                            {
+                                <div class="glance-row">
+                                    <span class="guard-dot guard-dot--@item.View.Tone.Css()"></span>
+                                    <span class="glance-row__name">@item.Info.Name</span>
+                                    <MudChip T="string" Size="Size.Small" Color="@item.View.Tone.ToColor()" Variant="Variant.Outlined">@item.View.StateLabel</MudChip>
+                                    <span class="glance-row__status helper-text">@item.View.StatusText</span>
+                                </div>
+                            }
+                        </MudStack>
                     }
                     else
                     {
-                        <MudText Class="helper-text">No Alectra Hui entities found in Home Assistant yet.</MudText>
+                        <MudText Class="helper-text">All guards are calm — the defender is just watching.</MudText>
                     }
+                </ChildContent>
+            </SectionCard>
+        </MudItem>
+
+        @* ---------- Quick controls ---------- *@
+        <MudItem xs="12" lg="5">
+            <SectionCard Title="Quick controls" Help="These talk to the real dining-room thermostat.">
+                <MudStack Spacing="2">
+                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh reading</MudButton>
+                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ForceTarget" StartIcon="@Icons.Material.Filled.TrackChanges">Force exact target</MudButton>
+                    <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ForceBoost" StartIcon="@Icons.Material.Filled.AcUnit">Force cooling</MudButton>
+                    <MudButton FullWidth="true" Variant="Variant.Text" Href="/controls" EndIcon="@Icons.Material.Filled.ArrowForward">All controls</MudButton>
                 </MudStack>
-
-                @if (!string.IsNullOrWhiteSpace(UsageError))
-                {
-                    <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">@UsageError</MudAlert>
-                }
-                @if (!string.IsNullOrWhiteSpace(UsageHistoryError))
-                {
-                    <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">@UsageHistoryError</MudAlert>
-                }
-            </MudPaper>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Logs">
-            <MudTabs Class="app-tabs compact-subtabs" Elevation="0" Rounded="true">
-                <MudTabPanel Text="Wall Touches">
-                    <MudPaper Class="panel-card">
-                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="wrap-gap">
-                            <div>
-                                <MudText Typo="Typo.overline">Thermostat Touch Log</MudText>
-                                <MudText Typo="Typo.h5">External changes</MudText>
-                                <MudText Typo="Typo.body2" Class="helper-text">Search by temperature, room, outdoor, weather, or time.</MudText>
-                            </div>
-                            <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined">@FilteredTouchCount</MudChip>
-                        </MudStack>
-                        <MudTextField T="string"
-                                      @bind-Value="_touchSearch"
-                                      Immediate="true"
-                                      Clearable="true"
-                                      Placeholder="Search wall touches"
-                                      Adornment="Adornment.Start"
-                                      AdornmentIcon="@Icons.Material.Filled.Search"
-                                      Variant="Variant.Outlined"
-                                      Class="mt-2" />
-
-                        <MudStack Spacing="1" Class="scroll-list tall-list mt-2">
-                            @if (FilteredThermostatChanges.Any())
-                            {
-                                @foreach (var change in FilteredThermostatChanges)
-                                {
-                                    <MudPaper Class="touch-row clickable-row" Outlined="true" @onclick="@(() => SelectTouchLog(change))">
-                                        <MudText Typo="Typo.subtitle2">@($"{change.PreviousSetPointCelsius:0.0} C -> {change.NewSetPointCelsius:0.0} C")</MudText>
-                                        <MudText Typo="Typo.caption">@DateTimeText(change.Timestamp)</MudText>
-                                        <MudText Typo="Typo.caption">@($"{Temp(change.RoomTemperatureCelsius)} room / {Temp(change.OutdoorTemperatureCelsius)} outdoor / {change.WeatherCondition ?? "weather --"}")</MudText>
-                                    </MudPaper>
-                                }
-                            }
-                            else
-                            {
-                                <MudText Class="helper-text">No external thermostat changes match.</MudText>
-                            }
-                        </MudStack>
-                    </MudPaper>
-                </MudTabPanel>
-
-                <MudTabPanel Text="Activity">
-                    <MudPaper Class="panel-card">
-                        <MudText Typo="Typo.overline">Activity</MudText>
-                        <MudText Typo="Typo.body2" Class="helper-text">Search the story of what the defender has been doing.</MudText>
-                        <MudTextField T="string"
-                                      @bind-Value="_eventSearch"
-                                      Immediate="true"
-                                      Clearable="true"
-                                      Placeholder="Search activity"
-                                      Adornment="Adornment.Start"
-                                      AdornmentIcon="@Icons.Material.Filled.Search"
-                                      Variant="Variant.Outlined"
-                                      Class="mt-2" />
-
-                        <MudStack Spacing="1" Class="scroll-list tall-list mt-2">
-                            @if (FilteredEvents.Any())
-                            {
-                                @foreach (var item in FilteredEvents)
-                                {
-                                    <MudAlert Class="clickable-row" Severity="@EventSeverity(item.Level)" Variant="Variant.Outlined" Dense="true" @onclick="@(() => SelectEventLog(item))">
-                                        <MudText Typo="Typo.caption">@DateTimeText(item.Timestamp)</MudText>
-                                        <MudText Typo="Typo.body2">@item.Message</MudText>
-                                    </MudAlert>
-                                }
-                            }
-                            else
-                            {
-                                <MudText Class="helper-text">No activity matches.</MudText>
-                            }
-                        </MudStack>
-                    </MudPaper>
-                </MudTabPanel>
-            </MudTabs>
-            @if (!string.IsNullOrWhiteSpace(_selectedLogJson))
-            {
-                <MudPaper Class="panel-card log-detail-panel mt-2" Outlined="true">
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="wrap-gap">
-                        <div>
-                            <MudText Typo="Typo.overline">Selected Log Detail</MudText>
-                            <MudText Typo="Typo.subtitle2">@_selectedLogTitle</MudText>
-                        </div>
-                        <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="ClearSelectedLog" StartIcon="@Icons.Material.Filled.Close">Clear</MudButton>
-                    </MudStack>
-                    <pre class="json-detail">@_selectedLogJson</pre>
-                    <MudText Typo="Typo.caption" Class="helper-text">This is the log item plus the latest thermostat and weather JSON the website has.</MudText>
-                </MudPaper>
-            }
-        </MudTabPanel>
-
-        <MudTabPanel Text="Controls">
-            <MudPaper Class="panel-card">
-                <MudText Typo="Typo.overline">Real Thermostat Controls</MudText>
-                <MudText Typo="Typo.h5">Dining room climate</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">These controls send real Home Assistant service calls.</MudText>
-
-                <MudTabs Class="app-tabs compact-subtabs" Elevation="0" Rounded="true">
-                    <MudTabPanel Text="Target">
-                        <MudGrid Spacing="2" Class="mt-2">
-                            <MudItem xs="12" md="6">
-                                <MudNumericField T="double"
-                                                 Value="_targetInput"
-                                                 ValueChanged="OnTargetInputChanged"
-                                                 Label="Set target"
-                                                 HelperText="Type the temperature you want, like picking a number on a toy dial."
-                                                 Variant="Variant.Outlined"
-                                                 Min="10"
-                                                 Max="35"
-                                                 Step="0.1"
-                                                 Adornment="Adornment.End"
-                                                 AdornmentText="C" />
-                            </MudItem>
-                            <MudItem xs="6" md="3">
-                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyTarget" StartIcon="@Icons.Material.Filled.Check">Apply</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Sends the number to the defender.</MudText>
-                            </MudItem>
-                            <MudItem xs="6" md="3">
-                                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="GenerateTarget" StartIcon="@Icons.Material.Filled.AutoAwesome">Generate</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Lets the website pick a comfy number.</MudText>
-                            </MudItem>
-                        </MudGrid>
-                    </MudTabPanel>
-                    <MudTabPanel Text="Fan">
-                        <MudGrid Spacing="2" Class="mt-2">
-                            <MudItem xs="12" md="8">
-                                <MudSelect T="string" @bind-Value="_fanMode" Label="Fan mode" HelperText="Pick how the fan should blow air." Variant="Variant.Outlined">
-                                    @foreach (var mode in FanModes)
-                                    {
-                                        <MudSelectItem T="string" Value="@mode">@mode</MudSelectItem>
-                                    }
-                                </MudSelect>
-                            </MudItem>
-                            <MudItem xs="12" md="4">
-                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyFanMode" StartIcon="@Icons.Material.Filled.Air">Set fan</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Sends the fan choice to the thermostat.</MudText>
-                            </MudItem>
-                        </MudGrid>
-                    </MudTabPanel>
-                    <MudTabPanel Text="Actions">
-                        <MudGrid Spacing="2" Class="mt-2">
-                            <MudItem xs="12" sm="4">
-                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Asks Home Assistant for the newest thermostat reading.</MudText>
-                            </MudItem>
-                            <MudItem xs="12" sm="4">
-                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ForceTarget" StartIcon="@Icons.Material.Filled.TrackChanges">Force target</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Sets the thermostat to the exact target now.</MudText>
-                            </MudItem>
-                            <MudItem xs="12" sm="4">
-                                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ForceBoost" StartIcon="@Icons.Material.Filled.AcUnit">Force cooling</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Sets the thermostat one degree below current room temp when cooling is needed.</MudText>
-                            </MudItem>
-                        </MudGrid>
-                    </MudTabPanel>
-                    <MudTabPanel Text="Emergency">
-                        <MudGrid Spacing="2" Class="mt-2">
-                            <MudItem xs="12" md="7">
-                                <MudSelect T="string"
-                                           @bind-Value="_emergencyProtocol"
-                                           Label="Emergency protocol"
-                                           HelperText="Pick what kind of urgent quiet action is needed."
-                                           Variant="Variant.Outlined">
-                                    @foreach (var option in EmergencyProtocols)
-                                    {
-                                        <MudSelectItem T="string" Value="@option.Value">@option.Label</MudSelectItem>
-                                    }
-                                </MudSelect>
-                                <MudText Typo="Typo.caption" Class="helper-text">@EmergencyProtocolHelp</MudText>
-                            </MudItem>
-                            <MudItem xs="12" md="5">
-                                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Error" OnClick="RunEmergencyProtocol" StartIcon="@Icons.Material.Filled.ReportProblem">Emergency</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Runs the selected real emergency action now.</MudText>
-                            </MudItem>
-                        </MudGrid>
-                        @if (Snapshot?.Emergency.Active == true)
-                        {
-                            <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined">@Snapshot.Emergency.Status</MudAlert>
-                            <MudText Typo="Typo.caption" Class="helper-text">The defender is still reading the real thermostat while this emergency window is active.</MudText>
-                        }
-                    </MudTabPanel>
-                </MudTabs>
-            </MudPaper>
-        </MudTabPanel>
-    </MudTabs>
+            </SectionCard>
+        </MudItem>
+    </MudGrid>
 </MudStack>
 
 @code {
-    private PeriodicTimer? timer;
-    private CancellationTokenSource? timerCancellation;
-    private DefenderSnapshot? Snapshot { get; set; }
-    private UsageLiveSnapshot? Usage { get; set; }
-    private UsageHistorySnapshot? UsageHistory { get; set; }
-    private DateTimeOffset? UsageHistoryUpdatedAt { get; set; }
-    private string? UsageError { get; set; }
-    private string? UsageHistoryError { get; set; }
-    private DateTimeOffset _nextUsageRefresh = DateTimeOffset.MinValue;
-    private DateTimeOffset _nextUsageHistoryRefresh = DateTimeOffset.MinValue;
     private double _targetInput = 22.0;
     private bool _targetDirty;
-    private string? _fanMode;
-    private string _defenseSearch = "";
-    private string _touchSearch = "";
-    private string _eventSearch = "";
-    private string _emergencyProtocol = "suspicion";
-    private string _selectedLogTitle = "";
-    private string _selectedLogJson = "";
-    private DateTimeOffset? _lastCoolingFailureSnackbarAt;
 
-    private static readonly JsonSerializerOptions LogJsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private static readonly TimeZoneInfo TorontoTimeZone = ResolveTorontoTimeZone();
-    private static readonly (string Value, string Label, string Help)[] EmergencyProtocols =
-    [
-        ("too-cold", "Too cold", "Pauses the defender and turns the real thermostat off."),
-        ("someone-upset", "Someone upset", "Starts quiet observe-only mode so wall changes are not fought."),
-        ("suspicion", "Suspicion quiet", "Starts a longer quiet window where corrections stand down but readings continue.")
-    ];
-
-    private static readonly string[] CoreDefenseMetricLabels =
-    [
-        "Boost", "Quiet level", "Quiet wait", "Cool restore", "Nudge size", "Hold chance", "Command gap", "Updated", "Entity"
-    ];
-
-    private static readonly string[] WallTouchDefenseMetricLabels =
-    [
-        "Touch count", "Touch pressure", "Walk step", "Touch step", "Touch samples", "Visibility wait", "Visibility pressure",
-        "Routine wait", "Routine rhythm", "Budget wait", "Budget used", "Cadence wait", "Cadence pressure", "Pace wait", "Pace pressure", "Pace reason", "Envelope wait", "Envelope range", "Envelope setpoint", "Blend target",
-        "Blend wait", "Memory bias", "Memory target", "Stand-down", "Wall settle", "Settle touches", "Wall grace",
-        "Touch intent", "Intent grace", "Cooler fast lane", "Cooler net"
-    ];
-
-    private static readonly string[] SensorDefenseMetricLabels =
-    [
-        "Echo wait", "Echo target", "Repeat wait", "Repeat pressure", "Sensor rhythm", "Sensor beat", "Runway wait",
-        "Runway pressure", "Room trend", "Trend hold", "Cooling rate", "Target ETA", "Weather drift", "Weather hold"
-    ];
-
-    private static readonly string[] CoreDefenseStatusNames =
-    [
-        "Natural recovery", "Cool mode restore"
-    ];
-
-    private static readonly string[] WallTouchDefenseStatusNames =
-    [
-        "Natural walkback", "Touch signature", "Visibility guard", "Routine timing", "Comfort budget", "Natural cadence", "Comfort Pace", "Comfort envelope",
-        "Comfort compromise", "Comfort memory", "Conflict quiet", "Wall settling", "Manual grace", "Touch intent", "Cooler intent"
-    ];
-
-    private static readonly string[] SensorDefenseStatusNames =
-    [
-        "Setpoint echo", "Repeat command", "Sensor rhythm", "Cooling runway", "Room trend", "Thermal momentum", "Weather drift"
-    ];
+    private DefenderSnapshot? Snapshot => State.Snapshot;
 
     private string TargetText => Snapshot is null ? "-- C" : $"{Snapshot.TargetTemperatureCelsius:0.0} C";
-    private string EntityText => Snapshot?.HomeAssistantEntityId ?? "No entity";
-    private string ConnectionText => Snapshot?.ConnectionState ?? "--";
-    private string CooldownText => Snapshot?.CooldownSeconds > 0 ? $"{Snapshot.CooldownSeconds}s" : "Ready";
-    private string WebsiteCommandDebounceText => Snapshot?.WebsiteCommandDebounce.Active == true ? $"{Snapshot.WebsiteCommandDebounce.SecondsRemaining}s" : "Ready";
-    private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
-    private string EmergencyText => Snapshot?.Emergency.Status ?? "No emergency quiet mode active.";
-    private string EmergencyWaitText => Snapshot?.Emergency.Active == true ? $"{Snapshot.Emergency.SecondsRemaining}s" : "Ready";
-    private string CoolingFailureText => Snapshot?.CoolingFailure.Status ?? "Cooling failure watch is ready.";
-    private string CoolingFailureWaitText => Snapshot?.CoolingFailure.Alerting == true ? $"{Snapshot.CoolingFailure.SecondsActive}s" : "Ready";
-    private string EmergencyProtocolHelp => EmergencyProtocols.FirstOrDefault(option => option.Value == _emergencyProtocol).Help ?? "Pick an emergency action.";
-    private string NaturalRecoveryText => Snapshot?.NaturalRecovery.Status ?? "Comfort sync is waiting for status.";
-    private string NaturalWalkbackText => Snapshot?.NaturalWalkback.Status ?? "Natural walkback is watching.";
-    private string NaturalWalkbackScoreText => Snapshot?.NaturalWalkback.Enabled == true ? $"{Snapshot.NaturalWalkback.SuspicionScore}/100" : "Off";
-    private string NaturalWalkbackStepText => Snapshot?.NaturalWalkback.Enabled == true ? $"{Snapshot.NaturalWalkback.StepCelsius:0.0} C" : "Off";
-    private string TouchSignatureText => Snapshot?.TouchSignature.Status ?? "Touch signature is watching.";
-    private string TouchSignatureStepText => Snapshot?.TouchSignature.LearnedStepCelsius is { } step ? $"{step:0.0} C" : Snapshot?.TouchSignature.Enabled == true ? "--" : "Off";
-    private string TouchSignatureSamplesText => Snapshot?.TouchSignature.Enabled == true ? Snapshot.TouchSignature.SampleCount.ToString() : "Off";
-    private string VisibilityGuardText => Snapshot?.VisibilityGuard.Status ?? "Visibility guard is watching.";
-    private string VisibilityGuardWaitText => Snapshot?.VisibilityGuard.Active == true ? $"{Snapshot.VisibilityGuard.SecondsRemaining}s" : "Ready";
-    private string VisibilityGuardPressureText => Snapshot?.VisibilityGuard.Enabled == true ? $"{Snapshot.VisibilityGuard.Pressure}/100" : "Off";
-    private string RoutineTimingText => Snapshot?.RoutineTiming.Status ?? "Routine timing is watching.";
-    private string RoutineTimingWaitText => Snapshot?.RoutineTiming.Waiting == true ? $"{Snapshot.RoutineTiming.SecondsRemaining}s" : "Ready";
-    private string RoutineTimingRhythmText => Snapshot?.RoutineTiming.Enabled == true ? $"{Snapshot.RoutineTiming.IntervalMinutes}+{Snapshot.RoutineTiming.JitterMinutes} min" : "Off";
-    private string ComfortBudgetText => Snapshot?.ComfortBudget.Status ?? "Comfort budget is watching.";
-    private string ComfortBudgetWaitText => Snapshot?.ComfortBudget.Holding == true ? $"{Snapshot.ComfortBudget.SecondsRemaining}s" : "Ready";
-    private string ComfortBudgetUsedText => Snapshot?.ComfortBudget.Enabled == true ? $"{Snapshot.ComfortBudget.RecentCommandCount}/{Snapshot.ComfortBudget.MaxCommands}" : "Off";
-    private string NaturalCadenceText => Snapshot?.NaturalCadence.Status ?? "Natural cadence is watching.";
-    private string NaturalCadenceWaitText => Snapshot?.NaturalCadence.Waiting == true ? $"{Snapshot.NaturalCadence.SecondsRemaining}s" : "Ready";
-    private string NaturalCadencePressureText => Snapshot?.NaturalCadence.Enabled == true ? $"{Snapshot.NaturalCadence.TouchPressure}/100" : "Off";
-    private string NaturalChangePlannerText => Snapshot?.NaturalChangePlanner.Status ?? "Comfort Pace is watching.";
-    private string NaturalChangePlannerWaitText => Snapshot?.NaturalChangePlanner.Waiting == true ? $"{Snapshot.NaturalChangePlanner.SecondsRemaining}s" : Snapshot?.NaturalChangePlanner.Enabled == true ? "Ready" : "Off";
-    private string NaturalChangePlannerPressureText => Snapshot?.NaturalChangePlanner.Enabled == true ? $"{Snapshot.NaturalChangePlanner.TouchPressure}/100" : "Off";
-    private string NaturalChangePlannerReasonText => Snapshot?.NaturalChangePlanner.Enabled == true ? Snapshot.NaturalChangePlanner.PlannedReason : "Off";
-    private string ComfortEnvelopeText => Snapshot?.ComfortEnvelope.Status ?? "Comfort envelope is watching.";
-    private string ComfortEnvelopeWaitText => Snapshot?.ComfortEnvelope.Active == true ? $"{Snapshot.ComfortEnvelope.SecondsRemaining}s" : Snapshot?.ComfortEnvelope.Enabled == true ? "Ready" : "Off";
-    private string ComfortEnvelopeRangeText => Snapshot?.ComfortEnvelope.MinimumAllowedSetPointCelsius is { } min && Snapshot.ComfortEnvelope.MaximumAllowedSetPointCelsius is { } max
-        ? $"{min:0.0}-{max:0.0} C"
-        : Snapshot?.ComfortEnvelope.Enabled == true ? "--" : "Off";
-    private string ComfortEnvelopeSetPointText => Snapshot?.ComfortEnvelope.PreferredSetPointCelsius is { } setPoint ? $"{setPoint:0.0} C" : Snapshot?.ComfortEnvelope.Enabled == true ? "--" : "Off";
-    private string ComfortCompromiseText => Snapshot?.ComfortCompromise.Status ?? "Comfort compromise is watching.";
-    private string ComfortCompromiseTargetText => Snapshot?.ComfortCompromise.EffectiveTargetCelsius is { } target ? $"{target:0.0} C" : "Ready";
-    private string ComfortCompromiseWaitText => Snapshot?.ComfortCompromise.Active == true ? $"{Snapshot.ComfortCompromise.SecondsRemaining}s" : "Ready";
-    private string ComfortMemoryText => Snapshot?.ComfortMemory.Status ?? "Comfort memory is watching.";
-    private string ComfortMemoryOffsetText => Snapshot?.ComfortMemory.LearnedOffsetCelsius is { } offset ? $"{offset:+0.0;-0.0;0.0} C" : "Ready";
-    private string ComfortMemoryTargetText => Snapshot?.ComfortMemory.EffectiveTargetCelsius is { } target ? $"{target:0.0} C" : "Ready";
-    private string CoolModeRestoreText => Snapshot?.CoolModeRestore.Status ?? "Cool mode restore is watching.";
-    private string CoolModeRestoreWaitText => Snapshot?.CoolModeRestore.Waiting == true ? $"{Snapshot.CoolModeRestore.SecondsRemaining}s" : "Ready";
-    private string QuietLevelText => Snapshot?.NaturalRecovery.Enabled == true ? Snapshot.NaturalRecovery.QuietLevel : "Off";
-    private string NaturalWaitText => Snapshot?.NaturalRecovery.Waiting == true ? $"{Snapshot.NaturalRecovery.SecondsRemaining}s" : "Ready";
-    private string RecentTouchText => (Snapshot?.NaturalRecovery.RecentTouchCount ?? 0).ToString();
-    private string NaturalStepText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveStepCelsius:0.0} C" : "Off";
-    private string HoldChanceText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveHoldChancePercent}%" : "Off";
-    private string CommandGapText => Snapshot?.NaturalRecovery.Enabled == true ? $"{Snapshot.NaturalRecovery.EffectiveCommandGapSeconds}s" : "Off";
-    private string ConflictQuietText => Snapshot?.ConflictQuiet.Status ?? "Conflict quiet is watching.";
-    private string ConflictQuietWaitText => Snapshot?.ConflictQuiet.Active == true ? $"{Snapshot.ConflictQuiet.SecondsRemaining}s" : "Ready";
-    private string WallSettlingText => Snapshot?.WallSettling.Status ?? "Wall settling is watching.";
-    private string WallSettlingWaitText => Snapshot?.WallSettling.Holding == true ? $"{Snapshot.WallSettling.SecondsRemaining}s" : Snapshot?.WallSettling.Enabled == true ? "Ready" : "Off";
-    private string WallSettlingTouchText => Snapshot?.WallSettling.Enabled == true ? $"{Snapshot.WallSettling.RecentTouchCount}" : "Off";
-    private string ManualGraceText => Snapshot?.ManualComfortGrace.Status ?? "No wall-change grace active.";
-    private string ManualGraceWaitText => Snapshot?.ManualComfortGrace.Active == true ? $"{Snapshot.ManualComfortGrace.SecondsRemaining}s" : "Ready";
-    private string TouchIntentText => Snapshot?.TouchIntent.Status ?? "Touch intent is watching.";
-    private string TouchIntentDirectionText => Snapshot?.TouchIntent.Enabled == true ? Snapshot.TouchIntent.Direction : "Off";
-    private string TouchIntentGraceText => Snapshot?.TouchIntent.Enabled == true ? $"+{Snapshot.TouchIntent.ExtraGraceMinutes} min" : "Off";
-    private string CoolerIntentText => Snapshot?.CoolerIntent.Status ?? "Cooler intent fast lane is watching.";
-    private string CoolerIntentWaitText => Snapshot?.CoolerIntent.Active == true ? $"{Snapshot.CoolerIntent.SecondsRemaining}s" : Snapshot?.CoolerIntent.Enabled == true ? "Ready" : "Off";
-    private string CoolerIntentNetText => Snapshot?.CoolerIntent.Enabled == true ? $"{Snapshot.CoolerIntent.NetChangeCelsius:+0.0;-0.0;0.0} C" : "Off";
-    private string SetpointEchoText => Snapshot?.SetpointEcho.Status ?? "Setpoint echo is watching.";
-    private string SetpointEchoWaitText => Snapshot?.SetpointEcho.Waiting == true ? $"{Snapshot.SetpointEcho.SecondsRemaining}s" : "Ready";
-    private string SetpointEchoTargetText => Snapshot?.SetpointEcho.PendingSetPointCelsius is { } target ? $"{target:0.0} C" : "Ready";
-    private string RepeatCommandText => Snapshot?.RepeatCommand.Status ?? "Repeat quiet is watching for identical follow-up commands.";
-    private string RepeatCommandWaitText => Snapshot?.RepeatCommand.Holding == true ? $"{Snapshot.RepeatCommand.SecondsRemaining}s" : "Ready";
-    private string RepeatCommandPressureText => Snapshot?.RepeatCommand.Enabled == true ? $"{Snapshot.RepeatCommand.Pressure}/100" : "Off";
-    private string SensorRhythmText => Snapshot?.SensorRhythm.Status ?? "Sensor rhythm is watching.";
-    private string SensorRhythmWaitText => Snapshot?.SensorRhythm.Waiting == true ? $"{Snapshot.SensorRhythm.SecondsRemaining}s" : "Ready";
-    private string SensorRhythmBeatText => Snapshot?.SensorRhythm.Enabled == true && Snapshot.SensorRhythm.MedianIntervalSeconds > 0
-        ? $"{Snapshot.SensorRhythm.MedianIntervalSeconds}s"
-        : Snapshot?.SensorRhythm.Enabled == true ? "--" : "Off";
-    private string CoolingRunwayText => Snapshot?.CoolingRunway.Status ?? "Cooling runway is watching for a fresh cooling start.";
-    private string CoolingRunwayWaitText => Snapshot?.CoolingRunway.Holding == true ? $"{Snapshot.CoolingRunway.SecondsRemaining}s" : "Ready";
-    private string CoolingRunwayPressureText => Snapshot?.CoolingRunway.Enabled == true ? $"{Snapshot.CoolingRunway.Pressure}/100" : "Off";
-    private string RoomTrendText => Snapshot?.RoomTrend.Status ?? "Room trend guard is watching.";
-    private string RoomTrendDirectionText => Snapshot?.RoomTrend.Enabled == true
-        ? $"{Snapshot.RoomTrend.Direction} {TrendDeltaText}"
-        : "Off";
-    private string RoomTrendHoldText => Snapshot?.RoomTrend.Holding == true ? $"{Snapshot.RoomTrend.SecondsRemaining}s" : "Ready";
-    private string ThermalMomentumText => Snapshot?.ThermalMomentum.Status ?? "Thermal momentum guard is watching.";
-    private string ThermalMomentumRateText => Snapshot?.ThermalMomentum.Enabled == true && Snapshot.ThermalMomentum.CoolingRateCelsiusPerHour is { } rate
-        ? $"{rate:0.0} C/h"
-        : Snapshot?.ThermalMomentum.Enabled == true ? "--" : "Off";
-    private string ThermalMomentumEtaText => Snapshot?.ThermalMomentum.Holding == true
-        ? $"{Snapshot.ThermalMomentum.SecondsRemaining}s hold"
-        : Snapshot?.ThermalMomentum.Enabled == true && Snapshot.ThermalMomentum.EstimatedMinutesToTarget is { } eta
-            ? $"{eta:0} min"
-            : Snapshot?.ThermalMomentum.Enabled == true ? "--" : "Off";
-    private string WeatherDriftText => Snapshot?.WeatherDrift.Status ?? "Weather drift guard is watching.";
-    private string WeatherDriftDirectionText => Snapshot?.WeatherDrift.Enabled == true
-        ? $"{Snapshot.WeatherDrift.Direction} {WeatherDriftDeltaText}"
-        : "Off";
-    private string WeatherDriftHoldText => Snapshot?.WeatherDrift.Holding == true ? $"{Snapshot.WeatherDrift.SecondsRemaining}s" : Snapshot?.WeatherDrift.Enabled == true ? "Ready" : "Off";
-    private string LastCommandText => Snapshot?.LastCommand ?? "No commands yet";
-    private string HomePresenceText => Snapshot?.Comfort.IsHome == true ? "Home" : "Away";
-    private string GuardText => Snapshot?.Comfort.UpstairsTooHot == true ? "Active" : Snapshot?.Comfort.UpstairsComfortEnabled == true ? "Watching" : "Off";
-    private string PresenceRequiredText => Snapshot?.Comfort.HomePresenceRequired == true ? "Required" : "Optional";
-    private string TouchCount => (Snapshot?.ThermostatChanges?.Count ?? 0).ToString();
-    private string UsageHistoryHelp => UsageHistory is null
-        ? "Home Assistant recorder history for the configured energy sensor."
-        : $"{UsageHistory.Name} / {UsageHistory.EntityId}";
+    private string ConnectionText => Snapshot?.ConnectionState == "home-assistant" ? "Home Assistant" : Snapshot?.ConnectionState ?? "--";
     private Color ConnectionColor => Snapshot?.ConnectionState == "home-assistant" ? Color.Success : Color.Error;
-    private Severity EmergencySeverity => Snapshot?.Emergency.Active == true ? Severity.Warning : Severity.Info;
-    private Severity CoolingFailureSeverity => Snapshot?.CoolingFailure.Alerting == true ? Severity.Error : Severity.Info;
-    private Severity NaturalSeverity => Snapshot?.NaturalRecovery.Waiting == true
-        ? Severity.Warning
-        : Snapshot?.NaturalRecovery.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity NaturalWalkbackSeverity => Snapshot?.NaturalWalkback.Active == true
-        ? Severity.Warning
-        : Snapshot?.NaturalWalkback.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity TouchSignatureSeverity => Snapshot?.TouchSignature.Active == true
-        ? Severity.Warning
-        : Snapshot?.TouchSignature.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity VisibilityGuardSeverity => Snapshot?.VisibilityGuard.Active == true
-        ? Severity.Warning
-        : Snapshot?.VisibilityGuard.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity RoutineTimingSeverity => Snapshot?.RoutineTiming.Waiting == true
-        ? Severity.Warning
-        : Snapshot?.RoutineTiming.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity ComfortBudgetSeverity => Snapshot?.ComfortBudget.Holding == true
-        ? Severity.Warning
-        : Snapshot?.ComfortBudget.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity NaturalCadenceSeverity => Snapshot?.NaturalCadence.Waiting == true
-        ? Severity.Warning
-        : Snapshot?.NaturalCadence.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity NaturalChangePlannerSeverity => Snapshot?.NaturalChangePlanner.Waiting == true
-        ? Severity.Warning
-        : Snapshot?.NaturalChangePlanner.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity ComfortEnvelopeSeverity => Snapshot?.ComfortEnvelope.Active == true
-        ? Severity.Warning
-        : Snapshot?.ComfortEnvelope.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity ComfortCompromiseSeverity => Snapshot?.ComfortCompromise.Active == true
-        ? Severity.Warning
-        : Snapshot?.ComfortCompromise.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity ComfortMemorySeverity => Snapshot?.ComfortMemory.Active == true
-        ? Severity.Warning
-        : Snapshot?.ComfortMemory.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity CoolModeRestoreSeverity => Snapshot?.CoolModeRestore.Waiting == true
-        ? Severity.Warning
-        : Snapshot?.CoolModeRestore.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity ConflictQuietSeverity => Snapshot?.ConflictQuiet.Active == true
-        ? Severity.Warning
-        : Snapshot?.ConflictQuiet.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity WallSettlingSeverity => Snapshot?.WallSettling.Holding == true
-        ? Severity.Warning
-        : Snapshot?.WallSettling.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity ManualGraceSeverity => Snapshot?.ManualComfortGrace.Active == true
-        ? Severity.Warning
-        : Snapshot?.ManualComfortGrace.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity TouchIntentSeverity => Snapshot?.TouchIntent.Active == true
-        ? Snapshot.TouchIntent.Direction == "cooler" ? Severity.Info : Severity.Warning
-        : Snapshot?.TouchIntent.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity CoolerIntentSeverity => Snapshot?.CoolerIntent.Active == true
-        ? Severity.Success
-        : Snapshot?.CoolerIntent.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity SetpointEchoSeverity => Snapshot?.SetpointEcho.Waiting == true
-        ? Severity.Warning
-        : Snapshot?.SetpointEcho.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity RepeatCommandSeverity => Snapshot?.RepeatCommand.Holding == true
-        ? Severity.Warning
-        : Snapshot?.RepeatCommand.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity SensorRhythmSeverity => Snapshot?.SensorRhythm.Waiting == true
-        ? Severity.Warning
-        : Snapshot?.SensorRhythm.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity CoolingRunwaySeverity => Snapshot?.CoolingRunway.Holding == true
-        ? Severity.Warning
-        : Snapshot?.CoolingRunway.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity RoomTrendSeverity => Snapshot?.RoomTrend.Holding == true
-        ? Severity.Warning
-        : Snapshot?.RoomTrend.Direction == "warming" ? Severity.Error : Severity.Info;
-    private Severity ThermalMomentumSeverity => Snapshot?.ThermalMomentum.Holding == true
-        ? Severity.Warning
-        : Snapshot?.ThermalMomentum.Enabled == true ? Severity.Info : Severity.Normal;
-    private Severity WeatherDriftSeverity => Snapshot?.WeatherDrift.Holding == true
-        ? Severity.Warning
-        : Snapshot?.WeatherDrift.Direction == "warming" ? Severity.Success : Snapshot?.WeatherDrift.Enabled == true ? Severity.Info : Severity.Normal;
+    private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
 
-    private string TrendDeltaText
-    {
-        get
-        {
-            var delta = Snapshot?.RoomTrend.DeltaCelsius;
-            return delta is null ? "" : $"({delta.Value:+0.0;-0.0;0.0} C)";
-        }
-    }
-
-    private string WeatherDriftDeltaText
-    {
-        get
-        {
-            var delta = Snapshot?.WeatherDrift.OutdoorDeltaCelsius;
-            return delta is null ? "" : $"({delta.Value:+0.0;-0.0;0.0} C)";
-        }
-    }
-
-    private IReadOnlyList<string> FanModes
-    {
-        get
-        {
-            var modes = Snapshot?.HomeAssistantThermostat?.AvailableFanModes;
-            if (modes is { Count: > 0 })
-            {
-                return modes;
-            }
-
-            return string.IsNullOrWhiteSpace(Snapshot?.HomeAssistantThermostat?.FanMode)
-                ? ["auto"]
-                : [Snapshot.HomeAssistantThermostat.FanMode!];
-        }
-    }
-
-    private IReadOnlyList<MetricItem> OverviewMetrics =>
+    private IReadOnlyList<MetricItem> ReadingMetrics =>
     [
-        new("Room", Temp(Snapshot?.HomeAssistantThermostat?.CurrentTemperatureCelsius), "How warm the dining room is."),
-        new("Setpoint", Temp(Snapshot?.HomeAssistantThermostat?.SetPointCelsius), "The number the thermostat is set to."),
-        new("Outdoor", Temp(Snapshot?.Weather?.OutdoorTemperatureCelsius), "How warm it is outside."),
+        new("Room", Format.Temp(Snapshot?.HomeAssistantThermostat?.CurrentTemperatureCelsius), "How warm the dining room is."),
+        new("Setpoint", Format.Temp(Snapshot?.HomeAssistantThermostat?.SetPointCelsius), "What the thermostat is set to."),
+        new("Outdoor", Format.Temp(Snapshot?.Weather?.OutdoorTemperatureCelsius), "How warm it is outside."),
         new("Weather", Snapshot?.Weather?.Condition ?? "--", "What the weather looks like now."),
-        new("Mode", Snapshot?.HomeAssistantThermostat?.HvacMode ?? "--", "The AC must stay on cool while the defender is active."),
+        new("Mode", Snapshot?.HomeAssistantThermostat?.HvacMode ?? "--", "The AC must stay on cool while active."),
         new("Action", Snapshot?.HomeAssistantThermostat?.HvacAction ?? "--", "What the thermostat is doing."),
         new("Fan", Snapshot?.HomeAssistantThermostat?.FanMode ?? "--", "How the fan is blowing air."),
-        new("Cooldown", CooldownText, "A short wait before fixing again."),
-        new("Website lock", WebsiteCommandDebounceText, "A two-minute wait that stops repeated website button taps."),
-        new("Emergency", EmergencyWaitText, "Shows if emergency quiet mode is active."),
-        new("Breaker watch", CoolingFailureWaitText, "Shows if cooling failure detection is alerting.")
+        new("Cooldown", Snapshot?.CooldownSeconds > 0 ? $"{Snapshot.CooldownSeconds}s" : "Ready", "A short wait before fixing again."),
     ];
 
-    private IReadOnlyList<MetricItem> SummaryMetrics =>
-    [
-        new("Room", Temp(Snapshot?.HomeAssistantThermostat?.CurrentTemperatureCelsius), "How warm the dining room is."),
-        new("Setpoint", Temp(Snapshot?.HomeAssistantThermostat?.SetPointCelsius), "The number the thermostat is set to."),
-        new("Outdoor", Temp(Snapshot?.Weather?.OutdoorTemperatureCelsius), "How warm it is outside."),
-        new("Action", Snapshot?.HomeAssistantThermostat?.HvacAction ?? "--", "What the thermostat is doing.")
-    ];
+    private record BusyGuard(GuardInfo Info, GuardLiveView View);
 
-    private IReadOnlyList<MetricItem> DefenseMetrics =>
-    [
-        new("Boost", Temp(Snapshot?.BoostOffsetCelsius), "How much colder it may set the AC."),
-        new("Quiet level", QuietLevelText, "How soft comfort sync is being."),
-        new("Quiet wait", NaturalWaitText, "How long comfort sync is waiting."),
-        new("Touch count", RecentTouchText, "Wall thermostat changes counted right now."),
-        new("Touch pressure", NaturalWalkbackScoreText, "How strong recent wall changes are."),
-        new("Cool restore", CoolModeRestoreWaitText, "How long before cool mode comes back."),
-        new("Walk step", NaturalWalkbackStepText, "Safe-band nudge size after repeated touches."),
-        new("Touch step", TouchSignatureStepText, "Learned wall-step size for safe nudges."),
-        new("Touch samples", TouchSignatureSamplesText, "Recent wall steps used by signature learning."),
-        new("Visibility wait", VisibilityGuardWaitText, "Hold time after noticed corrections."),
-        new("Visibility pressure", VisibilityGuardPressureText, "How strongly noticed corrections affect timing."),
-        new("Routine wait", RoutineTimingWaitText, "Wait for a normal-looking comfort check."),
-        new("Routine rhythm", RoutineTimingRhythmText, "Minute rhythm with small wiggle time."),
-        new("Budget wait", ComfortBudgetWaitText, "Rest after repeated safe adjustments."),
-        new("Budget used", ComfortBudgetUsedText, "Safe adjustments used in the budget window."),
-        new("Cadence wait", NaturalCadenceWaitText, "Quiet future slot for safe nudges."),
-        new("Cadence pressure", NaturalCadencePressureText, "How much repeated wall touching is affecting timing."),
-        new("Pace wait", NaturalChangePlannerWaitText, "Calm climate slot after frequent wall changes."),
-        new("Pace pressure", NaturalChangePlannerPressureText, "How strongly wall changes affect Comfort Pace."),
-        new("Pace reason", NaturalChangePlannerReasonText, "Why the next calm slot was picked."),
-        new("Envelope wait", ComfortEnvelopeWaitText, "How long a small safe wall preference can rest."),
-        new("Envelope range", ComfortEnvelopeRangeText, "Setpoint range accepted while the room is safe."),
-        new("Envelope setpoint", ComfortEnvelopeSetPointText, "Latest wall setpoint being observed inside the safe range."),
-        new("Blend target", ComfortCompromiseTargetText, "Temporary target while a wall choice fades back."),
-        new("Blend wait", ComfortCompromiseWaitText, "How long the temporary blend remains."),
-        new("Memory bias", ComfortMemoryOffsetText, "Small learned time-of-day adjustment."),
-        new("Memory target", ComfortMemoryTargetText, "Target after comfort memory is applied."),
-        new("Nudge size", NaturalStepText, "The biggest gentle thermostat move right now."),
-        new("Hold chance", HoldChanceText, "Chance it waits one more beat."),
-        new("Command gap", CommandGapText, "Space between automatic nudges."),
-        new("Stand-down", ConflictQuietWaitText, "How long conflict quiet is standing down."),
-        new("Wall settle", WallSettlingWaitText, "How long the wall thermostat gets to stop changing."),
-        new("Settle touches", WallSettlingTouchText, "Recent wall touches inside the settling window."),
-        new("Wall grace", ManualGraceWaitText, "How long a wall change can rest."),
-        new("Touch intent", TouchIntentDirectionText, "Recent wall choices: warmer, cooler, mixed, or learning."),
-        new("Intent grace", TouchIntentGraceText, "Extra safe grace available for clear warmer intent."),
-        new("Cooler fast lane", CoolerIntentWaitText, "How long repeated cooler wall touches can skip quiet waits."),
-        new("Cooler net", CoolerIntentNetText, "Net cooler or warmer movement from recent wall changes."),
-        new("Echo wait", SetpointEchoWaitText, "Wait for Home Assistant to confirm the last setpoint."),
-        new("Echo target", SetpointEchoTargetText, "The last setpoint Home Assistant has not reported back yet."),
-        new("Repeat wait", RepeatCommandWaitText, "Wait before repeating the same thermostat number."),
-        new("Repeat pressure", RepeatCommandPressureText, "How strongly repeated touches and commands are slowing repeats."),
-        new("Sensor rhythm", SensorRhythmWaitText, "Wait for a normal Home Assistant sensor beat."),
-        new("Sensor beat", SensorRhythmBeatText, "Learned reading interval from real Home Assistant updates."),
-        new("Runway wait", CoolingRunwayWaitText, "Wait after cooling starts before another safe nudge."),
-        new("Runway pressure", CoolingRunwayPressureText, "How strongly recent touches and commands are extending the runway."),
-        new("Room trend", RoomTrendDirectionText, "Whether the room is warming or cooling."),
-        new("Trend hold", RoomTrendHoldText, "How long trend guard is observing."),
-        new("Cooling rate", ThermalMomentumRateText, "How fast the room is cooling."),
-        new("Target ETA", ThermalMomentumEtaText, "Estimated minutes until target."),
-        new("Weather drift", WeatherDriftDirectionText, "Whether outdoor temperature is warming, stable, or cooling."),
-        new("Weather hold", WeatherDriftHoldText, "How long weather drift is waiting for a natural slot."),
-        new("Updated", ShortTime(Snapshot?.HomeAssistantThermostat?.UpdatedAt), "When this thermostat data was seen."),
-        new("Entity", Snapshot?.HomeAssistantEntityId ?? "--", "The Home Assistant thermostat name.")
-    ];
-
-    private IEnumerable<MetricItem> CoreDefenseMetrics =>
-        DefenseMetrics.Where(item => CoreDefenseMetricLabels.Contains(item.Label));
-
-    private IEnumerable<MetricItem> WallTouchDefenseMetrics =>
-        DefenseMetrics.Where(item => WallTouchDefenseMetricLabels.Contains(item.Label));
-
-    private IEnumerable<MetricItem> SensorDefenseMetrics =>
-        DefenseMetrics.Where(item => SensorDefenseMetricLabels.Contains(item.Label));
-
-    private IReadOnlyList<MetricItem> ComfortMetrics =>
-    [
-        new("Hottest upstairs", Temp(Snapshot?.Comfort.HottestUpstairsTemperatureCelsius), "The warmest upstairs sensor."),
-        new("Guard", GuardText, "Shows if upstairs help is watching or cooling."),
-        new("Presence", PresenceRequiredText, "Says if someone must be home first.")
-    ];
-
-    private IReadOnlyList<MetricItem> EnergyMetrics =>
-    [
-        new("Power now", UsageValue(Usage?.Power), UsageHelp(Usage?.Power)),
-        new("Energy today", UsageValue(Usage?.Energy), UsageHelp(Usage?.Energy)),
-        new("Hourly cost", UsageValue(Usage?.HourlyCost), UsageHelp(Usage?.HourlyCost)),
-        new("Cost today", UsageValue(Usage?.Cost), UsageHelp(Usage?.Cost)),
-        new("Current bill", UsageValue(Usage?.CurrentBill), UsageHelp(Usage?.CurrentBill) ?? UsageValue(Usage?.CurrentBillStatus)),
-        new("Bill due", UsageValue(Usage?.CurrentBillDue), UsageHelp(Usage?.CurrentBillDue)),
-        new("Bill status", UsageValue(Usage?.CurrentBillStatus), UsageHelp(Usage?.CurrentBillStatus)),
-        new("Usage updated", ShortTime(Usage?.UpdatedAt), "When AC Defender last read usage sensors."),
-        new("24h delta", UsageHistoryValue(UsageHistory?.Delta, UsageHistory?.Unit), UsageHistoryHelp),
-        new("24h max", UsageHistoryValue(UsageHistory?.Max, UsageHistory?.Unit), UsageHistoryHelp),
-        new("24h samples", UsageHistory?.Count.ToString() ?? "--", UsageHistoryHelp),
-        new("History updated", ShortTime(UsageHistoryUpdatedAt), "When AC Defender last checked recorder history.")
-    ];
-
-    private IReadOnlyList<UsageEntityReading> AlectraHuiEntities =>
-        Usage?.AlectraHuiEntities ?? Array.Empty<UsageEntityReading>();
-
-    private string AlectraHuiEntityCount => $"{AlectraHuiEntities.Count} entities";
-
-    private IReadOnlyList<StatusItem> PriorityStatuses =>
-    [
-        new("Next action", NextActionText, "This is the next thing the defender expects to do.", Severity.Info),
-        new("Mega alert", CoolingFailureText, "This warns if cool mode is demanded but cooling does not look real.", CoolingFailureSeverity),
-        new("Emergency", EmergencyText, "This says if an emergency quiet protocol is standing down corrections.", EmergencySeverity),
-        new("Natural recovery", NaturalRecoveryText, "This says if comfort sync is waiting, nudging, or skipping quiet waits because it is too warm.", NaturalSeverity),
-        new("Comfort Pace", NaturalChangePlannerText, "This says if frequent wall changes are being paced into a calmer climate slot.", NaturalChangePlannerSeverity),
-        new("Comfort envelope", ComfortEnvelopeText, "This says if a small safe wall preference is being left alone briefly.", ComfortEnvelopeSeverity),
-        new("Cool mode restore", CoolModeRestoreText, "This says if cool mode is waiting before it comes back.", CoolModeRestoreSeverity),
-        new("Upstairs comfort", Snapshot?.Comfort.Status ?? "Waiting for upstairs readings", "This says if upstairs is making the defender help sooner.", Snapshot?.Comfort.UpstairsTooHot == true ? Severity.Error : Severity.Info),
-        new("Last command", LastCommandText, "This shows the last command the website sent to Home Assistant.", Severity.Info)
-    ];
-
-    private IReadOnlyList<StatusItem> DefenseStatuses =>
-    [
-        new("Natural recovery", NaturalRecoveryText, "This says if comfort sync is waiting, nudging, or skipping quiet waits because it is too warm.", NaturalSeverity),
-        new("Natural walkback", NaturalWalkbackText, "This says if safe corrections are walking back slowly after repeated wall touches.", NaturalWalkbackSeverity),
-        new("Touch signature", TouchSignatureText, "This says if safe nudges are matching the way the wall thermostat was changed.", TouchSignatureSeverity),
-        new("Visibility guard", VisibilityGuardText, "This says if a wall touch happened soon after a helper command and safe nudges are slowing down.", VisibilityGuardSeverity),
-        new("Routine timing", RoutineTimingText, "This says if a safe adjustment is waiting for a normal comfort-check rhythm.", RoutineTimingSeverity),
-        new("Comfort budget", ComfortBudgetText, "This says if repeated safe adjustments are resting for a while.", ComfortBudgetSeverity),
-        new("Natural cadence", NaturalCadenceText, "This says if safe nudges are waiting for a quieter natural time slot.", NaturalCadenceSeverity),
-        new("Comfort Pace", NaturalChangePlannerText, "This says if frequent wall changes are waiting for a calmer weather, sensor, or routine slot.", NaturalChangePlannerSeverity),
-        new("Comfort envelope", ComfortEnvelopeText, "This says if a small safe wall preference is inside the accepted range and being observed.", ComfortEnvelopeSeverity),
-        new("Comfort compromise", ComfortCompromiseText, "This says if a wall choice is being blended back gently while the room is safe.", ComfortCompromiseSeverity),
-        new("Comfort memory", ComfortMemoryText, "This says if this time of day has a small learned comfort preference.", ComfortMemorySeverity),
-        new("Cool mode restore", CoolModeRestoreText, "This says if cool mode is waiting before it comes back.", CoolModeRestoreSeverity),
-        new("Conflict quiet", ConflictQuietText, "This says if repeated wall touches made the helper stand down.", ConflictQuietSeverity),
-        new("Wall settling", WallSettlingText, "This says if someone is still tapping the wall thermostat and the helper is waiting for it to settle.", WallSettlingSeverity),
-        new("Manual grace", ManualGraceText, "This says if a wall thermostat change is being left alone while the room still feels okay.", ManualGraceSeverity),
-        new("Touch intent", TouchIntentText, "This says if recent wall changes look warmer, cooler, or mixed.", TouchIntentSeverity),
-        new("Cooler intent", CoolerIntentText, "This says if repeated cooler wall changes are letting comfort skip quiet waits.", CoolerIntentSeverity),
-        new("Setpoint echo", SetpointEchoText, "This says if the helper is waiting for Home Assistant to repeat back the last setpoint.", SetpointEchoSeverity),
-        new("Repeat command", RepeatCommandText, "This says if the helper is waiting before sending the same thermostat number again.", RepeatCommandSeverity),
-        new("Sensor rhythm", SensorRhythmText, "This says if a safe correction is waiting for a normal Home Assistant sensor beat.", SensorRhythmSeverity),
-        new("Cooling runway", CoolingRunwayText, "This says if cooling just started and the helper is giving the AC time to work.", CoolingRunwaySeverity),
-        new("Room trend", RoomTrendText, "This says if the room is warming, stable, or cooling before the helper nudges.", RoomTrendSeverity),
-        new("Thermal momentum", ThermalMomentumText, "This says if the room is cooling fast enough to wait.", ThermalMomentumSeverity),
-        new("Weather drift", WeatherDriftText, "This says if outdoor weather movement is being used to time a safe correction.", WeatherDriftSeverity)
-    ];
-
-    private IEnumerable<StatusItem> CoreDefenseStatuses =>
-        DefenseStatuses.Where(item => CoreDefenseStatusNames.Contains(item.Name));
-
-    private IEnumerable<StatusItem> WallTouchDefenseStatuses =>
-        DefenseStatuses.Where(item => WallTouchDefenseStatusNames.Contains(item.Name));
-
-    private IEnumerable<StatusItem> SensorDefenseStatuses =>
-        DefenseStatuses.Where(item => SensorDefenseStatusNames.Contains(item.Name));
-
-    private IEnumerable<MetricItem> FilteredDefenseMetrics =>
-        FilterMetrics(DefenseMetrics);
-
-    private IEnumerable<StatusItem> FilteredDefenseStatuses =>
-        FilterStatuses(DefenseStatuses);
-
-    private IEnumerable<MetricItem> FilterMetrics(IEnumerable<MetricItem> metrics) =>
-        metrics.Where(item => MatchesSearch(_defenseSearch, item.Label, item.Value, item.Help));
-
-    private IEnumerable<StatusItem> FilterStatuses(IEnumerable<StatusItem> statuses) =>
-        statuses.Where(item => MatchesSearch(_defenseSearch, item.Name, item.Status, item.Help));
-
-    private IEnumerable<ThermostatChangeAudit> FilteredThermostatChanges =>
-        (Snapshot?.ThermostatChanges ?? Array.Empty<ThermostatChangeAudit>())
-            .Where(change => MatchesSearch(
-                _touchSearch,
-                $"{change.PreviousSetPointCelsius:0.0}",
-                $"{change.NewSetPointCelsius:0.0}",
-                DateTimeText(change.Timestamp),
-                Temp(change.RoomTemperatureCelsius),
-                Temp(change.OutdoorTemperatureCelsius),
-                change.WeatherCondition));
-
-    private IEnumerable<DefenderEvent> FilteredEvents =>
-        (Snapshot?.Events ?? Array.Empty<DefenderEvent>())
-            .Where(item => MatchesSearch(_eventSearch, item.Level, item.Message, DateTimeText(item.Timestamp)));
-
-    private string DefenseResultText => $"{FilteredDefenseStatuses.Count()}/{DefenseStatuses.Count} visible";
-    private string FilteredTouchCount => $"{FilteredThermostatChanges.Count()}/{TouchCount}";
+    private IReadOnlyList<BusyGuard> BusyGuards =>
+        Snapshot is null
+            ? Array.Empty<BusyGuard>()
+            : GuardCatalog.Live
+                .Select(g => new BusyGuard(g, g.Project!(Snapshot)))
+                .Where(x => x.View.Busy)
+                .ToList();
 
     protected override void OnInitialized()
     {
-        RefreshSnapshot(updateInputs: true);
-        _ = RefreshUsageAsync();
-        _ = RefreshUsageHistoryAsync();
-        timerCancellation = new CancellationTokenSource();
-        timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
-        _ = PollAsync(timerCancellation.Token);
+        _targetInput = Snapshot?.TargetTemperatureCelsius ?? 22.0;
+        State.Changed += OnStateChanged;
     }
 
-    private async Task PollAsync(CancellationToken cancellationToken)
+    private void OnStateChanged()
     {
-        try
-        {
-            while (timer is not null && await timer.WaitForNextTickAsync(cancellationToken))
-            {
-                await InvokeAsync(async () =>
-                {
-                    RefreshSnapshot(updateInputs: !_targetDirty);
-                    await RefreshUsageIfDueAsync();
-                    await RefreshUsageHistoryIfDueAsync();
-                    ShowCoolingFailureSnackbarIfDue();
-                    StateHasChanged();
-                });
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
-
-    private void ShowCoolingFailureSnackbarIfDue()
-    {
-        if (Snapshot?.CoolingFailure.Alerting != true)
-        {
-            _lastCoolingFailureSnackbarAt = null;
-            return;
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        if (_lastCoolingFailureSnackbarAt is { } last && now - last < TimeSpan.FromSeconds(60))
-        {
-            return;
-        }
-
-        _lastCoolingFailureSnackbarAt = now;
-        Snackbar.Add(Snapshot.CoolingFailure.Status, Severity.Error, options =>
-        {
-            options.RequireInteraction = true;
-            options.VisibleStateDuration = 15000;
-        });
-    }
-
-    private void RefreshSnapshot(bool updateInputs)
-    {
-        Snapshot = StateStore.GetSnapshot();
-        if (updateInputs)
+        if (!_targetDirty && Snapshot is not null)
         {
             _targetInput = Snapshot.TargetTemperatureCelsius;
         }
 
-        var currentFan = Snapshot.HomeAssistantThermostat?.FanMode;
-        if (!string.IsNullOrWhiteSpace(currentFan) && string.IsNullOrWhiteSpace(_fanMode))
-        {
-            _fanMode = currentFan;
-        }
-        else if (string.IsNullOrWhiteSpace(_fanMode))
-        {
-            _fanMode = FanModes.FirstOrDefault();
-        }
-    }
-
-    private async Task RefreshUsageNow()
-    {
-        await RefreshUsageAsync();
-        await RefreshUsageHistoryAsync();
-        StateHasChanged();
-    }
-
-    private async Task RefreshUsageIfDueAsync()
-    {
-        if (DateTimeOffset.UtcNow < _nextUsageRefresh)
-        {
-            return;
-        }
-
-        await RefreshUsageAsync();
-    }
-
-    private async Task RefreshUsageHistoryIfDueAsync()
-    {
-        if (DateTimeOffset.UtcNow < _nextUsageHistoryRefresh)
-        {
-            return;
-        }
-
-        await RefreshUsageHistoryAsync();
-    }
-
-    private async Task RefreshUsageAsync()
-    {
-        try
-        {
-            _nextUsageRefresh = DateTimeOffset.UtcNow.AddSeconds(30);
-            Usage = await HomeAssistant.GetLiveUsageAsync(CancellationToken.None);
-            UsageError = null;
-        }
-        catch (Exception ex)
-        {
-            _nextUsageRefresh = DateTimeOffset.UtcNow.AddSeconds(30);
-            UsageError = $"Usage sensor error: {ex.Message}";
-        }
-    }
-
-    private async Task RefreshUsageHistoryAsync()
-    {
-        try
-        {
-            var end = DateTimeOffset.UtcNow;
-            _nextUsageHistoryRefresh = end.AddMinutes(10);
-            UsageHistory = await HomeAssistant.GetUsageHistoryAsync(null, end.AddHours(-24), end, CancellationToken.None);
-            UsageHistoryUpdatedAt = end;
-            UsageHistoryError = null;
-        }
-        catch (Exception ex)
-        {
-            _nextUsageHistoryRefresh = DateTimeOffset.UtcNow.AddMinutes(10);
-            UsageHistoryError = $"Usage history error: {ex.Message}";
-        }
+        InvokeAsync(StateHasChanged);
     }
 
     private void OnTargetInputChanged(double value)
@@ -1136,8 +165,9 @@
             return;
         }
 
-        Snapshot = StateStore.GenerateTarget();
-        _targetInput = Snapshot.TargetTemperatureCelsius;
+        var snapshot = StateStore.GenerateTarget();
+        State.Refresh();
+        _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
         Snackbar.Add("Generated a new target.", Severity.Success);
     }
@@ -1149,8 +179,9 @@
             return;
         }
 
-        Snapshot = StateStore.SetTarget(_targetInput);
-        _targetInput = Snapshot.TargetTemperatureCelsius;
+        var snapshot = StateStore.SetTarget(_targetInput);
+        State.Refresh();
+        _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
         Snackbar.Add("Target saved.", Severity.Success);
     }
@@ -1162,7 +193,8 @@
             return;
         }
 
-        Snapshot = StateStore.SetDefenderEnabled(enabled);
+        StateStore.SetDefenderEnabled(enabled);
+        State.Refresh();
         Snackbar.Add(enabled ? "Defender turned on." : "Defender paused.", Severity.Info);
 
         if (enabled)
@@ -1170,63 +202,26 @@
             return;
         }
 
-        var turnOffThermostat = await DialogService.ShowMessageBoxAsync(
+        var turnOff = await DialogService.ShowMessageBoxAsync(
             "Turn off the real thermostat too?",
             "The defender is paused now. Do you also want to send a real Home Assistant command to turn the thermostat off?",
             yesText: "Turn thermostat off",
             cancelText: "Leave thermostat on");
 
-        if (turnOffThermostat == true)
+        if (turnOff == true)
         {
-            await TurnThermostatOff(bypassDebounce: true);
+            await RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off", bypassDebounce: true);
         }
     }
 
-    private async Task RefreshReal() => await RunThermostatAction(
-        () => Defender.RefreshRealThermostatAsync(CancellationToken.None),
-        "Thermostat refreshed.",
-        "refresh thermostat");
-
-    private async Task ForceTarget() => await RunThermostatAction(
-        () => Defender.ForceTargetAsync(CancellationToken.None),
-        "Exact target sent.",
-        "force exact target");
-
-    private async Task ForceBoost() => await RunThermostatAction(
-        () => Defender.ForceCoolingBoostAsync(CancellationToken.None),
-        "Cooling boost sent.",
-        "force cooling");
-
-    private async Task RunEmergencyProtocol() => await RunThermostatAction(
-        () => Defender.ApplyEmergencyProtocolAsync(_emergencyProtocol, CancellationToken.None),
-        "Emergency protocol started.",
-        $"emergency {_emergencyProtocol}",
-        bypassDebounce: true);
-
-    private async Task TurnThermostatOff(bool bypassDebounce = false) => await RunThermostatAction(
-        () => Defender.TurnThermostatOffAsync(CancellationToken.None),
-        "Thermostat turned off.",
-        "turn thermostat off",
-        bypassDebounce);
-
-    private async Task ApplyFanMode()
-    {
-        if (string.IsNullOrWhiteSpace(_fanMode))
-        {
-            Snackbar.Add("Pick a fan mode first.", Severity.Warning);
-            return;
-        }
-
-        await RunThermostatAction(
-            () => Defender.ForceFanModeAsync(_fanMode, CancellationToken.None),
-            "Fan mode sent.",
-            $"set fan to {_fanMode}");
-    }
+    private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat");
+    private Task ForceTarget() => RunThermostatAction(() => Defender.ForceTargetAsync(CancellationToken.None), "Exact target sent.", "force exact target");
+    private Task ForceBoost() => RunThermostatAction(() => Defender.ForceCoolingBoostAsync(CancellationToken.None), "Cooling boost sent.", "force cooling");
 
     private bool TryBeginWebsiteCommand(string actionName, bool bypassDebounce = false)
     {
         var gate = StateStore.TryBeginWebsiteCommand(actionName, bypassDebounce);
-        Snapshot = gate.Snapshot;
+        State.Refresh();
         if (gate.Accepted)
         {
             return true;
@@ -1246,143 +241,21 @@
         try
         {
             await action();
-            RefreshSnapshot(updateInputs: !_targetDirty);
+            State.Refresh();
+            if (!_targetDirty)
+            {
+                _targetInput = Snapshot?.TargetTemperatureCelsius ?? _targetInput;
+            }
+
             Snackbar.Add(successMessage, Severity.Success);
         }
         catch (Exception ex)
         {
-            Snapshot = StateStore.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+            StateStore.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+            State.Refresh();
             Snackbar.Add(ex.Message, Severity.Error);
         }
     }
 
-    private void SelectTouchLog(ThermostatChangeAudit change)
-    {
-        _selectedLogTitle = $"Wall touch {DateTimeText(change.Timestamp)}";
-        _selectedLogJson = JsonSerializer.Serialize(new
-        {
-            Type = "thermostat-change",
-            Change = change,
-            Latest = BuildLogContext()
-        }, LogJsonOptions);
-    }
-
-    private void SelectEventLog(DefenderEvent item)
-    {
-        _selectedLogTitle = $"Activity {DateTimeText(item.Timestamp)}";
-        _selectedLogJson = JsonSerializer.Serialize(new
-        {
-            Type = "activity",
-            Event = item,
-            Latest = BuildLogContext()
-        }, LogJsonOptions);
-    }
-
-    private void ClearSelectedLog()
-    {
-        _selectedLogTitle = "";
-        _selectedLogJson = "";
-    }
-
-    private object BuildLogContext()
-    {
-        return new
-        {
-            Snapshot?.HomeAssistantEntityId,
-            Snapshot?.HomeAssistantThermostat,
-            Snapshot?.Weather,
-            Snapshot?.NextAction,
-            Snapshot?.LastCommand,
-            Snapshot?.Emergency,
-            Snapshot?.CoolingFailure
-        };
-    }
-
-    private static string Temp(double? value) => value is null ? "--" : $"{value.Value:0.0} C";
-
-    private static string UsageValue(UsageEntityReading? reading)
-    {
-        if (reading is null)
-        {
-            return "--";
-        }
-
-        if (reading.Value is null)
-        {
-            return string.IsNullOrWhiteSpace(reading.State) ? "--" : reading.State;
-        }
-
-        return string.IsNullOrWhiteSpace(reading.Unit)
-            ? $"{reading.Value.Value:0.###}"
-            : $"{reading.Value.Value:0.###} {reading.Unit}";
-    }
-
-    private static string UsageHelp(UsageEntityReading? reading)
-    {
-        return reading is null
-            ? "Usage entity is not configured or was not found."
-            : $"{reading.Name} / {reading.EntityId}";
-    }
-
-    private static string UsageHistoryValue(double? value, string? unit)
-    {
-        return value is null
-            ? "--"
-            : string.IsNullOrWhiteSpace(unit) ? $"{value.Value:0.###}" : $"{value.Value:0.###} {unit}";
-    }
-
-    private static string ShortTime(DateTimeOffset? value) => value is null ? "--" : ToTorontoTime(value.Value).ToString("HH:mm:ss");
-
-    private static string DateTimeText(DateTimeOffset value) => ToTorontoTime(value).ToString("yyyy-MM-dd HH:mm:ss");
-
-    private static DateTimeOffset ToTorontoTime(DateTimeOffset value)
-    {
-        return TimeZoneInfo.ConvertTime(value, TorontoTimeZone);
-    }
-
-    private static TimeZoneInfo ResolveTorontoTimeZone()
-    {
-        try
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById("America/Toronto");
-        }
-        catch (TimeZoneNotFoundException)
-        {
-            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
-        }
-    }
-
-    private static string SensorValue(TemperatureSensorReading sensor)
-    {
-        return sensor.TemperatureCelsius is null ? sensor.State : $"{sensor.TemperatureCelsius.Value:0.0} C";
-    }
-
-    private static Severity EventSeverity(string level)
-    {
-        return level.ToLowerInvariant() switch
-        {
-            "warning" => Severity.Warning,
-            "error" => Severity.Error,
-            _ => Severity.Info
-        };
-    }
-
-    private static bool MatchesSearch(string search, params string?[] values)
-    {
-        var terms = (search ?? string.Empty)
-            .Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        return terms.Length == 0
-            || terms.All(term => values.Any(value => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true));
-    }
-
-    private sealed record MetricItem(string Label, string Value, string Help);
-
-    private sealed record StatusItem(string Name, string Status, string Help, Severity Severity);
-
-    public void Dispose()
-    {
-        timerCancellation?.Cancel();
-        timer?.Dispose();
-        timerCancellation?.Dispose();
-    }
+    public void Dispose() => State.Changed -= OnStateChanged;
 }

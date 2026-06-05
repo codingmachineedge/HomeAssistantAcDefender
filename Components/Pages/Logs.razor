@@ -1,0 +1,144 @@
+@page "/logs"
+@implements IDisposable
+@using System.Text.Json
+@inject DefenderStateProvider State
+
+<PageTitle>Logs - AC Defender</PageTitle>
+
+<MudStack Spacing="3">
+    <MudGrid Spacing="3">
+        <MudItem xs="12" lg="6">
+            <SectionCard Title="Thermostat touch log"
+                         Subtitle="External wall changes"
+                         Help="Search by temperature, room, outdoor, weather, or time. Click a row for full JSON.">
+                <Actions>
+                    <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">@FilteredTouchCount</MudChip>
+                </Actions>
+                <ChildContent>
+                    <MudTextField @bind-Value="_touchSearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
+                                  Placeholder="Search wall touches" Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mb-2" />
+                    <MudStack Spacing="1" Class="scroll-list tall-list">
+                        @if (FilteredThermostatChanges.Any())
+                        {
+                            @foreach (var change in FilteredThermostatChanges)
+                            {
+                                <MudPaper Class="touch-row clickable-row" Elevation="0" @onclick="@(() => SelectTouchLog(change))">
+                                    <MudText Typo="Typo.subtitle2">@($"{change.PreviousSetPointCelsius:0.0} C → {change.NewSetPointCelsius:0.0} C")</MudText>
+                                    <MudText Typo="Typo.caption" Class="helper-text">@Format.DateTimeText(change.Timestamp)</MudText>
+                                    <MudText Typo="Typo.caption" Class="helper-text">@($"{Format.Temp(change.RoomTemperatureCelsius)} room · {Format.Temp(change.OutdoorTemperatureCelsius)} outdoor · {change.WeatherCondition ?? "weather --"}")</MudText>
+                                </MudPaper>
+                            }
+                        }
+                        else
+                        {
+                            <MudText Class="helper-text">No external thermostat changes match.</MudText>
+                        }
+                    </MudStack>
+                </ChildContent>
+            </SectionCard>
+        </MudItem>
+
+        <MudItem xs="12" lg="6">
+            <SectionCard Title="Activity"
+                         Subtitle="What the defender has been doing"
+                         Help="Click a row for full JSON context.">
+                <MudTextField @bind-Value="_eventSearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
+                              Placeholder="Search activity" Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mb-2" />
+                <MudStack Spacing="1" Class="scroll-list tall-list">
+                    @if (FilteredEvents.Any())
+                    {
+                        @foreach (var item in FilteredEvents)
+                        {
+                            <MudAlert Class="clickable-row" Severity="@Format.EventSeverity(item.Level)" Variant="Variant.Outlined" Dense="true" @onclick="@(() => SelectEventLog(item))">
+                                <MudText Typo="Typo.caption" Class="helper-text">@Format.DateTimeText(item.Timestamp)</MudText>
+                                <MudText Typo="Typo.body2">@item.Message</MudText>
+                            </MudAlert>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">No activity matches.</MudText>
+                    }
+                </MudStack>
+            </SectionCard>
+        </MudItem>
+    </MudGrid>
+
+    @if (!string.IsNullOrWhiteSpace(_selectedLogJson))
+    {
+        <SectionCard Title="Selected log detail" Subtitle="@_selectedLogTitle">
+            <Actions>
+                <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="ClearSelectedLog" StartIcon="@Icons.Material.Filled.Close">Clear</MudButton>
+            </Actions>
+            <ChildContent>
+                <pre class="json-detail">@_selectedLogJson</pre>
+                <MudText Typo="Typo.caption" Class="helper-text">The log item plus the latest thermostat and weather JSON the website has.</MudText>
+            </ChildContent>
+        </SectionCard>
+    }
+</MudStack>
+
+@code {
+    private string _touchSearch = "";
+    private string _eventSearch = "";
+    private string _selectedLogTitle = "";
+    private string _selectedLogJson = "";
+
+    private static readonly JsonSerializerOptions LogJsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
+    private DefenderSnapshot Snapshot => State.Snapshot;
+
+    private IEnumerable<ThermostatChangeAudit> FilteredThermostatChanges =>
+        (Snapshot?.ThermostatChanges ?? Array.Empty<ThermostatChangeAudit>())
+            .Where(change => Format.MatchesSearch(
+                _touchSearch,
+                $"{change.PreviousSetPointCelsius:0.0}",
+                $"{change.NewSetPointCelsius:0.0}",
+                Format.DateTimeText(change.Timestamp),
+                Format.Temp(change.RoomTemperatureCelsius),
+                Format.Temp(change.OutdoorTemperatureCelsius),
+                change.WeatherCondition));
+
+    private IEnumerable<DefenderEvent> FilteredEvents =>
+        (Snapshot?.Events ?? Array.Empty<DefenderEvent>())
+            .Where(item => Format.MatchesSearch(_eventSearch, item.Level, item.Message, Format.DateTimeText(item.Timestamp)));
+
+    private string FilteredTouchCount => $"{FilteredThermostatChanges.Count()}/{Snapshot?.ThermostatChanges?.Count ?? 0}";
+
+    private void SelectTouchLog(ThermostatChangeAudit change)
+    {
+        _selectedLogTitle = $"Wall touch {Format.DateTimeText(change.Timestamp)}";
+        _selectedLogJson = JsonSerializer.Serialize(new { Type = "thermostat-change", Change = change, Latest = BuildLogContext() }, LogJsonOptions);
+    }
+
+    private void SelectEventLog(DefenderEvent item)
+    {
+        _selectedLogTitle = $"Activity {Format.DateTimeText(item.Timestamp)}";
+        _selectedLogJson = JsonSerializer.Serialize(new { Type = "activity", Event = item, Latest = BuildLogContext() }, LogJsonOptions);
+    }
+
+    private void ClearSelectedLog()
+    {
+        _selectedLogTitle = "";
+        _selectedLogJson = "";
+    }
+
+    private object BuildLogContext() => new
+    {
+        Snapshot?.HomeAssistantEntityId,
+        Snapshot?.HomeAssistantThermostat,
+        Snapshot?.Weather,
+        Snapshot?.NextAction,
+        Snapshot?.LastCommand,
+        Snapshot?.Emergency,
+        Snapshot?.CoolingFailure
+    };
+
+    protected override void OnInitialized() => State.Changed += OnStateChanged;
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => State.Changed -= OnStateChanged;
+}

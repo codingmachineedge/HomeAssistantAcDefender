@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @implements IDisposable
-@inject DefenderStateStore StateStore
+@inject DefenderStateProvider State
+@inject ISnackbar Snackbar
 @inject IJSRuntime JS
 
 <MudThemeProvider Theme="_theme" IsDarkMode="_isDarkMode" />
@@ -8,17 +9,21 @@
 <MudDialogProvider />
 <MudSnackbarProvider />
 
-<MudLayout Class="@(_isDarkMode ? "app-dark" : "app-light")">
-    <MudAppBar Class="top-bar" Color="Color.Default" Elevation="1" Fixed="false">
+<MudLayout Class="@(_isDarkMode ? "app-shell app-dark" : "app-shell app-light")">
+    <MudAppBar Class="top-bar" Color="Color.Default" Elevation="0" Fixed="true">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" aria-label="Toggle navigation" />
+        <MudIcon Icon="@Icons.Material.Filled.AcUnit" Class="brand-icon" />
         <MudText Typo="Typo.h6" Class="brand-text">AC Defender</MudText>
         <MudSpacer />
-        <MudButton Href="/" Variant="Variant.Text" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.SpaceDashboard">Dashboard</MudButton>
-        <MudButton Href="/settings" Variant="Variant.Text" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.Tune">Settings</MudButton>
+        <MudChip T="string" Class="status-chip" Color="@HeaderColor" Variant="Variant.Filled" Size="Size.Small">@HeaderStatus</MudChip>
         <MudTooltip Text="@ThemeTooltip">
             <MudIconButton Color="Color.Inherit" Icon="@ThemeIcon" OnClick="ToggleTheme" aria-label="@ThemeTooltip" />
         </MudTooltip>
-        <MudChip T="string" Class="status-chip" Color="@HeaderColor" Variant="Variant.Filled">@HeaderStatus</MudChip>
     </MudAppBar>
+
+    <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="1" Variant="@DrawerVariant.Responsive" Class="app-drawer">
+        <NavMenu />
+    </MudDrawer>
 
     <MudMainContent Class="main-content">
         <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="page-container">
@@ -28,57 +33,76 @@
 </MudLayout>
 
 @code {
-    private PeriodicTimer? timer;
-    private CancellationTokenSource? timerCancellation;
-    private DefenderSnapshot? snapshot;
-    private bool _isDarkMode;
+    private bool _isDarkMode = true;
+    private bool _drawerOpen = true;
 
     private readonly MudTheme _theme = new()
     {
         PaletteLight = new PaletteLight
         {
             Primary = "#0f7d67",
-            Secondary = "#166da8",
+            Secondary = "#5b6cd6",
             Tertiary = "#b94a2f",
+            Info = "#166da8",
+            Success = "#1f9d57",
+            Warning = "#c98a18",
+            Error = "#c0392b",
             AppbarBackground = "#ffffff",
             AppbarText = "#17211c",
-            Background = "#f4f6f5",
+            Background = "#eef1f0",
             Surface = "#ffffff",
+            DrawerBackground = "#ffffff",
+            DrawerText = "#36443d",
             TextPrimary = "#17211c",
-            TextSecondary = "#64716b"
+            TextSecondary = "#5d6b64",
+            ActionDefault = "#5d6b64",
+            LinesDefault = "#dde5e1"
         },
         PaletteDark = new PaletteDark
         {
             Primary = "#46c1a7",
-            Secondary = "#6fb7e9",
+            Secondary = "#8a98ef",
             Tertiary = "#e07a5f",
-            AppbarBackground = "#17211c",
+            Info = "#6fb7e9",
+            Success = "#46c178",
+            Warning = "#e6b450",
+            Error = "#e57368",
+            AppbarBackground = "#131b18",
             AppbarText = "#e7f6ef",
-            Background = "#111815",
+            Background = "#0f1614",
             Surface = "#17211c",
+            DrawerBackground = "#131b18",
+            DrawerText = "#cfe0d8",
             TextPrimary = "#e7f6ef",
-            TextSecondary = "#a8b8b0",
-            DrawerBackground = "#17211c"
+            TextSecondary = "#9fb0a8",
+            ActionDefault = "#9fb0a8",
+            LinesDefault = "#2a3832"
+        },
+        Typography = new Typography
+        {
+            Default = new DefaultTypography { FontFamily = ["Segoe UI", "Inter", "Roboto", "Arial", "sans-serif"] }
         },
         LayoutProperties = new LayoutProperties
         {
-            DefaultBorderRadius = "8px"
+            DefaultBorderRadius = "12px",
+            DrawerWidthLeft = "248px"
         }
     };
 
     private string ThemeIcon => _isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode;
-
     private string ThemeTooltip => _isDarkMode ? "Switch to light theme" : "Switch to dark theme";
 
-    private string HeaderStatus => snapshot switch
+    private DefenderSnapshot? Snapshot => State.Snapshot;
+
+    private string HeaderStatus => Snapshot switch
     {
         null => "Starting",
         { DefenderEnabled: false } => "Paused",
         { ConnectionState: "home-assistant" } => "Defender active",
-        _ => "Home Assistant unavailable"
+        _ => "Home Assistant offline"
     };
 
-    private Color HeaderColor => snapshot switch
+    private Color HeaderColor => Snapshot switch
     {
         null => Color.Default,
         { DefenderEnabled: false } => Color.Warning,
@@ -88,10 +112,7 @@
 
     protected override void OnInitialized()
     {
-        snapshot = StateStore.GetSnapshot();
-        timerCancellation = new CancellationTokenSource();
-        timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
-        _ = PollAsync(timerCancellation.Token);
+        State.Changed += OnStateChanged;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -104,13 +125,18 @@
         try
         {
             var savedTheme = await JS.InvokeAsync<string?>("localStorage.getItem", "ac-defender-theme");
-            _isDarkMode = string.Equals(savedTheme, "dark", StringComparison.OrdinalIgnoreCase);
-            StateHasChanged();
+            if (!string.IsNullOrWhiteSpace(savedTheme))
+            {
+                _isDarkMode = string.Equals(savedTheme, "dark", StringComparison.OrdinalIgnoreCase);
+                StateHasChanged();
+            }
         }
         catch
         {
         }
     }
+
+    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
 
     private async Task ToggleTheme()
     {
@@ -124,25 +150,35 @@
         }
     }
 
-    private async Task PollAsync(CancellationToken cancellationToken)
+    private DateTimeOffset? _lastCoolingFailureSnackbarAt;
+
+    private void OnStateChanged()
     {
-        try
-        {
-            while (timer is not null && await timer.WaitForNextTickAsync(cancellationToken))
-            {
-                snapshot = StateStore.GetSnapshot();
-                await InvokeAsync(StateHasChanged);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        ShowCoolingFailureSnackbarIfDue();
+        InvokeAsync(StateHasChanged);
     }
 
-    public void Dispose()
+    private void ShowCoolingFailureSnackbarIfDue()
     {
-        timerCancellation?.Cancel();
-        timer?.Dispose();
-        timerCancellation?.Dispose();
+        if (Snapshot?.CoolingFailure.Alerting != true)
+        {
+            _lastCoolingFailureSnackbarAt = null;
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (_lastCoolingFailureSnackbarAt is { } last && now - last < TimeSpan.FromSeconds(60))
+        {
+            return;
+        }
+
+        _lastCoolingFailureSnackbarAt = now;
+        Snackbar.Add(Snapshot.CoolingFailure.Status, Severity.Error, options =>
+        {
+            options.RequireInteraction = true;
+            options.VisibleStateDuration = 15000;
+        });
     }
+
+    public void Dispose() => State.Changed -= OnStateChanged;
 }

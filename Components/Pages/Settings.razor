@@ -2,1781 +2,458 @@
 @inject DefenderStateStore StateStore
 @inject ISnackbar Snackbar
 
-<PageTitle>Settings - Home Assistant AC Defender</PageTitle>
-
-<MudStack Spacing="2" Class="settings-shell">
-    <MudPaper Class="panel-card compact-panel">
-        <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
-            <div>
-                <MudText Typo="Typo.overline">Settings</MudText>
-                <MudText Typo="Typo.h5">Tabbed defender controls</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">Use the tabs to stay near the setting you want instead of scrolling through every control.</MudText>
-            </div>
-            <div class="action-with-help">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveSettings" StartIcon="@Icons.Material.Filled.Save">Save settings</MudButton>
-                <MudText Typo="Typo.caption" Class="helper-text">Stores these choices.</MudText>
-            </div>
-        </MudStack>
-
-        <MudGrid Spacing="2" Class="mt-2">
-            <MudItem xs="12" md="8">
-                <MudTextField T="string"
-                              @bind-Value="_settingsSearch"
-                              Immediate="true"
-                              Clearable="true"
-                              Placeholder="Search settings groups"
-                              Adornment="Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Filled.Search"
-                              Label="Find a setting"
-                              HelperText="Type words like schedule, weather, fan, upstairs, cooldown, touch, or echo."
-                              Variant="Variant.Outlined" />
-            </MudItem>
-            <MudItem xs="12" md="4">
-                <MudText Typo="Typo.subtitle2">@StatusText</MudText>
-                <MudText Typo="Typo.caption" Class="helper-text">This label says when settings were saved.</MudText>
-            </MudItem>
-        </MudGrid>
-
-        @if (!string.IsNullOrWhiteSpace(_settingsSearch))
-        {
-            <MudStack Row="true" Spacing="1" Class="wrap-gap mt-2">
-                @foreach (var result in SettingsSearchResults)
-                {
-                    <MudButton Variant="Variant.Outlined"
-                               Color="Color.Primary"
-                               Size="Size.Small"
-                               OnClick="@(() => OpenSettingsGroup(result))"
-                               StartIcon="@Icons.Material.Filled.Search">
-                        @($"{result.Tab}: {result.Name}")
-                    </MudButton>
-                }
-                @if (!SettingsSearchResults.Any())
-                {
-                    <MudText Typo="Typo.caption" Class="helper-text">No setting group matches that search.</MudText>
-                }
-            </MudStack>
-        }
-    </MudPaper>
-
-    <MudTabs Class="app-tabs" Elevation="0" Rounded="true" @bind-ActivePanelIndex="_activeSettingsTab">
-        <MudTabPanel Text="Automation">
-            <MudGrid Spacing="3">
-        <MudItem xs="12" md="6">
-            <MudPaper Class="panel-card">
-                <MudText Typo="Typo.overline">Automation</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">Rules for when the helper works.</MudText>
-
-                <MudSwitch T="bool"
-                           Value="_scheduleEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _scheduleEnabled = v))"
-                           Label="Use custom schedule"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Turns time rules on.</MudText>
-
-                <MudSelect T="string"
-                           Value="_weatherActivationMode"
-                           ValueChanged="@((string value) => SetDirty(value, v => _weatherActivationMode = v))"
-                           Label="Weather activation"
-                           HelperText="Weather can allow or block fixing."
-                           Variant="Variant.Outlined"
-                           Class="mt-3">
-                    @foreach (var option in WeatherOptions)
-                    {
-                        <MudSelectItem T="string" Value="@option.Value">@option.Label</MudSelectItem>
-                    }
-                </MudSelect>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_baseCooldownSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _baseCooldownSeconds = v))"
-                                         Label="Base cooldown seconds"
-                                         HelperText="First wait after a touch."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="3600" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_maxCooldownSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _maxCooldownSeconds = v))"
-                                         Label="Max cooldown seconds"
-                                         HelperText="Longest wait allowed."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="7200" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_touchFrequencyWindowMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _touchFrequencyWindowMinutes = v))"
-                                         Label="Touch window minutes"
-                                         HelperText="How long touches count."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="1440" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_coolModeRestoreDelayEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _coolModeRestoreDelayEnabled = v))"
-                           Label="Delay cool restore"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Waits a little before switching mode back to cool.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_coolModeRestoreMinimumDelaySeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _coolModeRestoreMinimumDelaySeconds = value))"
-                                         Label="Min mode wait seconds"
-                                         HelperText="Shortest wait before cool returns."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="3600" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_coolModeRestoreMaximumDelaySeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _coolModeRestoreMaximumDelaySeconds = value))"
-                                         Label="Max mode wait seconds"
-                                         HelperText="Longest wait before cool returns."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="7200" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="double"
-                                         Value="_coolModeRestoreComfortBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _coolModeRestoreComfortBandCelsius = value))"
-                                         Label="Mode safe band C"
-                                         HelperText="Skip wait if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_conflictQuietModeEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _conflictQuietModeEnabled = v))"
-                           Label="Conflict quiet mode"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Stands down when wall touches keep happening.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_conflictQuietTouchThreshold"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _conflictQuietTouchThreshold = value))"
-                                         Label="Touches to stand down"
-                                         HelperText="How many touches feel like a tug-of-war."
-                                         Variant="Variant.Outlined"
-                                         Min="2"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_conflictQuietMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _conflictQuietMinutes = value))"
-                                         Label="Stand-down minutes"
-                                         HelperText="How long to stop fighting back."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="double"
-                                         Value="_conflictQuietComfortBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _conflictQuietComfortBandCelsius = value))"
-                                         Label="Safe room band C"
-                                         HelperText="Extra warmth allowed while waiting."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_weatherDriftGuardEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _weatherDriftGuardEnabled = v))"
-                           Label="Weather drift timing"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Uses real outdoor temperature movement to pick a less obvious safe correction time.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_weatherDriftWindowMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _weatherDriftWindowMinutes = value))"
-                                         Label="Weather window minutes"
-                                         HelperText="How far back outdoor temperature is compared."
-                                         Variant="Variant.Outlined"
-                                         Min="5"
-                                         Max="1440" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_weatherDriftMinimumChangeCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _weatherDriftMinimumChangeCelsius = value))"
-                                         Label="Weather change C"
-                                         HelperText="Outdoor warming needed before a safe correction can look weather-driven."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_weatherDriftHoldMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _weatherDriftHoldMinutes = value))"
-                                         Label="Weather hold minutes"
-                                         HelperText="How long to wait for a natural weather slot."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="120" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_weatherDriftSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _weatherDriftSafetyBandCelsius = value))"
-                                         Label="Weather safe band C"
-                                         HelperText="Stop waiting if the room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-            </MudPaper>
-        </MudItem>
-            </MudGrid>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Recovery">
-            <MudGrid Spacing="3">
-        <MudItem xs="12" md="6">
-            <MudPaper Class="panel-card">
-                <MudText Typo="Typo.overline">Comfort Sync</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">Makes fixes look like calm little adjustments.</MudText>
-
-                <MudSwitch T="bool"
-                           Value="_naturalRecoveryEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _naturalRecoveryEnabled = v))"
-                           Label="Use quiet recovery"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">On means the helper waits and nudges instead of jumping fast.</MudText>
-
-                <MudSwitch T="bool"
-                           Value="_adaptiveQuietnessEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _adaptiveQuietnessEnabled = v))"
-                           Label="Auto quiet level"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Lets repeated wall touches make the helper slower and softer by itself.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_adaptiveQuietTouchThreshold"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _adaptiveQuietTouchThreshold = value))"
-                                         Label="Touches to quiet"
-                                         HelperText="How many wall changes start auto quiet."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_maximumAdaptiveDelaySeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _maximumAdaptiveDelaySeconds = value))"
-                                         Label="Max auto wait"
-                                         HelperText="Longest wait during repeated touches."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="7200" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_minimumAdaptiveStepCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _minimumAdaptiveStepCelsius = value))"
-                                         Label="Smallest auto nudge C"
-                                         HelperText="Softest move when touches keep happening."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_maximumAdaptiveHoldChancePercent"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _maximumAdaptiveHoldChancePercent = value))"
-                                         Label="Max auto hold %"
-                                         HelperText="Highest chance to wait again."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="100" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_maximumAdaptiveCommandGapSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _maximumAdaptiveCommandGapSeconds = value))"
-                                         Label="Max auto gap"
-                                         HelperText="Longest space between nudges."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="7200" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_minimumNaturalDelaySeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _minimumNaturalDelaySeconds = value))"
-                                         Label="Min quiet wait"
-                                         HelperText="Smallest wait after a wall change."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="3600" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_maximumNaturalDelaySeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _maximumNaturalDelaySeconds = value))"
-                                         Label="Max quiet wait"
-                                         HelperText="Biggest random wait."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="7200" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_naturalStepCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalStepCelsius = value))"
-                                         Label="Nudge size C"
-                                         HelperText="Warm room starts 1 C below room temp; this caps other moves."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalHoldChancePercent"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalHoldChancePercent = value))"
-                                         Label="Hold chance %"
-                                         HelperText="Chance to wait one more beat."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="100" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_maxNaturalHolds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _maxNaturalHolds = value))"
-                                         Label="Max holds"
-                                         HelperText="How many extra waits are allowed."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="10" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_minimumCommandGapSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _minimumCommandGapSeconds = value))"
-                                         Label="Command gap seconds"
-                                         HelperText="Space between thermostat nudges."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="3600" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_naturalSafetyOverrideCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalSafetyOverrideCelsius = value))"
-                                         Label="Too-hot override C"
-                                         HelperText="Skip quiet waits if room is this high."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="10"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_naturalWalkbackEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _naturalWalkbackEnabled = v))"
-                           Label="Natural walkback"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Moves safe corrections back in small steps when wall touches keep happening.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalWalkbackTriggerTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalWalkbackTriggerTouches = value))"
-                                         Label="Walkback touches"
-                                         HelperText="How many touches make nudges extra subtle."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_naturalWalkbackStepCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalWalkbackStepCelsius = value))"
-                                         Label="Walkback step C"
-                                         HelperText="Small safe-band nudge size."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_naturalWalkbackJitterCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalWalkbackJitterCelsius = value))"
-                                         Label="Tiny variation C"
-                                         HelperText="Small random change so nudges do not all match."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="0.5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_naturalWalkbackSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalWalkbackSafetyBandCelsius = value))"
-                                         Label="Walkback safe band C"
-                                         HelperText="Stop subtle nudges if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-            </MudPaper>
-        </MudItem>
-            </MudGrid>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Wall Touch">
-            <MudGrid Spacing="3">
-        <MudItem xs="12" md="6">
-            <MudPaper Class="panel-card">
-                <MudText Typo="Typo.overline">Wall Touch Behavior</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">Settings that react when someone changes the real wall thermostat.</MudText>
-                <MudSwitch T="bool"
-                           Value="_wallSettlingGuardEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _wallSettlingGuardEnabled = v))"
-                           Label="Wall settling guard"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Waits when the wall thermostat is still being tapped, so the helper does not fight back instantly.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_wallSettlingMinimumTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _wallSettlingMinimumTouches = value))"
-                                         Label="Settle touches"
-                                         HelperText="How many wall touches mean someone is still adjusting."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_wallSettlingWindowMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _wallSettlingWindowMinutes = value))"
-                                         Label="Settle window minutes"
-                                         HelperText="How long wall touches count as recent."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="1440" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_wallSettlingBaseSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _wallSettlingBaseSeconds = value))"
-                                         Label="Base settle seconds"
-                                         HelperText="Shortest pause after enough wall touches."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="1800" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_wallSettlingPressureExtraSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _wallSettlingPressureExtraSeconds = value))"
-                                         Label="Pressure extra seconds"
-                                         HelperText="Extra pause when wall touches keep piling up."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="3600" />
-                    </MudItem>
-                    <MudItem xs="12">
-                        <MudNumericField T="double"
-                                         Value="_wallSettlingSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _wallSettlingSafetyBandCelsius = value))"
-                                         Label="Settle safe band C"
-                                         HelperText="Stop waiting if the room gets this warm above target."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_touchSignatureEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _touchSignatureEnabled = v))"
-                           Label="Touch signature"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Learns wall-step size and shapes safe nudges to match.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_touchSignatureTriggerTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _touchSignatureTriggerTouches = value))"
-                                         Label="Signature touches"
-                                         HelperText="How many wall steps it needs to learn."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_touchSignatureRetentionMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _touchSignatureRetentionMinutes = value))"
-                                         Label="Signature memory minutes"
-                                         HelperText="How long wall steps stay useful."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="1440" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_touchSignatureMinimumStepCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _touchSignatureMinimumStepCelsius = value))"
-                                         Label="Small signature step C"
-                                         HelperText="Smallest learned nudge size."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_touchSignatureMaximumStepCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _touchSignatureMaximumStepCelsius = value))"
-                                         Label="Large signature step C"
-                                         HelperText="Biggest learned nudge size."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_touchSignatureSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _touchSignatureSafetyBandCelsius = value))"
-                                         Label="Signature safe band C"
-                                         HelperText="Skip the signature if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_visibilityGuardEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _visibilityGuardEnabled = v))"
-                           Label="Visibility guard"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Slows only safe corrections when a wall touch happens right after a helper command.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_visibilityGuardTriggerNotices"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardTriggerNotices = value))"
-                                         Label="Notice trigger"
-                                         HelperText="How many noticed touches start the hold."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_visibilityGuardNoticeWindowMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardNoticeWindowMinutes = value))"
-                                         Label="Notice window minutes"
-                                         HelperText="How long noticed touches count."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="1440" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_visibilityGuardAfterCommandSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardAfterCommandSeconds = value))"
-                                         Label="After-command seconds"
-                                         HelperText="How soon after a helper command a wall touch counts."
-                                         Variant="Variant.Outlined"
-                                         Min="15"
-                                         Max="3600" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_visibilityGuardMinimumHoldMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardMinimumHoldMinutes = value))"
-                                         Label="Min visibility hold"
-                                         HelperText="Shortest quiet hold after noticed activity."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_visibilityGuardMaximumHoldMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _visibilityGuardMaximumHoldMinutes = value))"
-                                         Label="Max visibility hold"
-                                         HelperText="Longest quiet hold after noticed activity."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="480" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_visibilityGuardSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _visibilityGuardSafetyBandCelsius = value))"
-                                         Label="Visibility safe band C"
-                                         HelperText="Skip visibility holds if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_routineTimingEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _routineTimingEnabled = v))"
-                           Label="Routine timing"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Waits for a normal comfort-check rhythm after repeated wall changes.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_routineTimingTriggerTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _routineTimingTriggerTouches = value))"
-                                         Label="Routine touches"
-                                         HelperText="How many wall changes start routine timing."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_routineTimingIntervalMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _routineTimingIntervalMinutes = value))"
-                                         Label="Routine minutes"
-                                         HelperText="Normal minute rhythm for safe corrections."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="60" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_routineTimingJitterMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _routineTimingJitterMinutes = value))"
-                                         Label="Routine wiggle minutes"
-                                         HelperText="Small extra time so it does not hit exactly."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="30" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_routineTimingMaxDelayMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _routineTimingMaxDelayMinutes = value))"
-                                         Label="Max routine wait"
-                                         HelperText="Longest safe routine timing hold."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="180" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_routineTimingSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _routineTimingSafetyBandCelsius = value))"
-                                         Label="Routine safe band C"
-                                         HelperText="Skip routine timing if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_comfortBudgetEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _comfortBudgetEnabled = v))"
-                           Label="Comfort budget"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Limits repeated safe adjustments so the room can settle.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_comfortBudgetWindowMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortBudgetWindowMinutes = value))"
-                                         Label="Budget window minutes"
-                                         HelperText="How long recent safe adjustments count."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_comfortBudgetMaxCommands"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortBudgetMaxCommands = value))"
-                                         Label="Budget adjustments"
-                                         HelperText="Safe adjustments allowed in the window."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="30" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_comfortBudgetSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortBudgetSafetyBandCelsius = value))"
-                                         Label="Budget safe band C"
-                                         HelperText="Skip the budget if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_naturalCadenceEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _naturalCadenceEnabled = v))"
-                           Label="Natural cadence"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Picks a quiet future slot for safe nudges when wall touches keep happening.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalCadenceTriggerTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalCadenceTriggerTouches = value))"
-                                         Label="Cadence touches"
-                                         HelperText="How many touches start the quiet clock."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalCadenceMinimumMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalCadenceMinimumMinutes = value))"
-                                         Label="Min cadence minutes"
-                                         HelperText="Shortest quiet slot wait."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="120" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalCadenceMaximumMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalCadenceMaximumMinutes = value))"
-                                         Label="Max cadence minutes"
-                                         HelperText="Longest quiet slot wait."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalCadenceJitterMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalCadenceJitterMinutes = value))"
-                                         Label="Cadence wiggle minutes"
-                                         HelperText="Tiny time wobble so slots do not match."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="60" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_naturalCadenceSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalCadenceSafetyBandCelsius = value))"
-                                         Label="Cadence safe band C"
-                                         HelperText="Skip the quiet slot if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_naturalChangePlannerEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _naturalChangePlannerEnabled = v))"
-                           Label="Comfort Pace"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">After frequent wall changes, waits for a calmer weather, sensor, or clock moment before safe nudges.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalChangePlannerTriggerTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalChangePlannerTriggerTouches = value))"
-                                         Label="Pace touches"
-                                         HelperText="How many wall changes start calmer pacing."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalChangePlannerMinimumMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalChangePlannerMinimumMinutes = value))"
-                                         Label="Min pace minutes"
-                                         HelperText="Shortest calm-slot wait."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalChangePlannerMaximumMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalChangePlannerMaximumMinutes = value))"
-                                         Label="Max pace minutes"
-                                         HelperText="Longest calm-slot wait when touches pile up."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="480" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_naturalChangePlannerJitterMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalChangePlannerJitterMinutes = value))"
-                                         Label="Pace wiggle minutes"
-                                         HelperText="Small random wiggle around the calm slot."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="120" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_naturalChangePlannerSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalChangePlannerSafetyBandCelsius = value))"
-                                         Label="Pace safe band C"
-                                         HelperText="Stop pacing if the room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudSwitch T="bool"
-                                   Value="_naturalChangePlannerPreferWeatherSlots"
-                                   ValueChanged="@((bool value) => SetDirty(value, v => _naturalChangePlannerPreferWeatherSlots = v))"
-                                   Label="Use weather slots"
-                                   Color="Color.Success" />
-                        <MudText Typo="Typo.caption" Class="helper-text">Lets real outdoor changes shorten the calm-slot wait.</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudSwitch T="bool"
-                                   Value="_naturalChangePlannerPreferSensorBeat"
-                                   ValueChanged="@((bool value) => SetDirty(value, v => _naturalChangePlannerPreferSensorBeat = v))"
-                                   Label="Use sensor beat"
-                                   Color="Color.Success" />
-                        <MudText Typo="Typo.caption" Class="helper-text">Lines safe nudges up with normal Home Assistant readings.</MudText>
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_comfortEnvelopeEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _comfortEnvelopeEnabled = v))"
-                           Label="Comfort Envelope"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Lets tiny safe wall preferences rest instead of correcting every small difference.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_comfortEnvelopeTriggerTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortEnvelopeTriggerTouches = value))"
-                                         Label="Envelope touches"
-                                         HelperText="How many wall changes start the safe range."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_comfortEnvelopeHoldMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortEnvelopeHoldMinutes = value))"
-                                         Label="Envelope minutes"
-                                         HelperText="How long the small safe preference can rest."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_comfortEnvelopeMaxOffsetCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortEnvelopeMaxOffsetCelsius = value))"
-                                         Label="Envelope range C"
-                                         HelperText="Maximum setpoint difference allowed inside the safe range."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_comfortEnvelopeSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortEnvelopeSafetyBandCelsius = value))"
-                                         Label="Envelope safe band C"
-                                         HelperText="Stop observing if the room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_comfortCompromiseEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _comfortCompromiseEnabled = v))"
-                           Label="Comfort compromise"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Lets repeated wall choices rest briefly while the room is still safe.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_comfortCompromiseTriggerTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortCompromiseTriggerTouches = value))"
-                                         Label="Compromise touches"
-                                         HelperText="How many touches start the temporary blend."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_comfortCompromiseHoldMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortCompromiseHoldMinutes = value))"
-                                         Label="Compromise hold minutes"
-                                         HelperText="How long the wall choice can rest."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_comfortCompromiseDecayMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortCompromiseDecayMinutes = value))"
-                                         Label="Fade-back minutes"
-                                         HelperText="How slowly it eases back."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_comfortCompromiseMaxOffsetCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortCompromiseMaxOffsetCelsius = value))"
-                                         Label="Max compromise C"
-                                         HelperText="Biggest temporary difference from target."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12">
-                        <MudNumericField T="double"
-                                         Value="_comfortCompromiseSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortCompromiseSafetyBandCelsius = value))"
-                                         Label="Compromise safe band C"
-                                         HelperText="Stop compromise if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_comfortMemoryEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _comfortMemoryEnabled = v))"
-                           Label="Comfort memory"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Learns a tiny time-of-day preference from repeated safe wall choices.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_comfortMemoryLearningTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortMemoryLearningTouches = value))"
-                                         Label="Memory touches"
-                                         HelperText="How many touches teach a time window."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_comfortMemoryRetentionHours"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortMemoryRetentionHours = value))"
-                                         Label="Memory hours"
-                                         HelperText="How long a learned preference lasts."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="168" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_comfortMemoryMaxOffsetCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortMemoryMaxOffsetCelsius = value))"
-                                         Label="Max memory C"
-                                         HelperText="Biggest learned target adjustment."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="3"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_comfortMemorySafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortMemorySafetyBandCelsius = value))"
-                                         Label="Memory safe band C"
-                                         HelperText="Stop memory if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="3"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_manualComfortGraceEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _manualComfortGraceEnabled = v))"
-                           Label="Respect wall changes"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Leaves a wall change alone while the room still feels okay.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_manualComfortGraceMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _manualComfortGraceMinutes = value))"
-                                         Label="Grace minutes"
-                                         HelperText="How long a wall change can rest."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_manualComfortGraceBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _manualComfortGraceBandCelsius = value))"
-                                         Label="Grace room band C"
-                                         HelperText="Extra warmth allowed before fixing."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_touchIntentEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _touchIntentEnabled = v))"
-                           Label="Touch intent"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Learns if wall changes are mostly warmer, cooler, or mixed.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_touchIntentMinimumTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _touchIntentMinimumTouches = value))"
-                                         Label="Intent touches"
-                                         HelperText="How many wall changes it needs before deciding."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_touchIntentWindowMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _touchIntentWindowMinutes = value))"
-                                         Label="Intent window minutes"
-                                         HelperText="How long wall choices count."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="1440" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_touchIntentNetWarmThresholdCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _touchIntentNetWarmThresholdCelsius = value))"
-                                         Label="Warmer pattern C"
-                                         HelperText="Net warmer change needed before extra grace."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_touchIntentExtraGraceMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _touchIntentExtraGraceMinutes = value))"
-                                         Label="Intent extra grace"
-                                         HelperText="Extra safe minutes when warmer intent is clear."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12">
-                        <MudNumericField T="double"
-                                         Value="_touchIntentSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _touchIntentSafetyBandCelsius = value))"
-                                         Label="Intent safe band C"
-                                         HelperText="Stop extra grace if room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_coolerIntentFastLaneEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _coolerIntentFastLaneEnabled = v))"
-                           Label="Cooler intent fast lane"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">When people keep turning the wall thermostat cooler, quiet waits step aside so the room can cool sooner.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_coolerIntentMinimumTouches"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _coolerIntentMinimumTouches = value))"
-                                         Label="Cooler touches"
-                                         HelperText="How many cooler wall changes it needs before helping faster."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="20" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_coolerIntentWindowMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _coolerIntentWindowMinutes = value))"
-                                         Label="Cooler window minutes"
-                                         HelperText="How long cooler wall choices count."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="1440" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_coolerIntentHoldMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _coolerIntentHoldMinutes = value))"
-                                         Label="Fast-lane minutes"
-                                         HelperText="How long quiet waits stay out of the way."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_coolerIntentNetCoolThresholdCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _coolerIntentNetCoolThresholdCelsius = value))"
-                                         Label="Cooler pattern C"
-                                         HelperText="Net cooler movement needed before the fast lane starts."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12">
-                        <MudNumericField T="double"
-                                         Value="_coolerIntentSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _coolerIntentSafetyBandCelsius = value))"
-                                         Label="Fast-lane safe band C"
-                                         HelperText="Only skip quiet waits while the room is this close to target, unless comfort safety already takes over."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-            </MudPaper>
-        </MudItem>
-            </MudGrid>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Sensor Timing">
-            <MudGrid Spacing="3">
-        <MudItem xs="12" md="6">
-            <MudPaper Class="panel-card">
-                <MudText Typo="Typo.overline">Sensor Timing</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">Settings that wait for Home Assistant readings and cooling momentum.</MudText>
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_setpointEchoGuardEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _setpointEchoGuardEnabled = v))"
-                           Label="Setpoint echo"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Waits for Home Assistant to repeat back the last helper setpoint before another safe command.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_setpointEchoGraceSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _setpointEchoGraceSeconds = value))"
-                                         Label="Echo wait seconds"
-                                         HelperText="How long to wait for Home Assistant to confirm."
-                                         Variant="Variant.Outlined"
-                                         Min="5"
-                                         Max="300" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_setpointEchoSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _setpointEchoSafetyBandCelsius = value))"
-                                         Label="Echo safe band C"
-                                         HelperText="Stop waiting if the room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_repeatCommandGuardEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _repeatCommandGuardEnabled = v))"
-                           Label="Repeat quiet"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Waits before sending the same thermostat number again when the room is still safe.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_repeatCommandMinimumWaitSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _repeatCommandMinimumWaitSeconds = value))"
-                                         Label="Repeat wait seconds"
-                                         HelperText="Smallest wait before repeating the same number."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="1800" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_repeatCommandPressureExtraSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _repeatCommandPressureExtraSeconds = value))"
-                                         Label="Repeat pressure seconds"
-                                         HelperText="Extra wait when wall touches or helper commands pile up."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="3600" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="double"
-                                         Value="_repeatCommandSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _repeatCommandSafetyBandCelsius = value))"
-                                         Label="Repeat safe band C"
-                                         HelperText="Stop waiting if the room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_sensorRhythmGuardEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _sensorRhythmGuardEnabled = v))"
-                           Label="Sensor rhythm"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Waits for a normal Home Assistant sensor beat before safe nudges.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_sensorRhythmMinimumSamples"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _sensorRhythmMinimumSamples = value))"
-                                         Label="Rhythm samples"
-                                         HelperText="Readings needed before the beat is trusted."
-                                         Variant="Variant.Outlined"
-                                         Min="2"
-                                         Max="60" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_sensorRhythmWindowMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _sensorRhythmWindowMinutes = value))"
-                                         Label="Rhythm window minutes"
-                                         HelperText="How long reading beats stay in memory."
-                                         Variant="Variant.Outlined"
-                                         Min="5"
-                                         Max="1440" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="int"
-                                         Value="_sensorRhythmJitterSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _sensorRhythmJitterSeconds = value))"
-                                         Label="Rhythm wiggle seconds"
-                                         HelperText="Tiny extra wait after the sensor beat."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="300" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_sensorRhythmSafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _sensorRhythmSafetyBandCelsius = value))"
-                                         Label="Rhythm safe band C"
-                                         HelperText="Stop waiting if the room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_coolingRunwayGuardEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _coolingRunwayGuardEnabled = v))"
-                           Label="Cooling runway"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Waits after cooling starts so the AC gets a chance to work before another safe nudge.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_coolingRunwayMinimumSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _coolingRunwayMinimumSeconds = value))"
-                                         Label="Runway wait seconds"
-                                         HelperText="Smallest wait after cooling starts."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="1800" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_coolingRunwayPressureExtraSeconds"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _coolingRunwayPressureExtraSeconds = value))"
-                                         Label="Runway pressure seconds"
-                                         HelperText="Extra wait when touches or commands pile up."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="3600" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="double"
-                                         Value="_coolingRunwaySafetyBandCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _coolingRunwaySafetyBandCelsius = value))"
-                                         Label="Runway safe band C"
-                                         HelperText="Stop waiting if the room gets this warm."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_roomTrendGuardEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _roomTrendGuardEnabled = v))"
-                           Label="Watch room trend"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Waits if the room is stable or cooling after a wall change.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_roomTrendWindowMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _roomTrendWindowMinutes = value))"
-                                         Label="Trend window minutes"
-                                         HelperText="How far back to compare room temp."
-                                         Variant="Variant.Outlined"
-                                         Min="2"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="double"
-                                         Value="_roomTrendStableToleranceCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _roomTrendStableToleranceCelsius = value))"
-                                         Label="Stable change C"
-                                         HelperText="Small change counts as steady."
-                                         Variant="Variant.Outlined"
-                                         Min="0.05"
-                                         Max="2"
-                                         Step="0.05" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_roomTrendHoldMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _roomTrendHoldMinutes = value))"
-                                         Label="Trend hold minutes"
-                                         HelperText="How long to observe before nudging."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="120" />
-                    </MudItem>
-                </MudGrid>
-
-                <MudDivider Class="my-4" />
-                <MudSwitch T="bool"
-                           Value="_thermalMomentumGuardEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _thermalMomentumGuardEnabled = v))"
-                           Label="Use cooling momentum"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Waits when the room is already cooling fast enough.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="double"
-                                         Value="_thermalMomentumMinimumCoolingRateCelsiusPerHour"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _thermalMomentumMinimumCoolingRateCelsiusPerHour = value))"
-                                         Label="Cooling rate C/hour"
-                                         HelperText="How fast cooling must be to wait."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_thermalMomentumLookAheadMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _thermalMomentumLookAheadMinutes = value))"
-                                         Label="Look-ahead minutes"
-                                         HelperText="Only wait if target looks this close."
-                                         Variant="Variant.Outlined"
-                                         Min="5"
-                                         Max="240" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="int"
-                                         Value="_thermalMomentumHoldMinutes"
-                                         ValueChanged="@((int value) => SetDirty(value, v => _thermalMomentumHoldMinutes = value))"
-                                         Label="Momentum hold minutes"
-                                         HelperText="How long to let cooling keep working."
-                                         Variant="Variant.Outlined"
-                                         Min="1"
-                                         Max="120" />
-                    </MudItem>
-                </MudGrid>
-            </MudPaper>
-        </MudItem>
-            </MudGrid>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Comfort">
-            <MudGrid Spacing="3">
-        <MudItem xs="12" md="6">
-            <MudPaper Class="panel-card">
-                <MudText Typo="Typo.overline">Fan Energy Saver</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">Uses less fan when close enough.</MudText>
-
-                <MudSwitch T="bool"
-                           Value="_fanEnergySaverEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _fanEnergySaverEnabled = v))"
-                           Label="Adjust fan near target"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Lets the fan calm down.</MudText>
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="6">
-                        <MudNumericField T="double"
-                                         Value="_fanEnergySaverThresholdCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _fanEnergySaverThresholdCelsius = value))"
-                                         Label="Near-target threshold C"
-                                         HelperText="Close enough to relax."
-                                         Variant="Variant.Outlined"
-                                         Min="0.1"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudTextField T="string"
-                                      Value="_fanEnergySaverMode"
-                                      ValueChanged="@((string value) => SetDirty(value, v => _fanEnergySaverMode = v))"
-                                      Label="Fan saver mode"
-                                      HelperText="Fan mode to switch to."
-                                      Variant="Variant.Outlined"
-                                      Placeholder="auto" />
-                    </MudItem>
-                </MudGrid>
-            </MudPaper>
-        </MudItem>
-
-        <MudItem xs="12" md="6">
-            <MudPaper Class="panel-card">
-                <MudText Typo="Typo.overline">Upstairs Comfort</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">Helps if upstairs gets too warm.</MudText>
-
-                <MudSwitch T="bool"
-                           Value="_upstairsComfortEnabled"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _upstairsComfortEnabled = v))"
-                           Label="Protect upstairs comfort"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Watches upstairs heat.</MudText>
-
-                <MudTextField T="string"
-                              Value="_upstairsTemperatureEntityIds"
-                              ValueChanged="@((string value) => SetDirty(value, v => _upstairsTemperatureEntityIds = value))"
-                              Label="Upstairs temperature entity IDs"
-                              HelperText="Names of upstairs sensors."
-                              Variant="Variant.Outlined"
-                              Placeholder="sensor.upstairs_temperature, sensor.primary_bedroom_temperature"
-                              Class="mt-3" />
-
-                <MudGrid Spacing="2" Class="mt-1">
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="double"
-                                         Value="_upstairsMaxComfortCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _upstairsMaxComfortCelsius = value))"
-                                         Label="Max upstairs comfort C"
-                                         HelperText="Too hot starts help."
-                                         Variant="Variant.Outlined"
-                                         Min="15"
-                                         Max="35"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="double"
-                                         Value="_upstairsComfortTargetCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _upstairsComfortTargetCelsius = value))"
-                                         Label="Comfort target C"
-                                         HelperText="Cooler goal for upstairs."
-                                         Variant="Variant.Outlined"
-                                         Min="10"
-                                         Max="30"
-                                         Step="0.1" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField T="double"
-                                         Value="_upstairsComfortBoostCelsius"
-                                         ValueChanged="@((double value) => SetDirty(value, v => _upstairsComfortBoostCelsius = value))"
-                                         Label="Extra boost C"
-                                         HelperText="Extra push when hot."
-                                         Variant="Variant.Outlined"
-                                         Min="0"
-                                         Max="5"
-                                         Step="0.1" />
-                    </MudItem>
-                </MudGrid>
-            </MudPaper>
-        </MudItem>
-
-        <MudItem xs="12" md="6">
-            <MudPaper Class="panel-card">
-                <MudText Typo="Typo.overline">Home Presence</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">Checks if people are home.</MudText>
-
-                <MudSwitch T="bool"
-                           Value="_homePresenceRequired"
-                           ValueChanged="@((bool value) => SetDirty(value, v => _homePresenceRequired = v))"
-                           Label="Only prioritize upstairs when someone is home"
-                           Color="Color.Success" />
-                <MudText Typo="Typo.caption" Class="helper-text">Skip upstairs boost when away.</MudText>
-
-                <MudTextField T="string"
-                              Value="_presenceEntityIds"
-                              ValueChanged="@((string value) => SetDirty(value, v => _presenceEntityIds = value))"
-                              Label="Presence entity IDs"
-                              HelperText="Names that say home or away."
-                              Variant="Variant.Outlined"
-                              Placeholder="person.me, device_tracker.phone"
-                              Class="mt-3" />
-            </MudPaper>
-        </MudItem>
-    </MudGrid>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Schedule">
-    <MudPaper Class="panel-card">
-        <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
-            <div>
-                <MudText Typo="Typo.overline">Custom Schedule</MudText>
-                <MudText Typo="Typo.h5">Temperature rules</MudText>
-                <MudText Typo="Typo.body2" Class="helper-text">Times that set the target.</MudText>
-            </div>
-            <div class="action-with-help">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AddSchedule" StartIcon="@Icons.Material.Filled.Add">Add schedule</MudButton>
-                <MudText Typo="Typo.caption" Class="helper-text">Adds one time rule.</MudText>
-            </div>
-        </MudStack>
-
-        <MudGrid Spacing="2" Class="mt-2">
-            <MudItem xs="12" md="8">
-                <MudTextField T="string"
-                              @bind-Value="_scheduleSearch"
-                              Immediate="true"
-                              Clearable="true"
-                              Placeholder="Search schedule rules"
-                              Adornment="Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Filled.Search"
-                              Label="Find schedule"
-                              HelperText="Search by rule name, days, time, target, or weather rule."
-                              Variant="Variant.Outlined" />
-            </MudItem>
-            <MudItem xs="12" md="4">
-                <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined">@ScheduleResultText</MudChip>
-                <MudText Typo="Typo.caption" Class="helper-text">Shows how many rules match the search.</MudText>
-            </MudItem>
-        </MudGrid>
-
-        @if (_schedule.Count == 0)
-        {
-            <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">No schedule rules yet.</MudAlert>
-            <MudText Typo="Typo.caption" Class="helper-text">Add a rule when you want the defender to follow a clock.</MudText>
-        }
-        else if (!FilteredSchedule.Any())
-        {
-            <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">No schedule rules match that search.</MudAlert>
-            <MudText Typo="Typo.caption" Class="helper-text">Clear the search to see every rule again.</MudText>
-        }
-        else
-        {
-            <MudStack Spacing="2" Class="mt-3">
+<PageTitle>Settings - AC Defender</PageTitle>
+
+<MudStack Spacing="3" Class="settings-shell">
+    <SectionCard Title="Settings"
+                 Subtitle="Tune the defender"
+                 Help="Adjust timing, comfort, and safety. Type to filter controls. Changes apply when you save.">
+        <Actions>
+            <MudChip T="string" Size="Size.Small" Color="@(_dirty ? Color.Warning : Color.Default)" Variant="Variant.Outlined">@StatusText</MudChip>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveSettings" StartIcon="@Icons.Material.Filled.Save">Save</MudButton>
+        </Actions>
+        <ChildContent>
+            <MudTextField @bind-Value="_settingsSearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
+                          Placeholder="Search settings (cooldown, walkback, upstairs, weather…)"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mt-1" />
+        </ChildContent>
+    </SectionCard>
+
+    @* ───────────── Automation ───────────── *@
+    <SectionCard Title="Automation" Help="Schedule, weather activation, cooldown, cool restore, conflict quiet, and weather drift.">
+        <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
+            @if (Show("schedule weather activation always automation")) {
+                <MudExpansionPanel Text="Schedule & weather">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Use custom schedule" Value="_scheduleEnabled" ValueChanged="@(v => SetDirty(v, x => _scheduleEnabled = x))" Help="Turn on the time-of-day target rules edited at the bottom of this page." />
+                        <MudItem xs="12" sm="8">
+                            <MudSelect T="string" Value="_weatherActivationMode" ValueChanged="@(v => SetDirty(v, x => _weatherActivationMode = x))" Label="Weather activation" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                @foreach (var option in WeatherOptions)
+                                {
+                                    <MudSelectItem T="string" Value="@option.Value">@option.Label</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("base cooldown max touch frequency window")) {
+                <MudExpansionPanel Text="Cooldown">
+                    <MudGrid Spacing="2">
+                        <SettingInt Label="Base cooldown" Unit="s" Value="_baseCooldownSeconds" ValueChanged="@(v => SetDirty(v, x => _baseCooldownSeconds = x))" Min="0" Max="3600" Help="Quiet period after a manual change." />
+                        <SettingInt Label="Max cooldown" Unit="s" Value="_maxCooldownSeconds" ValueChanged="@(v => SetDirty(v, x => _maxCooldownSeconds = x))" Min="0" Max="7200" Help="Longest cooldown after many touches." />
+                        <SettingInt Label="Touch window" Unit="min" Value="_touchFrequencyWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _touchFrequencyWindowMinutes = x))" Min="1" Max="1440" Help="How far back touches are counted." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("cool mode restore delay band")) {
+                <MudExpansionPanel Text="Cool mode restore">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Delay cool restore" Value="_coolModeRestoreDelayEnabled" ValueChanged="@(v => SetDirty(v, x => _coolModeRestoreDelayEnabled = x))" Help="Wait briefly before forcing cool mode back." />
+                        <SettingInt Label="Min wait" Unit="s" Value="_coolModeRestoreMinimumDelaySeconds" ValueChanged="@(v => SetDirty(v, x => _coolModeRestoreMinimumDelaySeconds = x))" Min="0" Max="3600" />
+                        <SettingInt Label="Max wait" Unit="s" Value="_coolModeRestoreMaximumDelaySeconds" ValueChanged="@(v => SetDirty(v, x => _coolModeRestoreMaximumDelaySeconds = x))" Min="0" Max="7200" />
+                        <SettingDouble Label="Safe band" Value="_coolModeRestoreComfortBandCelsius" ValueChanged="@(v => SetDirty(v, x => _coolModeRestoreComfortBandCelsius = x))" Min="0.1" Max="5" Help="Warmth allowed before restoring now." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("conflict quiet tug of war stand down")) {
+                <MudExpansionPanel Text="Conflict quiet">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Conflict quiet mode" Value="_conflictQuietModeEnabled" ValueChanged="@(v => SetDirty(v, x => _conflictQuietModeEnabled = x))" Help="Stand down during an obvious thermostat fight." />
+                        <SettingInt Label="Touches to stand down" Value="_conflictQuietTouchThreshold" ValueChanged="@(v => SetDirty(v, x => _conflictQuietTouchThreshold = x))" Min="2" Max="20" />
+                        <SettingInt Label="Stand-down" Unit="min" Value="_conflictQuietMinutes" ValueChanged="@(v => SetDirty(v, x => _conflictQuietMinutes = x))" Min="1" Max="240" />
+                        <SettingDouble Label="Safe band" Value="_conflictQuietComfortBandCelsius" ValueChanged="@(v => SetDirty(v, x => _conflictQuietComfortBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("weather drift outdoor timing")) {
+                <MudExpansionPanel Text="Weather drift timing">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Weather drift timing" Value="_weatherDriftGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _weatherDriftGuardEnabled = x))" Help="Time safe corrections to real outdoor movement." />
+                        <SettingInt Label="Window" Unit="min" Value="_weatherDriftWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _weatherDriftWindowMinutes = x))" Min="5" Max="1440" />
+                        <SettingDouble Label="Min change" Value="_weatherDriftMinimumChangeCelsius" ValueChanged="@(v => SetDirty(v, x => _weatherDriftMinimumChangeCelsius = x))" Min="0.1" Max="5" />
+                        <SettingInt Label="Hold" Unit="min" Value="_weatherDriftHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _weatherDriftHoldMinutes = x))" Min="1" Max="120" />
+                        <SettingDouble Label="Safe band" Value="_weatherDriftSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _weatherDriftSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    </SectionCard>
+
+    @* ───────────── Recovery ───────────── *@
+    <SectionCard Title="Recovery" Help="Comfort Sync quiet recovery and natural walkback.">
+        <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
+            @if (Show("comfort sync quiet recovery adaptive nudge hold command gap")) {
+                <MudExpansionPanel Text="Comfort Sync (quiet recovery)">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Use quiet recovery" Value="_naturalRecoveryEnabled" ValueChanged="@(v => SetDirty(v, x => _naturalRecoveryEnabled = x))" Help="Space out and soften corrections." />
+                        <SettingSwitch Label="Auto quiet level" Value="_adaptiveQuietnessEnabled" ValueChanged="@(v => SetDirty(v, x => _adaptiveQuietnessEnabled = x))" Help="Let repeated touches raise the quiet level." />
+                        <SettingInt Label="Touches to quiet" Value="_adaptiveQuietTouchThreshold" ValueChanged="@(v => SetDirty(v, x => _adaptiveQuietTouchThreshold = x))" Min="1" Max="20" />
+                        <SettingInt Label="Max auto wait" Unit="s" Value="_maximumAdaptiveDelaySeconds" ValueChanged="@(v => SetDirty(v, x => _maximumAdaptiveDelaySeconds = x))" Min="0" Max="7200" />
+                        <SettingDouble Label="Smallest auto nudge" Value="_minimumAdaptiveStepCelsius" ValueChanged="@(v => SetDirty(v, x => _minimumAdaptiveStepCelsius = x))" Min="0.1" Max="5" />
+                        <SettingInt Label="Max auto hold" Unit="%" Value="_maximumAdaptiveHoldChancePercent" ValueChanged="@(v => SetDirty(v, x => _maximumAdaptiveHoldChancePercent = x))" Min="0" Max="100" />
+                        <SettingInt Label="Max auto gap" Unit="s" Value="_maximumAdaptiveCommandGapSeconds" ValueChanged="@(v => SetDirty(v, x => _maximumAdaptiveCommandGapSeconds = x))" Min="0" Max="7200" />
+                        <SettingInt Label="Min quiet wait" Unit="s" Value="_minimumNaturalDelaySeconds" ValueChanged="@(v => SetDirty(v, x => _minimumNaturalDelaySeconds = x))" Min="0" Max="3600" />
+                        <SettingInt Label="Max quiet wait" Unit="s" Value="_maximumNaturalDelaySeconds" ValueChanged="@(v => SetDirty(v, x => _maximumNaturalDelaySeconds = x))" Min="0" Max="7200" />
+                        <SettingDouble Label="Nudge size" Value="_naturalStepCelsius" ValueChanged="@(v => SetDirty(v, x => _naturalStepCelsius = x))" Min="0.1" Max="5" />
+                        <SettingInt Label="Hold chance" Unit="%" Value="_naturalHoldChancePercent" ValueChanged="@(v => SetDirty(v, x => _naturalHoldChancePercent = x))" Min="0" Max="100" />
+                        <SettingInt Label="Max holds" Value="_maxNaturalHolds" ValueChanged="@(v => SetDirty(v, x => _maxNaturalHolds = x))" Min="0" Max="10" />
+                        <SettingInt Label="Command gap" Unit="s" Value="_minimumCommandGapSeconds" ValueChanged="@(v => SetDirty(v, x => _minimumCommandGapSeconds = x))" Min="0" Max="3600" />
+                        <SettingDouble Label="Too-hot override" Value="_naturalSafetyOverrideCelsius" ValueChanged="@(v => SetDirty(v, x => _naturalSafetyOverrideCelsius = x))" Min="0.1" Max="10" Help="Warmth above target that skips all quiet waits." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("natural walkback step jitter")) {
+                <MudExpansionPanel Text="Natural walkback">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Natural walkback" Value="_naturalWalkbackEnabled" ValueChanged="@(v => SetDirty(v, x => _naturalWalkbackEnabled = x))" Help="Walk corrections back in small, varied steps." />
+                        <SettingInt Label="Walkback touches" Value="_naturalWalkbackTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _naturalWalkbackTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingDouble Label="Walkback step" Value="_naturalWalkbackStepCelsius" ValueChanged="@(v => SetDirty(v, x => _naturalWalkbackStepCelsius = x))" Min="0.1" Max="5" />
+                        <SettingDouble Label="Tiny variation" Value="_naturalWalkbackJitterCelsius" ValueChanged="@(v => SetDirty(v, x => _naturalWalkbackJitterCelsius = x))" Min="0" Max="0.5" />
+                        <SettingDouble Label="Safe band" Value="_naturalWalkbackSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _naturalWalkbackSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    </SectionCard>
+
+    @* ───────────── Wall touch ───────────── *@
+    <SectionCard Title="Wall touch" Help="How the defender reacts to people changing the wall thermostat.">
+        <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
+            @if (Show("wall settling tapping")) {
+                <MudExpansionPanel Text="Wall settling">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Wall settling guard" Value="_wallSettlingGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _wallSettlingGuardEnabled = x))" Help="Wait for tapping to stop before correcting." />
+                        <SettingInt Label="Settle touches" Value="_wallSettlingMinimumTouches" ValueChanged="@(v => SetDirty(v, x => _wallSettlingMinimumTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Window" Unit="min" Value="_wallSettlingWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _wallSettlingWindowMinutes = x))" Min="1" Max="1440" />
+                        <SettingInt Label="Base settle" Unit="s" Value="_wallSettlingBaseSeconds" ValueChanged="@(v => SetDirty(v, x => _wallSettlingBaseSeconds = x))" Min="0" Max="1800" />
+                        <SettingInt Label="Pressure extra" Unit="s" Value="_wallSettlingPressureExtraSeconds" ValueChanged="@(v => SetDirty(v, x => _wallSettlingPressureExtraSeconds = x))" Min="0" Max="3600" />
+                        <SettingDouble Label="Safe band" Value="_wallSettlingSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _wallSettlingSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("touch signature learned step")) {
+                <MudExpansionPanel Text="Touch signature">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Touch signature" Value="_touchSignatureEnabled" ValueChanged="@(v => SetDirty(v, x => _touchSignatureEnabled = x))" Help="Match nudges to the way the wall is changed." />
+                        <SettingInt Label="Signature touches" Value="_touchSignatureTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _touchSignatureTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Memory" Unit="min" Value="_touchSignatureRetentionMinutes" ValueChanged="@(v => SetDirty(v, x => _touchSignatureRetentionMinutes = x))" Min="1" Max="1440" />
+                        <SettingDouble Label="Small step" Value="_touchSignatureMinimumStepCelsius" ValueChanged="@(v => SetDirty(v, x => _touchSignatureMinimumStepCelsius = x))" Min="0.1" Max="5" />
+                        <SettingDouble Label="Large step" Value="_touchSignatureMaximumStepCelsius" ValueChanged="@(v => SetDirty(v, x => _touchSignatureMaximumStepCelsius = x))" Min="0.1" Max="5" />
+                        <SettingDouble Label="Safe band" Value="_touchSignatureSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _touchSignatureSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("visibility guard noticed")) {
+                <MudExpansionPanel Text="Visibility guard">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Visibility guard" Value="_visibilityGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _visibilityGuardEnabled = x))" Help="Slow down when a touch lands right after a command." />
+                        <SettingInt Label="Notice trigger" Value="_visibilityGuardTriggerNotices" ValueChanged="@(v => SetDirty(v, x => _visibilityGuardTriggerNotices = x))" Min="1" Max="20" />
+                        <SettingInt Label="Notice window" Unit="min" Value="_visibilityGuardNoticeWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _visibilityGuardNoticeWindowMinutes = x))" Min="1" Max="1440" />
+                        <SettingInt Label="After command" Unit="s" Value="_visibilityGuardAfterCommandSeconds" ValueChanged="@(v => SetDirty(v, x => _visibilityGuardAfterCommandSeconds = x))" Min="15" Max="3600" />
+                        <SettingInt Label="Min hold" Unit="min" Value="_visibilityGuardMinimumHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _visibilityGuardMinimumHoldMinutes = x))" Min="1" Max="240" />
+                        <SettingInt Label="Max hold" Unit="min" Value="_visibilityGuardMaximumHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _visibilityGuardMaximumHoldMinutes = x))" Min="1" Max="480" />
+                        <SettingDouble Label="Safe band" Value="_visibilityGuardSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _visibilityGuardSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("routine timing rhythm")) {
+                <MudExpansionPanel Text="Routine timing">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Routine timing" Value="_routineTimingEnabled" ValueChanged="@(v => SetDirty(v, x => _routineTimingEnabled = x))" Help="Line corrections up with a normal rhythm." />
+                        <SettingInt Label="Routine touches" Value="_routineTimingTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _routineTimingTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Interval" Unit="min" Value="_routineTimingIntervalMinutes" ValueChanged="@(v => SetDirty(v, x => _routineTimingIntervalMinutes = x))" Min="1" Max="60" />
+                        <SettingInt Label="Wiggle" Unit="min" Value="_routineTimingJitterMinutes" ValueChanged="@(v => SetDirty(v, x => _routineTimingJitterMinutes = x))" Min="0" Max="30" />
+                        <SettingInt Label="Max wait" Unit="min" Value="_routineTimingMaxDelayMinutes" ValueChanged="@(v => SetDirty(v, x => _routineTimingMaxDelayMinutes = x))" Min="1" Max="180" />
+                        <SettingDouble Label="Safe band" Value="_routineTimingSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _routineTimingSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("comfort budget rolling limit")) {
+                <MudExpansionPanel Text="Comfort budget">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Comfort budget" Value="_comfortBudgetEnabled" ValueChanged="@(v => SetDirty(v, x => _comfortBudgetEnabled = x))" Help="Cap safe corrections inside a window." />
+                        <SettingInt Label="Window" Unit="min" Value="_comfortBudgetWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _comfortBudgetWindowMinutes = x))" Min="1" Max="240" />
+                        <SettingInt Label="Adjustments" Value="_comfortBudgetMaxCommands" ValueChanged="@(v => SetDirty(v, x => _comfortBudgetMaxCommands = x))" Min="1" Max="30" />
+                        <SettingDouble Label="Safe band" Value="_comfortBudgetSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _comfortBudgetSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("natural cadence slot")) {
+                <MudExpansionPanel Text="Natural cadence">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Natural cadence" Value="_naturalCadenceEnabled" ValueChanged="@(v => SetDirty(v, x => _naturalCadenceEnabled = x))" Help="Pick a varied future slot for safe nudges." />
+                        <SettingInt Label="Cadence touches" Value="_naturalCadenceTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _naturalCadenceTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Min" Unit="min" Value="_naturalCadenceMinimumMinutes" ValueChanged="@(v => SetDirty(v, x => _naturalCadenceMinimumMinutes = x))" Min="1" Max="120" />
+                        <SettingInt Label="Max" Unit="min" Value="_naturalCadenceMaximumMinutes" ValueChanged="@(v => SetDirty(v, x => _naturalCadenceMaximumMinutes = x))" Min="1" Max="240" />
+                        <SettingInt Label="Wiggle" Unit="min" Value="_naturalCadenceJitterMinutes" ValueChanged="@(v => SetDirty(v, x => _naturalCadenceJitterMinutes = x))" Min="0" Max="60" />
+                        <SettingDouble Label="Safe band" Value="_naturalCadenceSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _naturalCadenceSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("comfort pace planner high frequency climate slot")) {
+                <MudExpansionPanel Text="Comfort Pace">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Comfort Pace" Value="_naturalChangePlannerEnabled" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerEnabled = x))" Help="Pace heavy wall fighting into calm slots." />
+                        <SettingInt Label="Pace touches" Value="_naturalChangePlannerTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Min" Unit="min" Value="_naturalChangePlannerMinimumMinutes" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerMinimumMinutes = x))" Min="1" Max="240" />
+                        <SettingInt Label="Max" Unit="min" Value="_naturalChangePlannerMaximumMinutes" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerMaximumMinutes = x))" Min="1" Max="480" />
+                        <SettingInt Label="Wiggle" Unit="min" Value="_naturalChangePlannerJitterMinutes" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerJitterMinutes = x))" Min="0" Max="120" />
+                        <SettingDouble Label="Safe band" Value="_naturalChangePlannerSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                        <SettingSwitch Label="Use weather slots" Value="_naturalChangePlannerPreferWeatherSlots" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerPreferWeatherSlots = x))" />
+                        <SettingSwitch Label="Use sensor beat" Value="_naturalChangePlannerPreferSensorBeat" ValueChanged="@(v => SetDirty(v, x => _naturalChangePlannerPreferSensorBeat = x))" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("comfort envelope range")) {
+                <MudExpansionPanel Text="Comfort envelope">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Comfort envelope" Value="_comfortEnvelopeEnabled" ValueChanged="@(v => SetDirty(v, x => _comfortEnvelopeEnabled = x))" Help="Let tiny safe wall preferences rest." />
+                        <SettingInt Label="Envelope touches" Value="_comfortEnvelopeTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _comfortEnvelopeTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Hold" Unit="min" Value="_comfortEnvelopeHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _comfortEnvelopeHoldMinutes = x))" Min="0" Max="240" />
+                        <SettingDouble Label="Range" Value="_comfortEnvelopeMaxOffsetCelsius" ValueChanged="@(v => SetDirty(v, x => _comfortEnvelopeMaxOffsetCelsius = x))" Min="0.1" Max="5" />
+                        <SettingDouble Label="Safe band" Value="_comfortEnvelopeSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _comfortEnvelopeSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("comfort compromise blend fade")) {
+                <MudExpansionPanel Text="Comfort compromise">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Comfort compromise" Value="_comfortCompromiseEnabled" ValueChanged="@(v => SetDirty(v, x => _comfortCompromiseEnabled = x))" Help="Blend a wall choice in, then fade it back." />
+                        <SettingInt Label="Compromise touches" Value="_comfortCompromiseTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _comfortCompromiseTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Hold" Unit="min" Value="_comfortCompromiseHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _comfortCompromiseHoldMinutes = x))" Min="0" Max="240" />
+                        <SettingInt Label="Fade-back" Unit="min" Value="_comfortCompromiseDecayMinutes" ValueChanged="@(v => SetDirty(v, x => _comfortCompromiseDecayMinutes = x))" Min="1" Max="240" />
+                        <SettingDouble Label="Max blend" Value="_comfortCompromiseMaxOffsetCelsius" ValueChanged="@(v => SetDirty(v, x => _comfortCompromiseMaxOffsetCelsius = x))" Min="0.1" Max="5" />
+                        <SettingDouble Label="Safe band" Value="_comfortCompromiseSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _comfortCompromiseSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("comfort memory time of day learn")) {
+                <MudExpansionPanel Text="Comfort memory">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Comfort memory" Value="_comfortMemoryEnabled" ValueChanged="@(v => SetDirty(v, x => _comfortMemoryEnabled = x))" Help="Learn a small time-of-day target bias." />
+                        <SettingInt Label="Memory touches" Value="_comfortMemoryLearningTouches" ValueChanged="@(v => SetDirty(v, x => _comfortMemoryLearningTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Retention" Unit="h" Value="_comfortMemoryRetentionHours" ValueChanged="@(v => SetDirty(v, x => _comfortMemoryRetentionHours = x))" Min="1" Max="168" />
+                        <SettingDouble Label="Max bias" Value="_comfortMemoryMaxOffsetCelsius" ValueChanged="@(v => SetDirty(v, x => _comfortMemoryMaxOffsetCelsius = x))" Min="0.1" Max="3" />
+                        <SettingDouble Label="Safe band" Value="_comfortMemorySafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _comfortMemorySafetyBandCelsius = x))" Min="0.1" Max="3" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("manual comfort grace respect wall changes")) {
+                <MudExpansionPanel Text="Manual comfort grace">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Respect wall changes" Value="_manualComfortGraceEnabled" ValueChanged="@(v => SetDirty(v, x => _manualComfortGraceEnabled = x))" Help="Leave a wall change alone while comfortable." />
+                        <SettingInt Label="Grace" Unit="min" Value="_manualComfortGraceMinutes" ValueChanged="@(v => SetDirty(v, x => _manualComfortGraceMinutes = x))" Min="0" Max="240" />
+                        <SettingDouble Label="Grace band" Value="_manualComfortGraceBandCelsius" ValueChanged="@(v => SetDirty(v, x => _manualComfortGraceBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("touch intent warmer cooler direction")) {
+                <MudExpansionPanel Text="Touch intent">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Touch intent" Value="_touchIntentEnabled" ValueChanged="@(v => SetDirty(v, x => _touchIntentEnabled = x))" Help="Extend grace for a clear warmer pattern." />
+                        <SettingInt Label="Intent touches" Value="_touchIntentMinimumTouches" ValueChanged="@(v => SetDirty(v, x => _touchIntentMinimumTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Window" Unit="min" Value="_touchIntentWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _touchIntentWindowMinutes = x))" Min="1" Max="1440" />
+                        <SettingDouble Label="Warmer pattern" Value="_touchIntentNetWarmThresholdCelsius" ValueChanged="@(v => SetDirty(v, x => _touchIntentNetWarmThresholdCelsius = x))" Min="0.1" Max="5" />
+                        <SettingInt Label="Extra grace" Unit="min" Value="_touchIntentExtraGraceMinutes" ValueChanged="@(v => SetDirty(v, x => _touchIntentExtraGraceMinutes = x))" Min="0" Max="240" />
+                        <SettingDouble Label="Safe band" Value="_touchIntentSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _touchIntentSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("cooler intent fast lane")) {
+                <MudExpansionPanel Text="Cooler intent fast lane">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Cooler intent fast lane" Value="_coolerIntentFastLaneEnabled" ValueChanged="@(v => SetDirty(v, x => _coolerIntentFastLaneEnabled = x))" Help="Skip quiet waits when people keep dialing cooler." />
+                        <SettingInt Label="Cooler touches" Value="_coolerIntentMinimumTouches" ValueChanged="@(v => SetDirty(v, x => _coolerIntentMinimumTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Window" Unit="min" Value="_coolerIntentWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _coolerIntentWindowMinutes = x))" Min="1" Max="1440" />
+                        <SettingInt Label="Fast-lane" Unit="min" Value="_coolerIntentHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _coolerIntentHoldMinutes = x))" Min="0" Max="240" />
+                        <SettingDouble Label="Cooler pattern" Value="_coolerIntentNetCoolThresholdCelsius" ValueChanged="@(v => SetDirty(v, x => _coolerIntentNetCoolThresholdCelsius = x))" Min="0.1" Max="5" />
+                        <SettingDouble Label="Safe band" Value="_coolerIntentSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _coolerIntentSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    </SectionCard>
+
+    @* ───────────── Sensor timing ───────────── *@
+    <SectionCard Title="Sensor timing" Help="Lining corrections up with real Home Assistant sensor signals.">
+        <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
+            @if (Show("setpoint echo confirm")) {
+                <MudExpansionPanel Text="Setpoint echo">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Setpoint echo" Value="_setpointEchoGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _setpointEchoGuardEnabled = x))" Help="Wait for Home Assistant to confirm the last setpoint." />
+                        <SettingInt Label="Echo wait" Unit="s" Value="_setpointEchoGraceSeconds" ValueChanged="@(v => SetDirty(v, x => _setpointEchoGraceSeconds = x))" Min="5" Max="300" />
+                        <SettingDouble Label="Safe band" Value="_setpointEchoSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _setpointEchoSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("repeat command quiet identical")) {
+                <MudExpansionPanel Text="Repeat quiet">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Repeat quiet" Value="_repeatCommandGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _repeatCommandGuardEnabled = x))" Help="Wait before sending the same number again." />
+                        <SettingInt Label="Min wait" Unit="s" Value="_repeatCommandMinimumWaitSeconds" ValueChanged="@(v => SetDirty(v, x => _repeatCommandMinimumWaitSeconds = x))" Min="0" Max="1800" />
+                        <SettingInt Label="Pressure extra" Unit="s" Value="_repeatCommandPressureExtraSeconds" ValueChanged="@(v => SetDirty(v, x => _repeatCommandPressureExtraSeconds = x))" Min="0" Max="3600" />
+                        <SettingDouble Label="Safe band" Value="_repeatCommandSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _repeatCommandSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("sensor rhythm beat interval")) {
+                <MudExpansionPanel Text="Sensor rhythm">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Sensor rhythm" Value="_sensorRhythmGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _sensorRhythmGuardEnabled = x))" Help="Time nudges to the normal reading beat." />
+                        <SettingInt Label="Samples" Value="_sensorRhythmMinimumSamples" ValueChanged="@(v => SetDirty(v, x => _sensorRhythmMinimumSamples = x))" Min="2" Max="60" />
+                        <SettingInt Label="Window" Unit="min" Value="_sensorRhythmWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _sensorRhythmWindowMinutes = x))" Min="5" Max="1440" />
+                        <SettingInt Label="Wiggle" Unit="s" Value="_sensorRhythmJitterSeconds" ValueChanged="@(v => SetDirty(v, x => _sensorRhythmJitterSeconds = x))" Min="0" Max="300" />
+                        <SettingDouble Label="Safe band" Value="_sensorRhythmSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _sensorRhythmSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("cooling runway hvac action")) {
+                <MudExpansionPanel Text="Cooling runway">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Cooling runway" Value="_coolingRunwayGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _coolingRunwayGuardEnabled = x))" Help="Give the AC time to work after cooling starts." />
+                        <SettingInt Label="Min wait" Unit="s" Value="_coolingRunwayMinimumSeconds" ValueChanged="@(v => SetDirty(v, x => _coolingRunwayMinimumSeconds = x))" Min="0" Max="1800" />
+                        <SettingInt Label="Pressure extra" Unit="s" Value="_coolingRunwayPressureExtraSeconds" ValueChanged="@(v => SetDirty(v, x => _coolingRunwayPressureExtraSeconds = x))" Min="0" Max="3600" />
+                        <SettingDouble Label="Safe band" Value="_coolingRunwaySafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _coolingRunwaySafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("room trend warming cooling")) {
+                <MudExpansionPanel Text="Room trend guard">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Watch room trend" Value="_roomTrendGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _roomTrendGuardEnabled = x))" Help="Keep observing when the room is already cooling." />
+                        <SettingInt Label="Window" Unit="min" Value="_roomTrendWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _roomTrendWindowMinutes = x))" Min="2" Max="240" />
+                        <SettingDouble Label="Stable change" Value="_roomTrendStableToleranceCelsius" ValueChanged="@(v => SetDirty(v, x => _roomTrendStableToleranceCelsius = x))" Min="0.05" Max="2" Step="0.05" />
+                        <SettingInt Label="Hold" Unit="min" Value="_roomTrendHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _roomTrendHoldMinutes = x))" Min="1" Max="120" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("thermal momentum cooling rate")) {
+                <MudExpansionPanel Text="Thermal momentum">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Use cooling momentum" Value="_thermalMomentumGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _thermalMomentumGuardEnabled = x))" Help="Wait when the room is cooling fast toward target." />
+                        <SettingDouble Label="Cooling rate" Unit="C/h" Value="_thermalMomentumMinimumCoolingRateCelsiusPerHour" ValueChanged="@(v => SetDirty(v, x => _thermalMomentumMinimumCoolingRateCelsiusPerHour = x))" Min="0.1" Max="5" />
+                        <SettingInt Label="Look-ahead" Unit="min" Value="_thermalMomentumLookAheadMinutes" ValueChanged="@(v => SetDirty(v, x => _thermalMomentumLookAheadMinutes = x))" Min="5" Max="240" />
+                        <SettingInt Label="Hold" Unit="min" Value="_thermalMomentumHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _thermalMomentumHoldMinutes = x))" Min="1" Max="120" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    </SectionCard>
+
+    @* ───────────── Comfort ───────────── *@
+    <SectionCard Title="Comfort" Help="Fan saver, upstairs comfort, and presence.">
+        <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
+            @if (Show("fan energy saver mode")) {
+                <MudExpansionPanel Text="Fan energy saver">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Adjust fan near target" Value="_fanEnergySaverEnabled" ValueChanged="@(v => SetDirty(v, x => _fanEnergySaverEnabled = x))" Help="Move the fan to a saver mode when near target." />
+                        <SettingDouble Label="Near-target" Value="_fanEnergySaverThresholdCelsius" ValueChanged="@(v => SetDirty(v, x => _fanEnergySaverThresholdCelsius = x))" Min="0.1" Max="5" />
+                        <MudItem xs="12" sm="6">
+                            <MudTextField T="string" Value="_fanEnergySaverMode" ValueChanged="@(v => SetDirty(v, x => _fanEnergySaverMode = x))" Label="Fan saver mode" Placeholder="auto" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("upstairs comfort temperature sensors boost")) {
+                <MudExpansionPanel Text="Upstairs comfort">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Protect upstairs comfort" Value="_upstairsComfortEnabled" ValueChanged="@(v => SetDirty(v, x => _upstairsComfortEnabled = x))" Help="Cool harder when upstairs gets hot." />
+                        <MudItem xs="12">
+                            <MudTextField T="string" Value="_upstairsTemperatureEntityIds" ValueChanged="@(v => SetDirty(v, x => _upstairsTemperatureEntityIds = x))" Label="Upstairs temperature entity IDs" Placeholder="sensor.upstairs_temperature, sensor.primary_bedroom_temperature" HelperText="Comma-separated. Leave blank to auto-discover." Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <SettingDouble Label="Max upstairs" Value="_upstairsMaxComfortCelsius" ValueChanged="@(v => SetDirty(v, x => _upstairsMaxComfortCelsius = x))" Min="15" Max="35" />
+                        <SettingDouble Label="Comfort target" Value="_upstairsComfortTargetCelsius" ValueChanged="@(v => SetDirty(v, x => _upstairsComfortTargetCelsius = x))" Min="10" Max="30" />
+                        <SettingDouble Label="Extra boost" Value="_upstairsComfortBoostCelsius" ValueChanged="@(v => SetDirty(v, x => _upstairsComfortBoostCelsius = x))" Min="0" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("home presence away person device tracker")) {
+                <MudExpansionPanel Text="Home presence">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Only prioritize upstairs when home" Value="_homePresenceRequired" ValueChanged="@(v => SetDirty(v, x => _homePresenceRequired = x))" Help="Require a present person before upstairs priority." />
+                        <MudItem xs="12">
+                            <MudTextField T="string" Value="_presenceEntityIds" ValueChanged="@(v => SetDirty(v, x => _presenceEntityIds = x))" Label="Presence entity IDs" Placeholder="person.me, device_tracker.phone" HelperText="Comma-separated. Leave blank to auto-discover." Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    </SectionCard>
+
+    @* ───────────── Schedule editor ───────────── *@
+    <SectionCard Title="Custom schedule"
+                 Subtitle="Temperature rules"
+                 Help="Add target-temperature rules for days and times. Each rule has its own weather gate.">
+        <Actions>
+            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">@ScheduleResultText</MudChip>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="AddSchedule" StartIcon="@Icons.Material.Filled.Add">Add rule</MudButton>
+        </Actions>
+        <ChildContent>
+            <MudTextField @bind-Value="_scheduleSearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
+                          Placeholder="Search schedule rules" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mb-2" />
+
+            @if (!FilteredSchedule.Any())
+            {
+                <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined">@(_schedule.Count == 0 ? "No rules yet. Add one to start a custom schedule." : "No rule matches that search.")</MudAlert>
+            }
+
+            <MudStack Spacing="2">
                 @foreach (var entry in FilteredSchedule)
                 {
-                    <MudPaper Class="schedule-card" Outlined="true">
-                        <MudGrid Spacing="2">
-                            <MudItem xs="12" md="7">
-                                <MudTextField T="string"
-                                              Value="@entry.Name"
-                                              ValueChanged="@((string value) => UpdateSchedule(entry, item => item.Name = value))"
-                                              Label="Name"
-                                              HelperText="A short rule name."
-                                              Variant="Variant.Outlined" />
+                    <MudPaper Class="schedule-card" Elevation="0" @key="entry.Id">
+                        <MudGrid Spacing="2" Class="align-center">
+                            <MudItem xs="12" sm="6">
+                                <MudTextField T="string" Value="entry.Name" ValueChanged="@(v => UpdateSchedule(entry, e => e.Name = v))" Label="Name" Variant="Variant.Outlined" Margin="Margin.Dense" />
                             </MudItem>
-                            <MudItem xs="12" sm="6" md="2">
-                                <MudSwitch T="bool"
-                                           Value="@entry.Enabled"
-                                           ValueChanged="@((bool value) => UpdateSchedule(entry, item => item.Enabled = value))"
-                                           Label="On"
-                                           Color="Color.Success" />
-                                <MudText Typo="Typo.caption" Class="helper-text">Lets this rule run.</MudText>
+                            <MudItem xs="6" sm="3">
+                                <MudSwitch T="bool" Value="entry.Enabled" ValueChanged="@(v => UpdateSchedule(entry, e => e.Enabled = v))" Color="Color.Success" Label="On" />
                             </MudItem>
-                            <MudItem xs="12" sm="6" md="3">
-                                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => RemoveSchedule(entry))" StartIcon="@Icons.Material.Filled.Delete">Remove</MudButton>
-                                <MudText Typo="Typo.caption" Class="helper-text">Deletes this rule.</MudText>
+                            <MudItem xs="6" sm="3" Class="d-flex justify-end">
+                                <MudButton Variant="Variant.Text" Color="Color.Error" OnClick="@(() => RemoveSchedule(entry))" StartIcon="@Icons.Material.Filled.Delete">Remove</MudButton>
                             </MudItem>
-                        </MudGrid>
 
-                        <MudText Typo="Typo.subtitle2" Class="mt-3">Days</MudText>
-                        <MudText Typo="Typo.caption" Class="helper-text">Green days are the days it runs.</MudText>
-                        <MudStack Row="true" Spacing="1" Class="day-button-row wrap-gap mt-1">
-                            @foreach (var day in Days)
-                            {
-                                <MudButton Variant="@DayVariant(entry, day)"
-                                           Color="@DayColor(entry, day)"
-                                           Size="Size.Small"
-                                           OnClick="@(() => ToggleDay(entry, day))">@day</MudButton>
-                            }
-                        </MudStack>
+                            <MudItem xs="12">
+                                <div class="day-button-row">
+                                    @foreach (var day in Days)
+                                    {
+                                        <MudButton Size="Size.Small" Variant="@DayVariant(entry, day)" Color="@DayColor(entry, day)" OnClick="@(() => ToggleDay(entry, day))">@day</MudButton>
+                                    }
+                                </div>
+                            </MudItem>
 
-                        <MudGrid Spacing="2" Class="mt-2">
-                            <MudItem xs="12" sm="6" md="3">
-                                <MudTextField T="string"
-                                              Value="@entry.StartTime"
-                                              ValueChanged="@((string value) => UpdateSchedule(entry, item => item.StartTime = value))"
-                                              Label="Start"
-                                              HelperText="When it begins."
-                                              Variant="Variant.Outlined"
-                                              InputType="InputType.Time" />
+                            <MudItem xs="6" sm="3">
+                                <MudTextField T="string" Value="entry.StartTime" ValueChanged="@(v => UpdateSchedule(entry, e => e.StartTime = v))" Label="Start" InputType="InputType.Time" Variant="Variant.Outlined" Margin="Margin.Dense" />
                             </MudItem>
-                            <MudItem xs="12" sm="6" md="3">
-                                <MudTextField T="string"
-                                              Value="@entry.EndTime"
-                                              ValueChanged="@((string value) => UpdateSchedule(entry, item => item.EndTime = value))"
-                                              Label="End"
-                                              HelperText="When it stops."
-                                              Variant="Variant.Outlined"
-                                              InputType="InputType.Time" />
+                            <MudItem xs="6" sm="3">
+                                <MudTextField T="string" Value="entry.EndTime" ValueChanged="@(v => UpdateSchedule(entry, e => e.EndTime = v))" Label="End" InputType="InputType.Time" Variant="Variant.Outlined" Margin="Margin.Dense" />
                             </MudItem>
-                            <MudItem xs="12" sm="6" md="3">
-                                <MudNumericField T="double"
-                                                 Value="@entry.TargetTemperatureCelsius"
-                                                 ValueChanged="@((double value) => UpdateSchedule(entry, item => item.TargetTemperatureCelsius = value))"
-                                                 Label="Target C"
-                                                 HelperText="Temperature it wants."
-                                                 Variant="Variant.Outlined"
-                                                 Min="10"
-                                                 Max="35"
-                                                 Step="0.1" />
+                            <MudItem xs="6" sm="3">
+                                <MudNumericField T="double" Value="entry.TargetTemperatureCelsius" ValueChanged="@(v => UpdateSchedule(entry, e => e.TargetTemperatureCelsius = v))" Label="Target" Variant="Variant.Outlined" Margin="Margin.Dense" Min="10" Max="35" Step="0.1" Adornment="Adornment.End" AdornmentText="C" />
                             </MudItem>
-                            <MudItem xs="12" sm="6" md="3">
-                                <MudSelect T="string"
-                                           Value="@entry.WeatherActivationMode"
-                                           ValueChanged="@((string value) => UpdateSchedule(entry, item => item.WeatherActivationMode = value))"
-                                           Label="Weather rule"
-                                           HelperText="Weather gate for this rule."
-                                           Variant="Variant.Outlined">
+                            <MudItem xs="6" sm="3">
+                                <MudSelect T="string" Value="entry.WeatherActivationMode" ValueChanged="@(v => UpdateSchedule(entry, e => e.WeatherActivationMode = v))" Label="Weather rule" Variant="Variant.Outlined" Margin="Margin.Dense">
                                     @foreach (var option in ScheduleWeatherOptions)
                                     {
                                         <MudSelectItem T="string" Value="@option.Value">@option.Label</MudSelectItem>
                                     }
                                 </MudSelect>
                             </MudItem>
-                        </MudGrid>
 
-                        <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">@Summary(entry)</MudAlert>
-                        <MudText Typo="Typo.caption" Class="helper-text">Quick story of this rule.</MudText>
+                            <MudItem xs="12">
+                                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">@Summary(entry)</MudAlert>
+                            </MudItem>
+                        </MudGrid>
                     </MudPaper>
                 }
             </MudStack>
-        }
+        </ChildContent>
+    </SectionCard>
 
-        <MudDivider Class="my-4" />
-        <MudStack Row="true" AlignItems="AlignItems.Center" Class="wrap-gap">
-            <div class="action-with-help">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveSettings" StartIcon="@Icons.Material.Filled.Save">Save settings</MudButton>
-                <MudText Typo="Typo.caption" Class="helper-text">Stores these choices.</MudText>
-            </div>
-            <MudText Typo="Typo.subtitle2">@StatusText</MudText>
-            <MudText Typo="Typo.caption" Class="helper-text">This label says when settings were saved.</MudText>
-        </MudStack>
-    </MudPaper>
-        </MudTabPanel>
-    </MudTabs>
+    <div class="save-bar">
+        <MudText Typo="Typo.caption" Class="helper-text">@StatusText</MudText>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveSettings" StartIcon="@Icons.Material.Filled.Save">Save settings</MudButton>
+    </div>
 </MudStack>
 
 @code {
@@ -1798,21 +475,8 @@
         ("outdoor-below-target", "Outdoor below target")
     ];
     private static readonly TimeZoneInfo TorontoTimeZone = ResolveTorontoTimeZone();
-    private static readonly SettingsGroup[] SettingGroups =
-    [
-        new(0, "Automation", "Schedule and weather", "Time rules, weather activation, cooldown, cool restore, conflict quiet, and weather drift."),
-        new(1, "Recovery", "Quiet recovery", "Adaptive waits, nudge size, command gaps, safe bands, walkback, and hold chance."),
-        new(2, "Wall Touch", "Touch behavior", "Wall settling, touch signature, visibility guard, routine timing, budget, cadence, Comfort Pace, compromise, memory, manual grace, and intent."),
-        new(2, "Wall Touch", "Comfort Pace", "High-frequency wall touches, natural climate slots, weather timing, sensor beat, and calm correction pacing."),
-        new(2, "Wall Touch", "Comfort Envelope", "Temporary safe wall preference range, small setpoint differences, and automatic fade-back after repeated touches."),
-        new(3, "Sensor Timing", "Sensor timing", "Setpoint echo, repeat command, Home Assistant sensor rhythm, cooling runway, room trend, and thermal momentum."),
-        new(4, "Comfort", "Fan saver", "Fan mode and near-target energy saver."),
-        new(4, "Comfort", "Upstairs comfort", "Upstairs temperature sensors, too-hot threshold, comfort target, boost, and presence rules."),
-        new(5, "Schedule", "Custom schedule", "Add, remove, search, and edit target temperature schedule rules.")
-    ];
 
     private string _settingsSearch = "";
-    private int _activeSettingsTab;
     private bool _scheduleEnabled;
     private string _weatherActivationMode = "always";
     private int _baseCooldownSeconds = 45;
@@ -1967,10 +631,7 @@
         ? "Unsaved changes"
         : string.IsNullOrWhiteSpace(_settingsStatus) ? "No changes saved yet" : _settingsStatus;
 
-    private IEnumerable<SettingsGroup> SettingsSearchResults =>
-        SettingGroups
-            .Where(group => MatchesSettingsSearch(_settingsSearch, group.Tab, group.Name, group.Description))
-            .ToArray();
+    private bool Show(string keywords) => MatchesSettingsSearch(_settingsSearch, keywords);
 
     private IEnumerable<ScheduleEntry> FilteredSchedule =>
         _schedule.Where(entry => MatchesSettingsSearch(
@@ -2186,12 +847,6 @@
 
         entry.Days = string.Join(",", Days.Where(days.Contains));
         _dirty = true;
-    }
-
-    private void OpenSettingsGroup(SettingsGroup group)
-    {
-        _activeSettingsTab = group.TabIndex;
-        Snackbar.Add($"Opened {group.Tab}: {group.Name}.", Severity.Info);
     }
 
     private Variant DayVariant(ScheduleEntry entry, string day)
@@ -2422,6 +1077,4 @@
         return terms.Length == 0
             || terms.All(term => values.Any(value => value.Contains(term, StringComparison.OrdinalIgnoreCase)));
     }
-
-    private sealed record SettingsGroup(int TabIndex, string Tab, string Name, string Description);
 }

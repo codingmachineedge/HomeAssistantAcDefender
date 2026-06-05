@@ -1,3 +1,4 @@
+using HomeAssistantAcDefender.Guards;
 using HomeAssistantAcDefender.Models;
 using HomeAssistantAcDefender.Options;
 using HomeAssistantAcDefender.Services;
@@ -23,10 +24,37 @@ tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 tests.ComfortPaceWaitsAfterFrequentWallTouchesButBypassesHotRoom();
 tests.ComfortEnvelopeObservesSmallSafeWallPreferenceButBypassesHotRoom();
+tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
 internal sealed class DefenderSetPointRegressionTests
 {
+    public void GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var snapshot = fixture.Store.GetSnapshot();
+
+        var live = GuardCatalog.Live.ToList();
+        if (live.Count < 27)
+        {
+            throw new InvalidOperationException($"Expected at least 27 live guard cards in the catalog, found {live.Count}.");
+        }
+
+        foreach (var guard in live)
+        {
+            var view = guard.Project!(snapshot);
+            if (view is null)
+            {
+                throw new InvalidOperationException($"Guard '{guard.Name}' projected a null live view from a default snapshot.");
+            }
+
+            if (string.IsNullOrWhiteSpace(guard.Summary) || string.IsNullOrWhiteSpace(guard.Logic))
+            {
+                throw new InvalidOperationException($"Guard '{guard.Name}' is missing help text.");
+            }
+        }
+    }
+
     public void ManualTouchWhileWarmRestartsAtOneDegreeBelowRoom()
     {
         using var fixture = DefenderStoreFixture.Create();

@@ -445,6 +445,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Dynamic Cooldown: true while the post-touch quiet period (min(max, base × touches) + jitter) is still running.</summary>
     public bool TryGetCooldown(DateTimeOffset now, out DateTimeOffset cooldownUntil)
     {
         lock (gate)
@@ -513,6 +514,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Emergency Protocols: true while a too-cold, someone-upset, or suspicion window is suppressing corrections.</summary>
     public bool TryRespectEmergencyQuiet(DateTimeOffset now, out DateTimeOffset waitUntil, out string message)
     {
         lock (gate)
@@ -543,6 +545,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Cool Mode Restore: true while the short safe delay before forcing the HVAC mode back to cool is still running.</summary>
     public bool TryDelayCoolModeRestore(
         ThermostatReading reading,
         DateTimeOffset now,
@@ -619,6 +622,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Conflict Quiet: true while standing down after repeated wall touches, as long as the room stays inside the comfort band.</summary>
     public bool TryRespectConflictQuietMode(
         ThermostatReading reading,
         bool bypassForComfort,
@@ -756,6 +760,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Manual Comfort Grace: true while leaving a wall change alone in a still-comfortable room (can be extended by Touch Intent).</summary>
     public bool TryRespectManualComfortGrace(
         ThermostatReading reading,
         bool bypassForComfort,
@@ -814,6 +819,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Cooler Intent Fast Lane: true when repeated cooler wall touches should skip the quiet waits while the room is above target.</summary>
     public bool ShouldBypassQuietTimingForCoolerIntent(ThermostatReading reading, DateTimeOffset now)
     {
         lock (gate)
@@ -855,6 +861,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Room Trend Guard: true while real room samples show the room is already stable or cooling on its own.</summary>
     public bool TryRespectRoomTrendGuard(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -932,6 +939,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Thermal Momentum: true while the room is cooling fast enough (≥ min rate) to reach target within the look-ahead window.</summary>
     public bool TryRespectThermalMomentumGuard(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1030,6 +1038,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Weather Drift Timing: true while waiting for real outdoor-temperature movement before a safe correction.</summary>
     public bool TryRespectWeatherDriftGuard(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1136,6 +1145,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Sensor Rhythm: true while waiting until just after the learned Home Assistant reading beat plus jitter.</summary>
     public bool TryRespectSensorRhythm(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1212,6 +1222,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Cooling Runway: true while giving a fresh cooling cycle (min + pressure seconds from cooling start) time to work.</summary>
     public bool TryRespectCoolingRunway(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1302,6 +1313,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Setpoint Echo: true while waiting (up to the grace seconds) for Home Assistant to echo the last commanded setpoint.</summary>
     public bool TryRespectSetpointEcho(
         ThermostatReading reading,
         bool bypassForComfort,
@@ -1372,6 +1384,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Repeat Quiet: true while holding an identical follow-up command (min wait + pressure seconds); distinct step-downs pass.</summary>
     public bool TryRespectRepeatCommandGuard(
         ThermostatReading reading,
         double commandSetPointCelsius,
@@ -1456,6 +1469,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Comfort Sync (quiet recovery): true while a randomized wait, brief hold, or minimum command gap delays the correction.</summary>
     public bool TryDelayNaturalCorrection(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1532,6 +1546,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Routine Timing: true while aligning a safe correction to the next interval boundary plus wiggle.</summary>
     public bool TryRespectRoutineTiming(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1608,6 +1623,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Comfort Budget: true while resting because too many safe corrections happened inside the rolling window.</summary>
     public bool TryRespectComfortBudget(
         ThermostatReading reading,
         bool bypassComfortBudget,
@@ -1669,6 +1685,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Natural Cadence: true while waiting for a varied future slot (min–max minutes by pressure, plus jitter).</summary>
     public bool TryRespectNaturalCadence(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1747,6 +1764,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Comfort Pace: true while pacing frequent wall fighting into a calm weather, sensor-beat, or clock-aligned slot.</summary>
     public bool TryRespectNaturalChangePlanner(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1828,6 +1846,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Comfort Envelope: true while observing a tiny safe wall preference inside target ± max offset for the hold minutes.</summary>
     public bool TryRespectComfortEnvelope(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1908,6 +1927,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Visibility Guard: true while holding after a wall touch landed soon after a defender command (pressure-scaled hold).</summary>
     public bool TryRespectVisibilityGuard(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -1985,6 +2005,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Shapes the final setpoint command size with Natural Walkback (small varied steps) and the Touch Signature cap.</summary>
     public double CalculateNaturalCommandSetPoint(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -2332,6 +2353,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Upstairs Comfort Guard: lowers the target toward the comfort target and adds boost (and may bypass cooldown) when the hottest upstairs sensor is hot and someone is home.</summary>
     public ComfortRuleResult ApplyComfortRules()
     {
         lock (gate)
@@ -2397,6 +2419,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Computes the defender target: applies Comfort Memory/Compromise modifiers, then the warm-room "1 °C below current room temperature" rule, stepping down a degree per cycle while cooling stalls but never below the website target.</summary>
     public double CalculateExpectedSetPoint(double currentTemperatureCelsius, string hvacAction)
     {
         lock (gate)
@@ -2452,6 +2475,7 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Fan Energy Saver: true when the room is within the threshold of target and the configured saver fan mode is available but not yet set.</summary>
     public bool ShouldUseFanSaver(ThermostatReading reading)
     {
         lock (gate)

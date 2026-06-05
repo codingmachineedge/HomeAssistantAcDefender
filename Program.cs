@@ -18,16 +18,27 @@ builder.Services.AddSingleton<DefenderStateStore>();
 builder.Services.AddSingleton<AcDefenderService>();
 builder.Services.AddHttpClient<HomeAssistantClient>();
 builder.Services.AddHostedService<AcDefenderWorker>();
+builder.Services.AddScoped<DefenderStateProvider>();
 builder.Services.AddMudServices();
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
-builder.Services.AddRazorPages();
 
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
 {
-    app.UseExceptionHandler("/Error");
+    app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "text/html; charset=utf-8";
+        await context.Response.WriteAsync(
+            "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>AC Defender error</title></head>"
+            + "<body style=\"font-family:'Segoe UI',Arial,sans-serif;padding:48px;background:#0f1614;color:#e7f6ef\">"
+            + "<h1>Something went wrong</h1>"
+            + "<p>The web request failed, but the background defender keeps reading and protecting the thermostat.</p>"
+            + "<p><a href=\"/\" style=\"color:#46c1a7\">Return to the dashboard</a></p>"
+            + "</body></html>");
+    }));
 }
 
 app.UseRouting();
@@ -36,9 +47,8 @@ app.UseAntiforgery();
 
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
-    .AddInteractiveServerRenderMode();
-app.MapRazorPages()
-   .WithStaticAssets();
+    .AddInteractiveServerRenderMode()
+    .WithStaticAssets();
 
 app.MapGet("/api/status", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
 app.MapGet("/api/settings", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));

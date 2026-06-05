@@ -1,387 +1,242 @@
 # Defender Logic
 
-Every cycle performs these steps:
-
-1. Read weather and outdoor temperature from Home Assistant.
-2. Read the real dining room climate entity.
-3. Restore HVAC mode to `cool` when Home Assistant reports another mode, using the cool-mode restore delay only while comfort is still safe.
-4. Detect whether the thermostat setpoint changed outside the website.
-5. Read upstairs temperature sensors and presence entities.
-6. Apply the active schedule target when scheduling is enabled.
-7. Evaluate the weather activation rule.
-8. Apply upstairs comfort rules.
-9. Activate Cooler Intent Fast Lane when repeated cooler wall touches ask for faster cooling.
-10. Respect Conflict Quiet when repeated wall touches suggest someone is fighting the thermostat.
-11. Respect dynamic cooldown after external changes unless severe upstairs heat or cooler intent bypasses it.
-12. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
-13. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
-14. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
-15. Respect Weather Drift Timing when outdoor temperature is stable or cooling after a wall change.
-16. Respect Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
-17. Respect Cooling Runway when Home Assistant has just reported that cooling started.
-18. Respect Sensor Rhythm so safe corrections can land just after a normal Home Assistant reading beat.
-19. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
-20. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
-21. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
-22. Respect Visibility Guard when a wall touch happens soon after a defender command.
-23. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
-24. Respect Comfort Budget when too many safe adjustments happened recently.
-25. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-26. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
-27. Respect Comfort Envelope when a small repeated wall setpoint is still inside the safe accepted range.
-28. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-29. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-30. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-31. Apply fan energy saver when enabled and near target.
-32. Respect Repeat Quiet if the exact command about to be sent matches the last defender setpoint.
-33. Correct the real thermostat setpoint when needed.
-34. Update the next-action status label.
-
-## Cooling Behavior
-
-When room temperature is above target, a new defender correction starts by setting the thermostat exactly 1 C below the current room temperature to force cooling. It does not start one degree below the wall setpoint someone chose. If Home Assistant reports idle/off while the room is still above target, the defender lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target.
-
-When room temperature reaches target, the defender returns the thermostat setpoint to the exact website target.
-
-If the thermostat mode is changed to anything other than `cool`, the defender can wait a short configured delay before sending `climate.set_hvac_mode` with `hvac_mode: cool`. The delay is skipped when the room is above the mode safe band, the normal safety override is crossed, or severe upstairs heat is active. Paused defender state still restores `cool`.
-
-## Cool Mode Restore
-
-Cool Mode Restore keeps the hard rule that the thermostat must return to `cool`, but avoids doing it at the exact same instant every time when the room is still safe.
-
-It waits between the configured minimum and maximum seconds only while:
-
-```text
-currentRoomTemperature <= targetTemperature + coolModeRestoreComfortBandCelsius
-```
-
-After a restore command is sent, the worker waits through the command grace window before sending another mode command. That prevents repeated service calls while Home Assistant is still confirming the first restore.
-
-## Cooldown
-
-Cooldown only starts after an external thermostat touch.
-
-```text
-cooldown = min(maxCooldownSeconds, baseCooldownSeconds * recentTouchCount) + randomQuietDelay
-```
-
-Recent touches are counted within the configured touch frequency window.
-
-## Conflict Quiet
-
-Conflict Quiet watches the same recent-touch counter as cooldown. If repeated wall touches reach the configured threshold, the defender stands down for the configured minutes instead of continuing an obvious command tug-of-war.
-
-It only stands down while the real room temperature is at or below:
-
-```text
-targetTemperature + conflictQuietComfortBandCelsius
-```
-
-It ends immediately when the room gets too warm, severe upstairs heat bypasses quiet timing, or the normal safety override is crossed.
-
-## Comfort Sync Quiet Recovery
-
-Quiet recovery makes automatic corrections less abrupt after someone changes the wall thermostat:
-
-- Adds a random wait between the configured minimum and maximum quiet wait.
-- Waits longer when repeated wall touches happen inside the touch window.
-- Can hold briefly one or more times based on hold chance and max holds.
-- Spaces commands by the configured minimum command gap.
-- Caps softer non-warm corrections to the configured nudge size.
-- Sends warm-room corrections to the room-temperature defender target instead of walking down from the wall setpoint.
-- Automatically changes quiet level when repeated wall touches happen, shrinking nudge size and increasing wait/hold/command spacing.
-- Uses Natural Walkback for small safe-band setpoint steps when repeated wall touches make a direct correction too obvious.
-- Uses Touch Signature to learn the size of recent wall thermostat steps and shape safe nudges with the same bounded step style.
-- Uses Visibility Guard to slow safe corrections when a wall touch happens soon after a defender command.
-- Uses Routine Timing so safe corrections land on normal-looking comfort-check intervals.
-- Uses Comfort Budget so repeated safe corrections can rest before another adjustment.
-- Uses Natural Cadence so repeated safe corrections wait for a variable future slot based on touch pressure and recent command pressure.
-- Uses Comfort Pace so frequent wall touches can wait for a calmer weather, sensor, or clock-aligned climate slot.
-- Uses Comfort Envelope so tiny safe wall preferences can rest briefly inside a displayed accepted range.
-- Uses Comfort Memory to remember a tiny expiring time-of-day preference after repeated safe wall choices.
-- Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
-- Uses Touch Intent to classify recent wall choices and extend safe grace only when warmer intent is clear.
-- Uses Cooler Intent Fast Lane to skip quiet waits briefly when repeated cooler wall touches show the person wants faster cooling.
-- Uses Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
-- Uses Repeat Quiet so identical follow-up commands wait longer when recent wall-touch or command pressure is high.
-- Uses Sensor Rhythm so safe corrections can wait until just after the learned Home Assistant reading beat.
-- Uses Cooling Runway so safe corrections can pause after Home Assistant reports that cooling just started.
-- Uses Weather Drift Timing so safe post-touch corrections can wait for real outdoor temperature movement.
-- Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
-
-Quiet recovery does not fake thermostat state and does not run a simulator. It only changes the timing and selected command target sent to the real Home Assistant climate entity.
-
-Adaptive quiet levels:
-
-- `Calm`: no recent wall touches.
-- `Light`: a small number of recent wall touches.
-- `Quiet`: repeated touches crossed the configured threshold.
-- `Extra quiet`: repeated touches are continuing.
-- `Softest`: maximum adaptive quietness before safety override wins.
-
-## Natural Walkback
-
-Natural Walkback is a command-shaping layer for safe-band recovery. It calculates a touch score from recent wall thermostat touches and recency. When the trigger count is reached and the real room temperature is still inside:
-
-```text
-targetTemperature + naturalWalkbackSafetyBandCelsius
-```
-
-the next safe-band correction walks toward the website target in smaller nudges. A tiny optional variation changes the nudge size so every correction is not identical.
-
-Natural Walkback never changes the warm-room defender rule. If the room needs active cooling, the command still starts one degree below current room temperature and continues down toward the website target. If the room crosses the safety band, the normal direct comfort correction path wins.
-
-## Touch Signature
-
-Touch Signature reads the real external thermostat touch audit log and learns a bounded step size from recent wall changes. When enough recent wall steps exist and the room is still safe, safe nudges use about that learned step size instead of always using the same configured nudge.
-
-It only applies while the real room temperature is inside:
-
-```text
-targetTemperature + touchSignatureSafetyBandCelsius
-```
-
-If the room crosses the safety band, the normal safety override is reached, or upstairs heat bypasses quiet timing, Touch Signature steps aside. It never changes warm-room defense: active cooling still starts one degree below current room temperature and continues toward the website target.
-
-## Visibility Guard
-
-Visibility Guard watches noticed correction signals: wall thermostat touches that happen soon after a defender command. When enough signals occur inside the configured notice window, the next safe correction gets a variable hold between the minimum and maximum visibility hold.
-
-It only waits while the real room temperature is inside:
-
-```text
-targetTemperature + visibilityGuardSafetyBandCelsius
-```
-
-If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the visibility safe band, the hold clears and direct comfort correction continues. It never changes warm-room defense: active cooling still starts one degree below current room temperature and then steps down by one degree after cooling turns idle/off until the website target is reached.
-
-## Routine Timing
-
-Routine Timing is a safe-correction timing guard. After repeated wall changes, it can hold the next correction until a normal minute rhythm plus a small random wiggle:
-
-```text
-currentRoomTemperature <= targetTemperature + routineTimingSafetyBandCelsius
-```
-
-It only delays while the room remains safe. If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the routine safe band, the hold clears and the real correction path continues.
-
-## Comfort Budget
-
-Comfort Budget limits repeated safe automatic setpoint commands inside a rolling window:
-
-```text
-recentSafeCommands < comfortBudgetMaxCommands
-```
-
-If the budget is full, the defender rests until the oldest command leaves the configured window. It only rests while the room remains safe:
-
-```text
-currentRoomTemperature <= targetTemperature + comfortBudgetSafetyBandCelsius
-```
-
-If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the budget safe band, the budget clears and the real correction path continues.
-
-## Natural Cadence
-
-Natural Cadence is a safe-correction timing layer for repeated wall touches. When the trigger count is reached, it picks a future slot using touch pressure, recent automatic command pressure, and a small random wiggle. The selected slot is persisted so the next-action label keeps counting down in real time.
-
-It only waits while the real room temperature is inside:
-
-```text
-targetTemperature + naturalCadenceSafetyBandCelsius
-```
-
-If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the cadence safe band, cadence clears immediately and the real correction path continues. It never changes the warm-room defender rule: active cooling still starts one degree below current room temperature and continues toward the website target.
-
-## Comfort Pace
-
-Comfort Pace is a high-frequency wall-change planner. When enough recent wall touches exist, it selects a future climate slot from touch pressure, recent automatic command pressure, real weather movement, learned Home Assistant sensor rhythm, and local 5/10-minute clock boundaries.
-
-It only waits while the real room temperature is inside:
-
-```text
-targetTemperature + naturalChangePlannerSafetyBandCelsius
-```
-
-If the room gets too warm, upstairs heat bypasses quiet timing, or direct comfort correction is needed, Comfort Pace clears immediately and the real correction path continues.
-
-## Comfort Envelope
-
-Comfort Envelope observes a small repeated wall setpoint difference instead of correcting it immediately. It starts only when recent wall touches reach the trigger count, the real room is still safe, and the current wall setpoint is inside:
-
-```text
-expectedSetPoint +/- comfortEnvelopeMaxOffsetCelsius
-```
-
-The accepted range is persisted and shown on the dashboard with the preferred wall setpoint and remaining hold time. If the wall setpoint moves outside the range, the room rises above `targetTemperature + comfortEnvelopeSafetyBandCelsius`, upstairs heat bypasses quiet timing, or direct comfort correction is needed, the envelope clears and the real correction path continues.
-
-## Comfort Compromise
-
-Comfort Compromise creates a temporary effective target after repeated wall changes. It starts only when the touch trigger is reached and the real room temperature is still inside:
-
-```text
-targetTemperature + comfortCompromiseSafetyBandCelsius
-```
-
-The preferred wall setpoint is capped by `comfortCompromiseMaxOffsetCelsius`, held for the configured hold minutes, and then faded back toward the website target across the decay window.
-
-If the room rises above the safety band, the compromise is cleared immediately. Schedule changes, website target changes, and upstairs comfort target changes also clear it.
-
-## Comfort Memory
-
-Comfort Memory learns a small offset for the current local hour after repeated wall choices while the room is safe:
-
-```text
-currentRoomTemperature <= targetTemperature + comfortMemorySafetyBandCelsius
-```
-
-The learned offset is capped by `comfortMemoryMaxOffsetCelsius` and expires after `comfortMemoryRetentionHours`. The next time the same hour is active, the offset can adjust the effective target before temporary compromise is applied.
-
-Comfort Memory does not apply if the room crosses the safety band or normal safety override. If upstairs is hot, warmer learned offsets are skipped so upstairs comfort keeps priority.
-
-## Manual Comfort Grace
-
-Manual Comfort Grace starts after an external wall thermostat setpoint change. While grace is active, the defender can leave the wall change alone if the room is still at or below:
-
-```text
-targetTemperature + manualComfortGraceBandCelsius
-```
-
-Grace ends when the configured grace time expires, the room rises above the band, upstairs severe heat bypasses quiet timing, or the room crosses the safety override. This reduces obvious back-and-forth while still restoring comfort before the room gets too warm.
-
-## Touch Intent
-
-Touch Intent classifies recent real wall thermostat changes inside its configured window:
-
-```text
-netChange = sum(newSetPoint - previousSetPoint)
-```
-
-When enough touches exist and the net change is at or above `touchIntentNetWarmThresholdCelsius`, the pattern is treated as warmer intent. If the real room remains inside:
-
-```text
-targetTemperature + touchIntentSafetyBandCelsius
-```
-
-Manual Comfort Grace can extend by `touchIntentExtraGraceMinutes`. Cooler and mixed patterns do not add warmer grace. If the room crosses the safety band, the normal safety override is reached, or upstairs heat bypasses quiet timing, Touch Intent steps aside and the direct correction path continues.
-
-## Cooler Intent Fast Lane
-
-Cooler Intent Fast Lane watches the same real external wall-touch audit log, but only reacts to a clear cooler pattern. It starts when enough recent wall changes move the setpoint cooler by at least the configured cooler-pattern threshold.
-
-While active, it clears safe quiet waits such as cooldown, Conflict Quiet, Manual Comfort Grace, Visibility Guard, Routine Timing, Comfort Budget, Natural Cadence, Comfort Pace, Comfort Envelope, Repeat Quiet, Sensor Rhythm, Cooling Runway, Room Trend Guard, and Thermal Momentum. That lets the normal real correction path move sooner when someone is probably hot.
-
-It only bypasses quiet timing while:
-
-```text
-currentRoomTemperature > targetTemperature
-```
-
-and, for the fast-lane safe band:
-
-```text
-currentRoomTemperature <= targetTemperature + coolerIntentSafetyBandCelsius
-```
-
-If the room reaches the website target, the fast lane clears. It does not lower the website target and does not change the rule that warm-room defense starts one degree below current room temperature and walks only toward the website target.
-
-## Weather Drift Timing
-
-Weather Drift Timing uses real outdoor temperature samples from Home Assistant. After a wall touch, it can delay only a safe correction while outdoor temperature is stable or cooling, so the next change can land closer to a normal weather-driven comfort adjustment.
-
-It only waits while the real room temperature is inside:
-
-```text
-targetTemperature + weatherDriftSafetyBandCelsius
-```
-
-If outdoor temperature warms by at least `weatherDriftMinimumChangeCelsius`, the hold clears and the correction can continue. If the configured hold expires, the correction can also continue. If the room gets too warm, upstairs heat bypasses quiet timing, or the normal safety override is reached, Weather Drift clears immediately and direct comfort correction wins.
-
-## Setpoint Echo
-
-Setpoint Echo uses the real pending command record created whenever the defender sends a Home Assistant setpoint. If Home Assistant has not reported that setpoint back yet, the next safe correction can wait until `setpointEchoGraceSeconds`.
-
-It only waits while the real room temperature is inside:
-
-```text
-targetTemperature + setpointEchoSafetyBandCelsius
-```
-
-If Home Assistant reports the pending setpoint, the echo clears. If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the echo safe band, the hold steps aside immediately.
-
-## Repeat Quiet
-
-Repeat Quiet checks the final real setpoint immediately before a Home Assistant command is sent. If that setpoint matches the last defender setpoint, the command can wait until:
-
-```text
-lastDefenderCommandAt + repeatCommandMinimumWaitSeconds + pressure extra
-```
-
-The pressure extra rises from recent wall-touch pressure and recent defender command pressure. This makes identical follow-up commands slow down when the thermostat has been touched frequently.
-
-Repeat Quiet does not hold a different setpoint, so the one-degree step-down path can continue toward the website target. It only waits while the room is inside:
-
-```text
-targetTemperature + repeatCommandSafetyBandCelsius
-```
-
-If the room crosses that band, the normal safety override is reached, or upstairs heat bypasses quiet timing, Repeat Quiet clears immediately and the real correction path continues.
-
-## Sensor Rhythm
-
-Sensor Rhythm records real Home Assistant climate reading timestamps and learns the median interval between updates. Once enough real readings exist, a safe correction can wait until just after the next learned beat plus `sensorRhythmJitterSeconds`.
-
-It only waits while the real room temperature is inside:
-
-```text
-targetTemperature + sensorRhythmSafetyBandCelsius
-```
-
-If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the rhythm safe band, the hold clears immediately and the real correction path continues.
-
-## Cooling Runway
-
-Cooling Runway watches the real Home Assistant `hvac_action`. When the action changes into `cooling`, the next safe correction can wait until:
-
-```text
-coolingStartedAt + coolingRunwayMinimumSeconds + pressure extra
-```
-
-The pressure extra rises from recent wall-touch pressure and recent defender command pressure. This gives the AC time to work before another automatic-looking nudge.
-
-Cooling Runway only waits while the room is inside:
-
-```text
-targetTemperature + coolingRunwaySafetyBandCelsius
-```
-
-If Home Assistant reports that cooling stopped, upstairs heat bypasses quiet timing, the safety override is reached, or the room rises above the runway safe band, the hold clears and the real correction path continues.
-
-## Room Trend Guard
-
-Room Trend Guard records real dining room temperature samples from Home Assistant. It compares the oldest and newest samples inside the configured trend window:
-
-```text
-delta = newestRoomTemperature - oldestRoomTemperature
-```
-
-If `delta` is above the stable tolerance, the room is warming and correction can continue. If `delta` is inside the tolerance or below it, the room is stable or cooling and the defender can keep observing for the configured hold time.
-
-Trend Guard only applies after recent external wall touches. It steps aside when the room is above the grace band, crosses the safety override, or severe upstairs heat bypasses quiet timing.
-
-## Thermal Momentum
-
-Thermal Momentum uses the same real dining room temperature samples. After a recent wall touch, it estimates cooling speed:
-
-```text
-coolingRate = temperatureDrop / elapsedHours
-etaMinutes = (currentRoomTemperature - targetTemperature) / coolingRate * 60
-```
-
-If the room is above target but already cooling at or above the configured rate, and the target is estimated inside the look-ahead window, the defender holds briefly instead of sending another visible thermostat command. It steps aside when the room is not cooling, the target is too far away, the room crosses the safety override, or severe upstairs heat bypasses quiet timing.
-
-## Upstairs Comfort
-
-The upstairs comfort guard watches configured or auto-discovered upstairs temperature sensors. When upstairs is above the comfort threshold and presence rules allow it, the guard can lower the target and increase cooling boost.
-
-The guard can override weather blocking when upstairs is hot. If upstairs temperature is at least 1 C above the configured comfort maximum, it can bypass cooldown so comfort is restored quickly.
+This page describes every algorithm the AC Defender runs. The same descriptions appear in the app:
+each guard on the **Defense** page has a "How this works" explainer, and the **Guide** page lists the
+whole reference. The source of truth for the live cards and this document is `Guards/GuardCatalog.cs`,
+projected from the real implementation in `Services/DefenderStateStore.cs` and orchestrated by
+`Services/AcDefenderService.RunCycleAsync`.
+
+All timing/comfort guards read **real Home Assistant data only**. There is no simulator.
+
+## The decision cycle
+
+Every few seconds (`PollIntervalSeconds`, minimum 3) the worker reads Home Assistant and walks this
+sequence. The first guard that wants to wait stops the cycle and reports its next action.
+
+1. Pull weather and outdoor temperature.
+2. Pull the real dining-room climate entity.
+3. **Emergency protocols** — stand down if a too-cold, someone-upset, or suspicion window is active.
+4. If the defender is **paused**, keep reading 24/7 but send nothing.
+5. **Cool Mode Restore** — bring the HVAC mode back to `cool` (after a short safe delay).
+6. **Schedule & weather rules** — choose the target and decide whether corrective action is allowed.
+7. **Upstairs Comfort Guard** — lower the target and add boost when upstairs is hot.
+8. Decide whether **severe upstairs heat** or **Cooler Intent Fast Lane** should bypass quiet timing.
+9. **Wall Settling**, **Conflict Quiet**, **Manual Comfort Grace**, and **Dynamic Cooldown** may each hold.
+10. **Fan Energy Saver** — move the fan to a saver mode when near target.
+11. Compute the **expected setpoint** (1 °C below room when the room is warm — see below).
+12. If the setpoint needs to change, walk the timing guards in order: **Comfort Envelope → Room Trend →
+    Thermal Momentum → Weather Drift → Setpoint Echo → Cooling Runway → Sensor Rhythm → Comfort Sync →
+    Comfort Pace → Routine Timing → Comfort Budget → Visibility Guard → Natural Cadence**.
+13. Shape the command size with **Natural Walkback** and **Touch Signature**, then **Repeat Quiet**.
+14. Send the corrected setpoint to Home Assistant.
+15. **Cooling Failure Watch** runs alongside and raises a mega-alert if cooling is demanded but not real.
+
+## Warm-room cooling — the "1 °C below room" rule
+
+When the room is above target, a fresh correction commands a setpoint exactly **1 °C below the current
+room temperature** to force cooling — not 1 °C below the wall setting. If Home Assistant reports cooling
+is idle/off while the room is still above target, it lowers the setpoint one more degree each cycle. It
+never goes below the website target, and once the room reaches target the setpoint returns to the exact
+target.
+
+> Example: room `25.0 °C`, website target `22.0 °C`, wall moved to `26.0 °C` → the first command is
+> `24.0 °C` (room − 1), then `23.0 °C`, then `22.0 °C` if cooling keeps stalling.
+
+## Quiet levels
+
+Adaptive quietness ramps up with repeated wall touches and is shown on the dashboard:
+
+| Level | Meaning |
+|-------|---------|
+| **Calm** | No recent wall touches. |
+| **Light** | A few touches; base quiet settings. |
+| **Quiet** | Repeated touches; waits and spacing grow. |
+| **Extra quiet** | More touches; smaller nudges, higher hold chance. |
+| **Softest** | Maximum quietness before comfort safety overrides. |
+
+---
+
+## Core cooling
+
+### Comfort Sync (quiet recovery)
+Spaces out and softens corrections so a fixed thermostat does not look like an instant robot.
+- **Watches:** recent wall-touch count, time since the last defender command, how far the room is above target.
+- **Logic:** after a manual change it waits a random delay, may hold one or two extra short beats, enforces a minimum gap between commands, and shrinks the nudge size. Repeated touches raise the quiet level (Calm → Softest), lengthening waits and shrinking steps. A room over the safety override skips all of it.
+- **Settings:** `NaturalRecoveryEnabled`, `AdaptiveQuietnessEnabled`, `MinimumNaturalDelaySeconds`, `MaximumNaturalDelaySeconds`, `NaturalStepCelsius`, `NaturalHoldChancePercent`, `MinimumCommandGapSeconds`, `NaturalSafetyOverrideCelsius`.
+
+### Cool Mode Restore
+Puts the thermostat back into cool mode whenever someone switches it to heat/off/auto.
+- **Watches:** the Home Assistant HVAC mode, plus how far the room is above target.
+- **Logic:** if the mode is not `cool` it normally waits a short random delay (between `Minimum` and `Maximum` seconds) while the room stays within `target + comfort band`. A warmer room, severe upstairs heat, or a crossed safety override restores `cool` immediately.
+- **Settings:** `CoolModeRestoreDelayEnabled`, `CoolModeRestoreMinimumDelaySeconds`, `CoolModeRestoreMaximumDelaySeconds`, `CoolModeRestoreComfortBandCelsius`.
+
+---
+
+## Wall-touch response
+
+### Natural Walkback
+Walks a safe-band correction toward target in small, slightly random steps instead of one obvious jump.
+- **Watches:** recent wall-touch pressure (a 0–100 suspicion score) and the distance from the defender target.
+- **Logic:** once touches reach the trigger and the room is inside the walkback safety band, each command moves only about the walkback step (plus a tiny jitter). A warm room that needs direct cooling skips walkback and still commands 1 °C below room temperature.
+- **Settings:** `NaturalWalkbackEnabled`, `NaturalWalkbackTriggerTouches`, `NaturalWalkbackStepCelsius`, `NaturalWalkbackJitterCelsius`, `NaturalWalkbackSafetyBandCelsius`.
+
+### Touch Signature
+Matches safe nudges to the size of steps people actually use on the wall thermostat.
+- **Watches:** recent real wall steps (their median size) inside the retention window.
+- **Logic:** with enough recent steps and a room inside the signature safety band, it learns the median wall-step size, clamps it between the min and max signature step, and caps safe nudges to that size.
+- **Settings:** `TouchSignatureEnabled`, `TouchSignatureTriggerTouches`, `TouchSignatureRetentionMinutes`, `TouchSignatureMinimumStepCelsius`, `TouchSignatureMaximumStepCelsius`, `TouchSignatureSafetyBandCelsius`.
+
+### Visibility Guard
+Slows the next safe nudge when a wall touch lands right after a defender command (someone likely noticed).
+- **Watches:** wall touches within the after-command window, counted as "notices" over the notice window.
+- **Logic:** each notice adds pressure (0–100). When notices reach the trigger, the next safe correction waits a variable hold between the min and max hold minutes, scaled by pressure. A room over the safety band clears the hold.
+- **Settings:** `VisibilityGuardEnabled`, `VisibilityGuardTriggerNotices`, `VisibilityGuardNoticeWindowMinutes`, `VisibilityGuardAfterCommandSeconds`, `VisibilityGuardMinimumHoldMinutes`, `VisibilityGuardMaximumHoldMinutes`, `VisibilityGuardSafetyBandCelsius`.
+
+### Routine Timing
+Lines safe corrections up with a normal-looking comfort-check rhythm instead of firing instantly.
+- **Watches:** recent wall touches and the wall-clock minute.
+- **Logic:** after repeated touches and while the room is safe, the next correction waits until the next interval boundary plus a little random wiggle, capped at the max routine delay.
+- **Settings:** `RoutineTimingEnabled`, `RoutineTimingTriggerTouches`, `RoutineTimingIntervalMinutes`, `RoutineTimingJitterMinutes`, `RoutineTimingMaxDelayMinutes`, `RoutineTimingSafetyBandCelsius`.
+
+### Comfort Budget
+Caps how many safe corrections happen inside a rolling window.
+- **Watches:** the count of recent automatic setpoint commands in the budget window.
+- **Logic:** if the count reaches the max, it rests until the oldest command ages out of the window. A room over the safety band clears the budget.
+- **Settings:** `ComfortBudgetEnabled`, `ComfortBudgetWindowMinutes`, `ComfortBudgetMaxCommands`, `ComfortBudgetSafetyBandCelsius`.
+
+### Natural Cadence
+Picks a variable future slot for safe nudges so they never land at identical, robotic times.
+- **Watches:** recent wall-touch pressure and recent command pressure.
+- **Logic:** after repeated touches it chooses a wait between the min and max cadence minutes (later as pressure rises) plus a small jitter.
+- **Settings:** `NaturalCadenceEnabled`, `NaturalCadenceTriggerTouches`, `NaturalCadenceMinimumMinutes`, `NaturalCadenceMaximumMinutes`, `NaturalCadenceJitterMinutes`, `NaturalCadenceSafetyBandCelsius`.
+
+### Comfort Pace
+The high-frequency planner: under heavy wall fighting it waits for a calm weather, sensor, or clock-aligned slot.
+- **Watches:** touch pressure, command pressure, real outdoor-weather movement, the learned Home Assistant sensor beat, and 5/10-minute clock boundaries.
+- **Logic:** when touches reach the trigger and the room is inside the safety band, it computes a base delay between the min and max pace minutes (scaling with pressure) and snaps it to the nearest calm slot — a weather update, the sensor beat, or a clock boundary — recording why.
+- **Settings:** `NaturalChangePlannerEnabled`, `NaturalChangePlannerTriggerTouches`, `NaturalChangePlannerMinimumMinutes`, `NaturalChangePlannerMaximumMinutes`, `NaturalChangePlannerJitterMinutes`, `NaturalChangePlannerPreferWeatherSlots`, `NaturalChangePlannerPreferSensorBeat`.
+
+### Comfort Envelope
+Lets a tiny safe wall preference rest for a while instead of being corrected the instant it appears.
+- **Watches:** the wall setpoint relative to the defender target and how far the room is above target.
+- **Logic:** after repeated touches, if the wall setpoint stays within `target ± max offset` and the room is under the safety band, it observes for the hold minutes.
+- **Settings:** `ComfortEnvelopeEnabled`, `ComfortEnvelopeTriggerTouches`, `ComfortEnvelopeHoldMinutes`, `ComfortEnvelopeMaxOffsetCelsius`, `ComfortEnvelopeSafetyBandCelsius`.
+
+### Comfort Compromise
+Blends a repeated wall choice into a temporary target, then fades it back to the website target.
+- **Watches:** the latest wall setpoint, the website target, and the room temperature.
+- **Logic:** if touches repeat and the room is inside the safety band, the wall setpoint pulls the effective target up to the max offset for the hold minutes, then eases back over the decay minutes. Effective target = `target + (preference − target) × decayFactor`.
+- **Settings:** `ComfortCompromiseEnabled`, `ComfortCompromiseTriggerTouches`, `ComfortCompromiseHoldMinutes`, `ComfortCompromiseDecayMinutes`, `ComfortCompromiseMaxOffsetCelsius`, `ComfortCompromiseSafetyBandCelsius`.
+
+### Comfort Memory
+Learns a small time-of-day target bias from repeated safe wall choices and re-applies it later that hour.
+- **Watches:** the current hour and the offsets learned for it; the room temperature.
+- **Logic:** repeated safe touches teach a bounded offset (`± max offset`) for the current hour slot, applied on later checks in the same window. Memory expires after the retention hours and is skipped when warm or when upstairs needs cooling.
+- **Settings:** `ComfortMemoryEnabled`, `ComfortMemoryLearningTouches`, `ComfortMemoryRetentionHours`, `ComfortMemoryMaxOffsetCelsius`, `ComfortMemorySafetyBandCelsius`.
+
+### Conflict Quiet
+Stands the defender down during an obvious tug-of-war over the thermostat.
+- **Watches:** recent wall touches within the touch window and how far the room is above target.
+- **Logic:** when touches reach the threshold, it stops sending visible corrections for the stand-down minutes while the room stays within `target + comfort band`.
+- **Settings:** `ConflictQuietModeEnabled`, `ConflictQuietTouchThreshold`, `ConflictQuietMinutes`, `ConflictQuietComfortBandCelsius`.
+
+### Wall Settling
+Waits for someone who is still tapping the wall thermostat to stop before correcting.
+- **Watches:** recent touches inside the settling window and the room temperature.
+- **Logic:** with enough recent touches it holds for `base settle seconds + extra pressure seconds` (more touches = longer), measured from the latest touch.
+- **Settings:** `WallSettlingGuardEnabled`, `WallSettlingMinimumTouches`, `WallSettlingWindowMinutes`, `WallSettlingBaseSeconds`, `WallSettlingPressureExtraSeconds`, `WallSettlingSafetyBandCelsius`.
+
+### Manual Comfort Grace
+Leaves a manual wall change alone while the room still feels comfortable.
+- **Watches:** time since the wall change and how far the room is above target.
+- **Logic:** after cooldown it can keep waiting up to the grace minutes while the room stays within `target + grace band`. Touch Intent can extend the grace for clearly warmer changes.
+- **Settings:** `ManualComfortGraceEnabled`, `ManualComfortGraceMinutes`, `ManualComfortGraceBandCelsius`.
+
+### Touch Intent
+Reads whether recent wall changes trend warmer, cooler, or mixed, and extends grace for a clear warmer pattern.
+- **Watches:** the net sum of recent wall setpoint changes inside the intent window.
+- **Logic:** if net movement is at least the warm threshold and the room is inside the safety band, it adds the extra grace minutes to Manual Comfort Grace.
+- **Settings:** `TouchIntentEnabled`, `TouchIntentMinimumTouches`, `TouchIntentWindowMinutes`, `TouchIntentNetWarmThresholdCelsius`, `TouchIntentExtraGraceMinutes`, `TouchIntentSafetyBandCelsius`.
+
+### Cooler Intent Fast Lane
+When people keep dialing the wall cooler, it skips quiet waits so the room cools sooner.
+- **Watches:** the net cooler movement of recent wall changes and whether the room is above target.
+- **Logic:** if repeated touches move the wall cooler by at least the cool threshold and the room is above target, it clears the quiet waits (cooldown, grace, conflict quiet, cadence, repeat quiet, sensor rhythm, runway, …) for the hold minutes. It never lowers the website target.
+- **Settings:** `CoolerIntentFastLaneEnabled`, `CoolerIntentMinimumTouches`, `CoolerIntentWindowMinutes`, `CoolerIntentHoldMinutes`, `CoolerIntentNetCoolThresholdCelsius`, `CoolerIntentSafetyBandCelsius`.
+
+---
+
+## Sensor timing
+
+### Setpoint Echo
+Waits for Home Assistant to report back the last setpoint before sending another safe command.
+- **Logic:** after a command it waits up to the echo grace seconds for Home Assistant to report that setpoint within 0.15 °C. A too-warm room steps it aside.
+- **Settings:** `SetpointEchoGuardEnabled`, `SetpointEchoGraceSeconds`, `SetpointEchoSafetyBandCelsius`.
+
+### Repeat Quiet
+Waits before sending the very same thermostat number again.
+- **Logic:** if the next safe command repeats the last number, it waits at least the minimum wait plus extra pressure seconds (scaling with recent touches and commands). Different one-degree step-downs pass through.
+- **Settings:** `RepeatCommandGuardEnabled`, `RepeatCommandMinimumWaitSeconds`, `RepeatCommandPressureExtraSeconds`, `RepeatCommandSafetyBandCelsius`.
+
+### Sensor Rhythm
+Times nudges to just after the normal Home Assistant reading beat so they look less mechanical.
+- **Logic:** with at least the minimum samples in the rhythm window, it learns the median update interval and waits until just after the next beat plus a small jitter.
+- **Settings:** `SensorRhythmGuardEnabled`, `SensorRhythmMinimumSamples`, `SensorRhythmWindowMinutes`, `SensorRhythmJitterSeconds`, `SensorRhythmSafetyBandCelsius`.
+
+### Cooling Runway
+Gives the AC time to work after cooling starts before nudging the setpoint again.
+- **Logic:** when `hvac_action` turns to cooling it records the start and holds for the minimum runway seconds plus extra pressure seconds. If cooling stops or the room gets too warm, it clears immediately.
+- **Settings:** `CoolingRunwayGuardEnabled`, `CoolingRunwayMinimumSeconds`, `CoolingRunwayPressureExtraSeconds`, `CoolingRunwaySafetyBandCelsius`.
+
+### Room Trend Guard
+Keeps observing when the room is already stable or cooling after a wall change.
+- **Logic:** comparing the oldest and newest room samples in the trend window, a cooling room (delta below the negative stable tolerance) holds for the trend hold minutes so cooling can continue. Warming or above-band rooms proceed.
+- **Settings:** `RoomTrendGuardEnabled`, `RoomTrendWindowMinutes`, `RoomTrendStableToleranceCelsius`, `RoomTrendHoldMinutes`.
+
+### Thermal Momentum
+Waits when the room is already cooling fast enough to reach target soon on its own.
+- **Logic:** it estimates the cooling rate and minutes-to-target. If the rate is at least the minimum C/hour and target is within the look-ahead minutes, it holds for the momentum hold minutes.
+- **Settings:** `ThermalMomentumGuardEnabled`, `ThermalMomentumMinimumCoolingRateCelsiusPerHour`, `ThermalMomentumLookAheadMinutes`, `ThermalMomentumHoldMinutes`.
+
+### Weather Drift Timing
+Times safe corrections to real outdoor-weather movement instead of firing immediately.
+- **Logic:** after a wall touch, while the room is inside the weather safety band, stable or cooling outdoor temperatures hold for the weather hold minutes. Once the outdoor temperature warms by the minimum change, the hold clears.
+- **Settings:** `WeatherDriftGuardEnabled`, `WeatherDriftWindowMinutes`, `WeatherDriftMinimumChangeCelsius`, `WeatherDriftHoldMinutes`, `WeatherDriftSafetyBandCelsius`.
+
+---
+
+## Safety & system
+
+### Dynamic Cooldown
+A frequency-based quiet period after a manual thermostat change.
+- **Formula:** `cooldown = min(MaxCooldownSeconds, BaseCooldownSeconds × recentTouchCount) + randomQuietDelay`, where `recentTouchCount` is counted inside `TouchFrequencyWindowMinutes`.
+- **Settings:** `BaseCooldownSeconds`, `MaxCooldownSeconds`, `TouchFrequencyWindowMinutes`.
+
+### Fan Energy Saver
+Optionally moves the fan to an energy-saving mode when the room is near target.
+- **Logic:** when enabled and the room is within the threshold of target, if the configured fan mode exists on the device it calls `climate.set_fan_mode`.
+- **Settings:** `FanEnergySaverEnabled`, `FanEnergySaverThresholdCelsius`, `FanEnergySaverMode`.
+
+### Upstairs Comfort Guard
+Prioritizes cooling when upstairs rooms get hot while someone is home.
+- **Logic:** if the hottest upstairs room exceeds the comfort maximum, it lowers the target toward the comfort target and adds the cooling boost. Severe upstairs heat bypasses cooldown. When presence is required and nobody is detected, it assumes home rather than under-cooling.
+- **Settings:** `UpstairsComfortEnabled`, `UpstairsTemperatureEntityIds`, `UpstairsMaxComfortCelsius`, `UpstairsComfortTargetCelsius`, `UpstairsComfortBoostCelsius`, `HomePresenceRequired`, `PresenceEntityIds`.
+
+### Schedule & Weather Rules
+Time-of-day target rules, each gated by a weather activation condition.
+- **Logic:** when the custom schedule is on, the matching rule supplies the target. Weather rules (`always`, `room-above-outdoor`, `room-below-outdoor`, `outdoor-above-target`, `outdoor-below-target`) decide whether corrective action is allowed. The defender still reads Home Assistant 24/7 when a rule blocks correction.
+- **Settings:** `ScheduleEnabled`, `WeatherActivationMode`, and per-rule Days / Start / End / Target / Weather.
+
+### Website Debounce
+Blocks repeated website button taps for two minutes so the UI does not spam Home Assistant.
+- **Logic:** the first click runs; later clicks within the debounce window show the remaining wait. Emergency actions bypass the debounce and then start a fresh window.
+
+### Emergency Protocols
+One-tap stand-down modes, run from the Controls page.
+- **Too cold** (30 min): pauses the defender and turns the thermostat off.
+- **Someone upset** (45 min) and **Suspicion quiet** (90 min): keep reading the thermostat 24/7 but send no corrective commands until the window ends.
+- Emergency actions bypass the website debounce.
+
+### Cooling Failure Watch
+Raises a repeating mega-alert when cool mode is demanded but the AC is not really cooling.
+- **Logic:** it alerts if the entity is in `cool`, the room is clearly above the setpoint, and `hvac_action` stays idle for several minutes (possible breaker/equipment), or if the action says cooling but the room does not drop over the retained window (possible compressor/airflow). Alerts repeat about once a minute. It never changes thermostat commands.

@@ -388,7 +388,23 @@ If no presence entities are configured, the app auto-discovers `person.*` and `d
 
 ## Website
 
-The front end is built with Blazor Server and MudBlazor. Dashboard data refreshes automatically from the in-process defender state, and controls call the same services used by the JSON API.
+The front end is built with Blazor Server and MudBlazor. It uses a responsive navigation drawer with
+routed pages instead of a single crowded page:
+
+- **Dashboard** (`/`) — summary-first hero (target, live readings, connection, defender switch), priority alerts, a "defense at a glance" summary, and quick controls.
+- **Defense** (`/defense`) — every timing/comfort/safety guard as a live card with an inline "How this works" explainer; searchable and filterable by category.
+- **Comfort** (`/comfort`) — upstairs comfort guard, sensors, and presence.
+- **Energy** (`/energy`) — live usage sensors, the Alectra Hui entity list, and 24-hour history.
+- **Logs** (`/logs`) — the wall-touch audit log and activity events with clickable JSON detail.
+- **Controls** (`/controls`) — target, fan, refresh/force/emergency thermostat actions.
+- **Settings** (`/settings`) — grouped expanders for every guard plus the schedule editor.
+- **Guide** (`/guide`) — the in-app algorithm reference: the decision cycle and a section per algorithm.
+
+All live pages share one per-second poll through a scoped `DefenderStateProvider`, so the header and
+page bodies update from the same snapshot without refreshing. Light/dark theme is persisted. The guard
+cards and the Guide are generated from a single descriptor table (`Guards/GuardCatalog.cs`), which is
+also the source of truth for `docs/wiki/Defender-Logic.md`. Controls call the same services used by the
+JSON API.
 
 The API also exposes a Server-Sent Events stream for external clients:
 

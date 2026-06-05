@@ -1,0 +1,103 @@
+@page "/defense"
+@implements IDisposable
+@inject DefenderStateProvider State
+
+<PageTitle>Defense - AC Defender</PageTitle>
+
+<MudStack Spacing="3">
+    <SectionCard Title="Natural Defender"
+                 Subtitle="Live timing, wall-touch, and safety guards"
+                 Help="Each card shows what the guard is doing right now. Open “How this works” for the algorithm, or read the full Guide.">
+        <Actions>
+            <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">@BusyCount busy</MudChip>
+            <MudButton Href="/guide" Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.MenuBook">Guide</MudButton>
+        </Actions>
+        <ChildContent>
+            <MudGrid Spacing="2" Class="mt-1">
+                <MudItem xs="12" sm="8">
+                    <MudTextField @bind-Value="_search" Immediate="true" Clearable="true"
+                                  Placeholder="Search guards (cooldown, touch, weather, echo, runway…)"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="string" @bind-Value="_category" Variant="Variant.Outlined" Margin="Margin.Dense" Label="Category">
+                        <MudSelectItem T="string" Value="@("All")">All categories</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("Core")">Core</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("WallTouch")">Wall touch</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("Sensor")">Sensors</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("System")">System</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+        </ChildContent>
+    </SectionCard>
+
+    @foreach (var group in Groups)
+    {
+        var guards = Filtered(group.Category).ToList();
+        if (guards.Count == 0)
+        {
+            continue;
+        }
+
+        <div>
+            <MudText Typo="Typo.subtitle1" Class="guard-group__title">@group.Title</MudText>
+            <div class="guard-grid">
+                @foreach (var guard in guards)
+                {
+                    <GuardCard Info="guard" Snapshot="Snapshot" />
+                }
+            </div>
+        </div>
+    }
+
+    @if (!Groups.SelectMany(g => Filtered(g.Category)).Any())
+    {
+        <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined">No guard matches that search.</MudAlert>
+    }
+</MudStack>
+
+@code {
+    private string _search = "";
+    private string _category = "All";
+
+    private DefenderSnapshot Snapshot => State.Snapshot;
+
+    private static readonly (GuardCategory Category, string Title)[] Groups =
+    [
+        (GuardCategory.Core, "Core cooling"),
+        (GuardCategory.WallTouch, "Wall-touch response"),
+        (GuardCategory.Sensor, "Sensor timing"),
+        (GuardCategory.System, "Safety & system"),
+    ];
+
+    private int BusyCount => GuardCatalog.Live.Count(g => g.Project!(Snapshot).Busy);
+
+    private IEnumerable<GuardInfo> Filtered(GuardCategory category)
+    {
+        if (_category != "All" && _category != category.ToString())
+        {
+            return Array.Empty<GuardInfo>();
+        }
+
+        return GuardCatalog.Live.Where(g => g.Category == category && Matches(g));
+    }
+
+    private bool Matches(GuardInfo guard)
+    {
+        if (string.IsNullOrWhiteSpace(_search))
+        {
+            return true;
+        }
+
+        var view = guard.Project!(Snapshot);
+        return Format.MatchesSearch(_search, guard.Name, guard.Summary, guard.Watches, guard.Logic, guard.Output, view.StatusText, view.StateLabel);
+    }
+
+    protected override void OnInitialized() => State.Changed += OnStateChanged;
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => State.Changed -= OnStateChanged;
+}

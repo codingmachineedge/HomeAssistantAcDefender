@@ -1,0 +1,82 @@
+@page "/comfort"
+@implements IDisposable
+@inject DefenderStateProvider State
+
+<PageTitle>Comfort - AC Defender</PageTitle>
+
+<MudStack Spacing="3">
+    <SectionCard Title="Upstairs Comfort"
+                 Subtitle="@(Up?.Status ?? "Waiting for upstairs readings")"
+                 Help="Stops upstairs rooms from getting too hot — optionally only while someone is home.">
+        <Actions>
+            <MudChip T="string" Color="@(Up?.IsHome == true ? Color.Success : Color.Warning)" Variant="Variant.Filled" Size="Size.Small">@(Up?.IsHome == true ? "Home" : "Away")</MudChip>
+        </Actions>
+        <ChildContent>
+            <MudGrid Spacing="2" Class="mt-1">
+                <MetricCard Label="Guard" Value="@GuardText" Help="Whether upstairs help is watching or cooling." />
+                <MetricCard Label="Hottest upstairs" Value="@Format.Temp(Up?.HottestUpstairsTemperatureCelsius)" Help="The warmest upstairs sensor right now." />
+                <MetricCard Label="Presence" Value="@PresenceText" Help="Whether someone must be home first." />
+                <MetricCard Label="Sensors" Value="@($"{Up?.UpstairsSensors?.Count ?? 0}")" Help="Upstairs temperature sensors found." />
+            </MudGrid>
+        </ChildContent>
+    </SectionCard>
+
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="6">
+            <SectionCard Title="Upstairs sensors" Help="The warmest sensors are easiest to scan here.">
+                <MudStack Spacing="1" Class="scroll-list">
+                    @if (Up?.UpstairsSensors?.Count > 0)
+                    {
+                        @foreach (var sensor in Up.UpstairsSensors.OrderByDescending(s => s.TemperatureCelsius ?? double.MinValue))
+                        {
+                            <div class="data-row">
+                                <span class="data-row__name">@sensor.Name</span>
+                                <span class="data-row__value">@Format.SensorValue(sensor)</span>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">No upstairs sensors found or configured.</MudText>
+                    }
+                </MudStack>
+            </SectionCard>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <SectionCard Title="Presence" Help="Entities that say someone is home or away.">
+                <MudStack Spacing="1" Class="scroll-list">
+                    @if (Up?.Presence?.Count > 0)
+                    {
+                        @foreach (var person in Up.Presence)
+                        {
+                            <div class="data-row">
+                                <span class="data-row__name">@person.Name</span>
+                                <span class="data-row__value">
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(person.IsHome ? Color.Success : Color.Default)">@person.State</MudChip>
+                                </span>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">No presence entities found or configured.</MudText>
+                    }
+                </MudStack>
+            </SectionCard>
+        </MudItem>
+    </MudGrid>
+</MudStack>
+
+@code {
+    private ComfortSnapshot? Up => State.Snapshot?.Comfort;
+
+    private string GuardText => Up?.UpstairsTooHot == true ? "Cooling" : Up?.UpstairsComfortEnabled == true ? "Watching" : "Off";
+    private string PresenceText => Up?.HomePresenceRequired == true ? "Required" : "Optional";
+
+    protected override void OnInitialized() => State.Changed += OnStateChanged;
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => State.Changed -= OnStateChanged;
+}

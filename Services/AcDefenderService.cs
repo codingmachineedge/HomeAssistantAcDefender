@@ -23,6 +23,13 @@ public sealed class AcDefenderService
         this.logger = logger;
     }
 
+    /// <summary>
+    /// The 24/7 decision cycle. Reads real Home Assistant data, then walks the defender guards in order
+    /// (emergency → cool-mode restore → schedule/weather → upstairs comfort → wall-touch holds →
+    /// expected setpoint → sensor-timing holds → command shaping → send). The first guard that wants to
+    /// wait stops the cycle and records the next action. See <c>Guards/GuardCatalog.cs</c> and
+    /// <c>docs/wiki/Defender-Logic.md</c> for the full per-algorithm reference.
+    /// </summary>
     public async Task RunCycleAsync(CancellationToken cancellationToken)
     {
         try
