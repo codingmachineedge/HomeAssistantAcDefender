@@ -63,6 +63,48 @@
                                          Max="1440" />
                     </MudItem>
                 </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
+                           Value="_conflictQuietModeEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _conflictQuietModeEnabled = v))"
+                           Label="Conflict quiet mode"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Stands down when wall touches keep happening.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_conflictQuietTouchThreshold"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _conflictQuietTouchThreshold = value))"
+                                         Label="Touches to stand down"
+                                         HelperText="How many touches feel like a tug-of-war."
+                                         Variant="Variant.Outlined"
+                                         Min="2"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_conflictQuietMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _conflictQuietMinutes = value))"
+                                         Label="Stand-down minutes"
+                                         HelperText="How long to stop fighting back."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="double"
+                                         Value="_conflictQuietComfortBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _conflictQuietComfortBandCelsius = value))"
+                                         Label="Safe room band C"
+                                         HelperText="Extra warmth allowed while waiting."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
             </MudPaper>
         </MudItem>
 
@@ -596,6 +638,10 @@
     private int _baseCooldownSeconds = 45;
     private int _maxCooldownSeconds = 600;
     private int _touchFrequencyWindowMinutes = 30;
+    private bool _conflictQuietModeEnabled = true;
+    private int _conflictQuietTouchThreshold = 4;
+    private int _conflictQuietMinutes = 35;
+    private double _conflictQuietComfortBandCelsius = 1.2;
     private bool _naturalRecoveryEnabled = true;
     private bool _adaptiveQuietnessEnabled = true;
     private int _adaptiveQuietTouchThreshold = 2;
@@ -652,6 +698,10 @@
         _baseCooldownSeconds = settings.BaseCooldownSeconds;
         _maxCooldownSeconds = settings.MaxCooldownSeconds;
         _touchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes;
+        _conflictQuietModeEnabled = settings.ConflictQuietModeEnabled;
+        _conflictQuietTouchThreshold = settings.ConflictQuietTouchThreshold;
+        _conflictQuietMinutes = settings.ConflictQuietMinutes;
+        _conflictQuietComfortBandCelsius = settings.ConflictQuietComfortBandCelsius;
         _naturalRecoveryEnabled = settings.NaturalRecoveryEnabled;
         _adaptiveQuietnessEnabled = settings.AdaptiveQuietnessEnabled;
         _adaptiveQuietTouchThreshold = settings.AdaptiveQuietTouchThreshold;
@@ -755,6 +805,10 @@
             _baseCooldownSeconds,
             _maxCooldownSeconds,
             _touchFrequencyWindowMinutes,
+            _conflictQuietModeEnabled,
+            _conflictQuietTouchThreshold,
+            _conflictQuietMinutes,
+            _conflictQuietComfortBandCelsius,
             _naturalRecoveryEnabled,
             _adaptiveQuietnessEnabled,
             _adaptiveQuietTouchThreshold,

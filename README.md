@@ -13,6 +13,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Detects when someone changes the thermostat outside the website.
 - Logs external thermostat touches with date, time, previous setpoint, new setpoint, room temperature, outdoor temperature, and weather condition when Home Assistant exposes those values.
 - Uses a dynamic cooldown after manual thermostat touches so corrections do not happen instantly every time.
+- Adds Conflict Quiet so repeated wall touches can trigger a temporary stand-down while the room is still safe.
 - Adds Comfort Sync quiet recovery: randomized extra waits, optional extra holds, command spacing, adaptive quiet levels, and small setpoint nudges so repeated wall changes do not create an obvious immediate tug-of-war.
 - Adds Manual Comfort Grace so a wall thermostat change can be left alone while the room remains within the configured comfort band.
 - Adds Room Trend Guard so the defender keeps observing when the room is stable or cooling after a wall change, and resumes when it starts warming.
@@ -61,14 +62,15 @@ Every cycle:
 5. Ignore setpoint changes that match commands recently sent by the app.
 6. Apply active schedule target if schedule is enabled.
 7. Evaluate the weather activation rule.
-8. Respect dynamic cooldown after manual thermostat changes.
-9. Respect Manual Comfort Grace when the room is still comfortable after a wall change.
-10. Respect Room Trend Guard when the room is stable or cooling after a wall change.
-11. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
-12. Apply Comfort Sync quiet recovery timing unless the room or upstairs is too warm.
-13. Optionally set fan saver mode when near target.
-14. Correct the thermostat setpoint when it does not match the defender decision.
-15. Update the real-time dashboard status.
+8. Respect Conflict Quiet when repeated wall touches suggest someone is fighting the thermostat.
+9. Respect dynamic cooldown after manual thermostat changes.
+10. Respect Manual Comfort Grace when the room is still comfortable after a wall change.
+11. Respect Room Trend Guard when the room is stable or cooling after a wall change.
+12. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
+13. Apply Comfort Sync quiet recovery timing unless the room or upstairs is too warm.
+14. Optionally set fan saver mode when near target.
+15. Correct the thermostat setpoint when it does not match the defender decision.
+16. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -81,6 +83,18 @@ cooldown = min(maxCooldownSeconds, baseCooldownSeconds * recentTouchCount) + ran
 ```
 
 `recentTouchCount` is counted inside `TouchFrequencyWindowMinutes`. More repeated manual changes cause longer cooldowns.
+
+## Conflict Quiet
+
+Conflict Quiet is for obvious tug-of-war moments. When recent wall touches reach `ConflictQuietTouchThreshold`, the defender stands down for `ConflictQuietMinutes` instead of sending another visible correction.
+
+It only stands down while the room is still safe:
+
+```text
+currentRoomTemperature <= targetTemperature + ConflictQuietComfortBandCelsius
+```
+
+If the room gets warmer than that, severe upstairs heat is active, or the safety override is crossed, Conflict Quiet ends and the correction path resumes.
 
 ## Comfort Sync Quiet Recovery
 

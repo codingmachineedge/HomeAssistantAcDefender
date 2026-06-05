@@ -9,6 +9,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Treat `climate.dining_room` as a real device. Any command endpoint should act on Home Assistant or return a real error.
 - Keep the background worker checking 24/7. Paused or weather-blocked defender states should still refresh Home Assistant state.
 - Comfort Sync / quiet recovery may delay or step real commands, but it must not create fake thermostat state or simulator-only behavior.
+- Conflict Quiet may stand down after repeated wall touches only while real room temperature remains inside the configured safety band.
 - Thermal momentum and room-trend decisions must use real Home Assistant room-temperature samples, not fake timing or simulated cooling.
 
 ## Validation

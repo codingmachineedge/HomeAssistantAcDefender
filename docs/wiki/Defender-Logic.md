@@ -10,14 +10,15 @@ Every cycle performs these steps:
 6. Apply the active schedule target when scheduling is enabled.
 7. Evaluate the weather activation rule.
 8. Apply upstairs comfort rules.
-9. Respect dynamic cooldown after external changes unless severe upstairs heat bypasses it.
-10. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
-11. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
-12. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
-13. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
-14. Apply fan energy saver when enabled and near target.
-15. Correct the real thermostat setpoint when needed.
-16. Update the next-action status label.
+9. Respect Conflict Quiet when repeated wall touches suggest someone is fighting the thermostat.
+10. Respect dynamic cooldown after external changes unless severe upstairs heat bypasses it.
+11. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
+12. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
+13. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
+14. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
+15. Apply fan energy saver when enabled and near target.
+16. Correct the real thermostat setpoint when needed.
+17. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -36,6 +37,18 @@ cooldown = min(maxCooldownSeconds, baseCooldownSeconds * recentTouchCount) + ran
 ```
 
 Recent touches are counted within the configured touch frequency window.
+
+## Conflict Quiet
+
+Conflict Quiet watches the same recent-touch counter as cooldown. If repeated wall touches reach the configured threshold, the defender stands down for the configured minutes instead of continuing an obvious command tug-of-war.
+
+It only stands down while the real room temperature is at or below:
+
+```text
+targetTemperature + conflictQuietComfortBandCelsius
+```
+
+It ends immediately when the room gets too warm, severe upstairs heat bypasses quiet timing, or the normal safety override is crossed.
 
 ## Comfort Sync Quiet Recovery
 

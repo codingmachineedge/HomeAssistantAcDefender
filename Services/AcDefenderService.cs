@@ -59,6 +59,17 @@ public sealed class AcDefenderService
             }
 
             if (!comfort.BypassCooldown
+                && stateStore.TryRespectConflictQuietMode(reading, false, DateTimeOffset.UtcNow, out var conflictUntil, out var conflictMessage))
+            {
+                stateStore.SetNextAction(conflictMessage, conflictUntil);
+                return;
+            }
+            else if (comfort.BypassCooldown)
+            {
+                stateStore.TryRespectConflictQuietMode(reading, true, DateTimeOffset.UtcNow, out _, out _);
+            }
+
+            if (!comfort.BypassCooldown
                 && stateStore.TryRespectManualComfortGrace(reading, false, DateTimeOffset.UtcNow, out var graceUntil, out var graceMessage))
             {
                 stateStore.SetNextAction(graceMessage, graceUntil);

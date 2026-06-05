@@ -85,6 +85,10 @@ public sealed class DefenderStateStore
             state.Settings.BaseCooldownSeconds = Math.Clamp(request.BaseCooldownSeconds, 0, 3600);
             state.Settings.MaxCooldownSeconds = Math.Clamp(request.MaxCooldownSeconds, 0, 7200);
             state.Settings.TouchFrequencyWindowMinutes = Math.Clamp(request.TouchFrequencyWindowMinutes, 1, 1440);
+            state.Settings.ConflictQuietModeEnabled = request.ConflictQuietModeEnabled;
+            state.Settings.ConflictQuietTouchThreshold = Math.Clamp(request.ConflictQuietTouchThreshold, 2, 20);
+            state.Settings.ConflictQuietMinutes = Math.Clamp(request.ConflictQuietMinutes, 1, 240);
+            state.Settings.ConflictQuietComfortBandCelsius = Math.Round(Math.Clamp(request.ConflictQuietComfortBandCelsius, 0.1, 5.0), 1);
             state.Settings.NaturalRecoveryEnabled = request.NaturalRecoveryEnabled;
             state.Settings.AdaptiveQuietnessEnabled = request.AdaptiveQuietnessEnabled;
             state.Settings.AdaptiveQuietTouchThreshold = Math.Clamp(request.AdaptiveQuietTouchThreshold, 1, 20);
@@ -280,6 +284,73 @@ public sealed class DefenderStateStore
         {
             cooldownUntil = state.CooldownUntil ?? DateTimeOffset.MinValue;
             return state.CooldownUntil is { } until && until > now;
+        }
+    }
+
+    public bool TryRespectConflictQuietMode(
+        ThermostatReading reading,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.ConflictQuietModeEnabled)
+            {
+                state.ConflictQuietUntil = null;
+                state.ConflictQuietStatus = "Conflict quiet is off.";
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            var recentTouches = state.ExternalTouchTimes.Count;
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                state.ConflictQuietUntil = null;
+                state.ConflictQuietStatus = "Room comfort needs help now, so conflict quiet is stepping aside.";
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.ConflictQuietComfortBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                state.ConflictQuietUntil = null;
+                state.ConflictQuietStatus = $"Room rose above {allowedRoomTemperature:0.0} C, so conflict quiet ended.";
+                SaveState();
+                return false;
+            }
+
+            if (state.ConflictQuietUntil is { } activeUntil && activeUntil > now)
+            {
+                waitUntil = activeUntil;
+                message = $"Repeated wall touches noticed; standing down until {activeUntil.ToLocalTime():HH:mm:ss} unless room rises above {allowedRoomTemperature:0.0} C.";
+                state.ConflictQuietStatus = message;
+                SaveState();
+                return true;
+            }
+
+            if (recentTouches < state.Settings.ConflictQuietTouchThreshold)
+            {
+                state.ConflictQuietUntil = null;
+                state.ConflictQuietStatus = $"Conflict quiet is watching for repeated wall touches ({recentTouches}/{state.Settings.ConflictQuietTouchThreshold}).";
+                SaveState();
+                return false;
+            }
+
+            var holdUntil = now.AddMinutes(state.Settings.ConflictQuietMinutes);
+            state.ConflictQuietUntil = holdUntil;
+            waitUntil = holdUntil;
+            message = $"Repeated wall touches noticed; standing down until {holdUntil.ToLocalTime():HH:mm:ss} unless room rises above {allowedRoomTemperature:0.0} C.";
+            state.ConflictQuietStatus = message;
+            AddEvent("warning", $"Conflict quiet activated after {recentTouches} wall touches.");
+            SaveState();
+            return true;
         }
     }
 
@@ -622,6 +693,7 @@ public sealed class DefenderStateStore
             if (state.NaturalRecoveryStatus == status
                 && state.NaturalHoldUntil is null
                 && state.NaturalHoldCount == 0
+                && state.ConflictQuietUntil is null
                 && state.RoomTrendHoldUntil is null
                 && state.ThermalMomentumHoldUntil is null)
             {
@@ -631,6 +703,10 @@ public sealed class DefenderStateStore
             state.NaturalHoldUntil = null;
             state.NaturalHoldCount = 0;
             state.NaturalRecoveryStatus = status;
+            state.ConflictQuietUntil = null;
+            state.ConflictQuietStatus = state.Settings.ConflictQuietModeEnabled
+                ? "Conflict quiet is lined up; no stand-down needed."
+                : "Conflict quiet is off.";
             state.RoomTrendHoldUntil = null;
             state.RoomTrendStatus = state.Settings.RoomTrendGuardEnabled
                 ? "Room trend is lined up; no hold needed."
@@ -1112,6 +1188,9 @@ public sealed class DefenderStateStore
             saved.Settings.MinimumCommandGapSeconds,
             saved.Settings.MaximumAdaptiveCommandGapSeconds);
         saved.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
+        saved.Settings.ConflictQuietTouchThreshold = Math.Clamp(saved.Settings.ConflictQuietTouchThreshold, 2, 20);
+        saved.Settings.ConflictQuietMinutes = Math.Clamp(saved.Settings.ConflictQuietMinutes, 1, 240);
+        saved.Settings.ConflictQuietComfortBandCelsius = Math.Round(Math.Clamp(saved.Settings.ConflictQuietComfortBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ManualComfortGraceMinutes = Math.Clamp(saved.Settings.ManualComfortGraceMinutes, 0, 240);
         saved.Settings.ManualComfortGraceBandCelsius = Math.Round(Math.Clamp(saved.Settings.ManualComfortGraceBandCelsius, 0.1, 5.0), 1);
         saved.Settings.RoomTrendWindowMinutes = Math.Clamp(saved.Settings.RoomTrendWindowMinutes, 2, 240);
@@ -1131,6 +1210,9 @@ public sealed class DefenderStateStore
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
+        saved.ConflictQuietStatus = string.IsNullOrWhiteSpace(saved.ConflictQuietStatus)
+            ? "Conflict quiet is watching."
+            : saved.ConflictQuietStatus;
         saved.ManualComfortGraceStatus = string.IsNullOrWhiteSpace(saved.ManualComfortGraceStatus)
             ? "No wall-change grace active."
             : saved.ManualComfortGraceStatus;
@@ -1158,6 +1240,9 @@ public sealed class DefenderStateStore
             ? (int)Math.Ceiling((holdUntil - now).TotalSeconds)
             : 0;
         var naturalSeconds = Math.Max(cooldownSeconds, holdSeconds);
+        var conflictQuietSeconds = state.ConflictQuietUntil is { } conflictUntil && conflictUntil > now
+            ? (int)Math.Ceiling((conflictUntil - now).TotalSeconds)
+            : 0;
         var manualGraceSeconds = state.ManualComfortGraceUntil is { } graceUntil && graceUntil > now
             ? (int)Math.Ceiling((graceUntil - now).TotalSeconds)
             : 0;
@@ -1199,6 +1284,16 @@ public sealed class DefenderStateStore
                 state.Settings.NaturalHoldChancePercent,
                 naturalPlan.HoldChancePercent,
                 naturalPlan.CommandGapSeconds),
+            new ConflictQuietSnapshot(
+                state.Settings.ConflictQuietModeEnabled,
+                conflictQuietSeconds > 0,
+                conflictQuietSeconds,
+                state.Settings.ConflictQuietTouchThreshold,
+                state.Settings.ConflictQuietComfortBandCelsius,
+                string.IsNullOrWhiteSpace(state.ConflictQuietStatus)
+                    ? "Conflict quiet is watching."
+                    : state.ConflictQuietStatus,
+                conflictQuietSeconds > 0 ? state.ConflictQuietUntil : null),
             new ManualComfortGraceSnapshot(
                 state.Settings.ManualComfortGraceEnabled,
                 manualGraceSeconds > 0,
@@ -1267,6 +1362,8 @@ public sealed class DefenderStateStore
         state.NaturalHoldUntil = null;
         state.NaturalHoldCount = 0;
         state.NaturalRecoveryStatus = status;
+        state.ConflictQuietUntil = null;
+        state.ConflictQuietStatus = "Conflict quiet is watching.";
         ClearManualComfortGrace();
         state.RoomTrendHoldUntil = null;
         state.RoomTrendStatus = "Room trend guard is watching.";
@@ -1377,6 +1474,10 @@ public sealed class DefenderStateStore
             BaseCooldownSeconds = settings.BaseCooldownSeconds,
             MaxCooldownSeconds = settings.MaxCooldownSeconds,
             TouchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes,
+            ConflictQuietModeEnabled = settings.ConflictQuietModeEnabled,
+            ConflictQuietTouchThreshold = settings.ConflictQuietTouchThreshold,
+            ConflictQuietMinutes = settings.ConflictQuietMinutes,
+            ConflictQuietComfortBandCelsius = settings.ConflictQuietComfortBandCelsius,
             NaturalRecoveryEnabled = settings.NaturalRecoveryEnabled,
             AdaptiveQuietnessEnabled = settings.AdaptiveQuietnessEnabled,
             AdaptiveQuietTouchThreshold = settings.AdaptiveQuietTouchThreshold,
@@ -1501,6 +1602,10 @@ public sealed class DefenderStateStore
         public DateTimeOffset? LastDefenderCommandAt { get; set; }
 
         public string NaturalRecoveryStatus { get; set; } = "Comfort sync is ready.";
+
+        public DateTimeOffset? ConflictQuietUntil { get; set; }
+
+        public string ConflictQuietStatus { get; set; } = "Conflict quiet is watching.";
 
         public DateTimeOffset? ManualComfortGraceUntil { get; set; }
 

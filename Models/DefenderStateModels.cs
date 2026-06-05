@@ -16,6 +16,7 @@ public sealed record DefenderSnapshot(
     DateTimeOffset? NextActionAt,
     int CooldownSeconds,
     NaturalRecoverySnapshot NaturalRecovery,
+    ConflictQuietSnapshot ConflictQuiet,
     ManualComfortGraceSnapshot ManualComfortGrace,
     RoomTrendSnapshot RoomTrend,
     ThermalMomentumSnapshot ThermalMomentum,
@@ -85,6 +86,15 @@ public sealed record NaturalRecoverySnapshot(
     int EffectiveHoldChancePercent,
     int EffectiveCommandGapSeconds);
 
+public sealed record ConflictQuietSnapshot(
+    bool Enabled,
+    bool Active,
+    int SecondsRemaining,
+    int TriggerTouchCount,
+    double ComfortBandCelsius,
+    string Status,
+    DateTimeOffset? Until);
+
 public sealed record ManualComfortGraceSnapshot(
     bool Enabled,
     bool Active,
@@ -141,6 +151,14 @@ public sealed class DefenderSettings
     public int MaxCooldownSeconds { get; set; } = 600;
 
     public int TouchFrequencyWindowMinutes { get; set; } = 30;
+
+    public bool ConflictQuietModeEnabled { get; set; } = true;
+
+    public int ConflictQuietTouchThreshold { get; set; } = 4;
+
+    public int ConflictQuietMinutes { get; set; } = 35;
+
+    public double ConflictQuietComfortBandCelsius { get; set; } = 1.2;
 
     public bool NaturalRecoveryEnabled { get; set; } = true;
 

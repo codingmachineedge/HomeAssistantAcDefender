@@ -9,6 +9,10 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Base cooldown seconds: minimum cooldown after a manual thermostat change.
 - Max cooldown seconds: cap for repeated manual changes.
 - Touch window minutes: time window used for frequency-based cooldown.
+- Conflict quiet mode: stands down when wall touches keep happening.
+- Touches to stand down: how many recent wall changes trigger the stand-down.
+- Stand-down minutes: how long to stop fighting back while the room is still safe.
+- Safe room band C: extra warmth allowed above target while standing down.
 
 ## Comfort Sync
 
