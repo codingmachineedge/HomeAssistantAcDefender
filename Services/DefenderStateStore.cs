@@ -133,6 +133,15 @@ public sealed class DefenderStateStore
             state.Settings.NaturalWalkbackStepCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackStepCelsius, 0.1, 5.0), 1);
             state.Settings.NaturalWalkbackJitterCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackJitterCelsius, 0.0, 0.5), 1);
             state.Settings.NaturalWalkbackSafetyBandCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.TouchSignatureEnabled = request.TouchSignatureEnabled;
+            state.Settings.TouchSignatureTriggerTouches = Math.Clamp(request.TouchSignatureTriggerTouches, 1, 20);
+            state.Settings.TouchSignatureRetentionMinutes = Math.Clamp(request.TouchSignatureRetentionMinutes, 1, 1440);
+            state.Settings.TouchSignatureMinimumStepCelsius = Math.Round(Math.Clamp(request.TouchSignatureMinimumStepCelsius, 0.1, 5.0), 1);
+            state.Settings.TouchSignatureMaximumStepCelsius = Math.Round(Math.Clamp(
+                request.TouchSignatureMaximumStepCelsius,
+                state.Settings.TouchSignatureMinimumStepCelsius,
+                5.0), 1);
+            state.Settings.TouchSignatureSafetyBandCelsius = Math.Round(Math.Clamp(request.TouchSignatureSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.RoutineTimingEnabled = request.RoutineTimingEnabled;
             state.Settings.RoutineTimingTriggerTouches = Math.Clamp(request.RoutineTimingTriggerTouches, 1, 20);
             state.Settings.RoutineTimingIntervalMinutes = Math.Clamp(request.RoutineTimingIntervalMinutes, 1, 60);
@@ -1073,7 +1082,7 @@ public sealed class DefenderStateStore
         if (!state.Settings.NaturalWalkbackEnabled)
         {
             state.NaturalWalkbackStatus = "Natural walkback is off.";
-            return baseStep;
+            return ApplyTouchSignatureStep(reading, baseStep, now);
         }
 
         PruneTouchTimes(now);
@@ -1082,14 +1091,14 @@ public sealed class DefenderStateStore
         if (touches < triggerTouches)
         {
             state.NaturalWalkbackStatus = $"Natural walkback is watching for repeated wall touches ({touches}/{triggerTouches}).";
-            return baseStep;
+            return ApplyTouchSignatureStep(reading, baseStep, now);
         }
 
         var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.NaturalWalkbackSafetyBandCelsius;
         if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
         {
             state.NaturalWalkbackStatus = $"Room is above {allowedRoomTemperature:0.0} C, so natural walkback lets direct comfort correction continue.";
-            return baseStep;
+            return ApplyTouchSignatureStep(reading, baseStep, now);
         }
 
         var walkStep = Math.Min(baseStep, Math.Round(Math.Max(0.1, state.Settings.NaturalWalkbackStepCelsius), 1));
@@ -1103,7 +1112,122 @@ public sealed class DefenderStateStore
 
         var score = CalculateTouchSuspicionScore(now);
         state.NaturalWalkbackStatus = $"Natural walkback is active at score {score}/100 and will use about {walkStep:0.0} C nudges.";
-        return Math.Max(0.1, walkStep);
+        return ApplyTouchSignatureStep(reading, Math.Max(0.1, walkStep), now);
+    }
+
+    private double ApplyTouchSignatureStep(ThermostatReading reading, double candidateStepCelsius, DateTimeOffset now)
+    {
+        var analysis = BuildTouchSignatureAnalysis(reading, candidateStepCelsius, now);
+        state.TouchSignatureStatus = analysis.Status;
+        if (!analysis.Active || analysis.LearnedStepCelsius is not { } learnedStep)
+        {
+            return Math.Round(Math.Max(0.1, candidateStepCelsius), 1);
+        }
+
+        return Math.Round(Math.Clamp(
+            Math.Min(candidateStepCelsius, learnedStep),
+            0.1,
+            Math.Max(0.1, candidateStepCelsius)), 1);
+    }
+
+    private TouchSignatureAnalysis BuildTouchSignatureAnalysis(
+        ThermostatReading? reading,
+        double candidateStepCelsius,
+        DateTimeOffset now)
+    {
+        if (!state.Settings.TouchSignatureEnabled)
+        {
+            return new TouchSignatureAnalysis(false, 0, null, Math.Round(Math.Max(0.1, candidateStepCelsius), 1), "Touch signature is off.");
+        }
+
+        var samples = GetTouchSignatureSamples(now);
+        var triggerTouches = Math.Max(1, state.Settings.TouchSignatureTriggerTouches);
+        if (samples.Count < triggerTouches)
+        {
+            return new TouchSignatureAnalysis(
+                false,
+                samples.Count,
+                null,
+                Math.Round(Math.Max(0.1, candidateStepCelsius), 1),
+                $"Touch signature is learning wall steps ({samples.Count}/{triggerTouches}).");
+        }
+
+        if (reading is null)
+        {
+            return new TouchSignatureAnalysis(
+                false,
+                samples.Count,
+                CalculateTouchSignatureStep(samples),
+                Math.Round(Math.Max(0.1, candidateStepCelsius), 1),
+                "Touch signature is waiting for a real thermostat reading.");
+        }
+
+        if (ShouldBypassNaturalRecovery(reading))
+        {
+            return new TouchSignatureAnalysis(
+                false,
+                samples.Count,
+                CalculateTouchSignatureStep(samples),
+                Math.Round(Math.Max(0.1, candidateStepCelsius), 1),
+                "Room comfort needs help now, so touch signature is stepping aside.");
+        }
+
+        var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.TouchSignatureSafetyBandCelsius;
+        if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+        {
+            return new TouchSignatureAnalysis(
+                false,
+                samples.Count,
+                CalculateTouchSignatureStep(samples),
+                Math.Round(Math.Max(0.1, candidateStepCelsius), 1),
+                $"Room is above {allowedRoomTemperature:0.0} C, so touch signature is stepping aside.");
+        }
+
+        var learnedStep = CalculateTouchSignatureStep(samples);
+        var effectiveStep = Math.Round(Math.Min(candidateStepCelsius, learnedStep), 1);
+        return new TouchSignatureAnalysis(
+            true,
+            samples.Count,
+            learnedStep,
+            Math.Max(0.1, effectiveStep),
+            $"Touch signature learned {learnedStep:0.0} C from {samples.Count} wall steps; safe nudges use about {Math.Max(0.1, effectiveStep):0.0} C.");
+    }
+
+    private List<double> GetTouchSignatureSamples(DateTimeOffset now)
+    {
+        var retention = TimeSpan.FromMinutes(Math.Max(1, state.Settings.TouchSignatureRetentionMinutes));
+        return state.ThermostatChanges
+            .Where(change => now - change.Timestamp <= retention)
+            .Select(change => Math.Abs(change.NewSetPointCelsius - change.PreviousSetPointCelsius))
+            .Where(delta => delta >= 0.05)
+            .Select(delta => Math.Round(delta, 1))
+            .Take(50)
+            .ToList();
+    }
+
+    private double CalculateTouchSignatureStep(IReadOnlyList<double> samples)
+    {
+        if (samples.Count == 0)
+        {
+            return Math.Round(Math.Max(0.1, state.Settings.TouchSignatureMaximumStepCelsius), 1);
+        }
+
+        var sorted = samples
+            .Select(sample => Math.Clamp(
+                sample,
+                state.Settings.TouchSignatureMinimumStepCelsius,
+                state.Settings.TouchSignatureMaximumStepCelsius))
+            .OrderBy(sample => sample)
+            .ToArray();
+        var middle = sorted.Length / 2;
+        var median = sorted.Length % 2 == 1
+            ? sorted[middle]
+            : (sorted[middle - 1] + sorted[middle]) / 2.0;
+
+        return Math.Round(Math.Clamp(
+            median,
+            state.Settings.TouchSignatureMinimumStepCelsius,
+            state.Settings.TouchSignatureMaximumStepCelsius), 1);
     }
 
     public void RecordNaturalRecoverySettled()
@@ -1144,6 +1268,9 @@ public sealed class DefenderStateStore
             state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
                 ? "Natural walkback is lined up; no setpoint walk needed."
                 : "Natural walkback is off.";
+            state.TouchSignatureStatus = state.Settings.TouchSignatureEnabled
+                ? "Touch signature is lined up; no safe nudge needed."
+                : "Touch signature is off.";
             ClearRoutineTiming(state.Settings.RoutineTimingEnabled
                 ? "Routine timing is lined up; no comfort-check slot needed."
                 : "Routine timing is off.");
@@ -1450,6 +1577,9 @@ public sealed class DefenderStateStore
         state.NaturalCadenceStatus = state.Settings.NaturalCadenceEnabled
             ? $"Manual touch pressure is {touchScore}/100; natural cadence will pick a quiet slot if a safe correction is needed."
             : "Natural cadence is off.";
+        state.TouchSignatureStatus = state.Settings.TouchSignatureEnabled
+            ? "Manual wall step logged; touch signature will shape safe nudges after enough samples."
+            : "Touch signature is off.";
         TryUpdateComfortMemory(reading, now);
         TryStartComfortCompromise(reading, now);
 
@@ -1991,6 +2121,14 @@ public sealed class DefenderStateStore
         saved.Settings.NaturalWalkbackStepCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackStepCelsius, 0.1, 5.0), 1);
         saved.Settings.NaturalWalkbackJitterCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackJitterCelsius, 0.0, 0.5), 1);
         saved.Settings.NaturalWalkbackSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.TouchSignatureTriggerTouches = Math.Clamp(saved.Settings.TouchSignatureTriggerTouches, 1, 20);
+        saved.Settings.TouchSignatureRetentionMinutes = Math.Clamp(saved.Settings.TouchSignatureRetentionMinutes, 1, 1440);
+        saved.Settings.TouchSignatureMinimumStepCelsius = Math.Round(Math.Clamp(saved.Settings.TouchSignatureMinimumStepCelsius, 0.1, 5.0), 1);
+        saved.Settings.TouchSignatureMaximumStepCelsius = Math.Round(Math.Clamp(
+            saved.Settings.TouchSignatureMaximumStepCelsius,
+            saved.Settings.TouchSignatureMinimumStepCelsius,
+            5.0), 1);
+        saved.Settings.TouchSignatureSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TouchSignatureSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.RoutineTimingTriggerTouches = Math.Clamp(saved.Settings.RoutineTimingTriggerTouches, 1, 20);
         saved.Settings.RoutineTimingIntervalMinutes = Math.Clamp(saved.Settings.RoutineTimingIntervalMinutes, 1, 60);
         saved.Settings.RoutineTimingJitterMinutes = Math.Clamp(saved.Settings.RoutineTimingJitterMinutes, 0, 30);
@@ -2050,6 +2188,9 @@ public sealed class DefenderStateStore
         saved.NaturalWalkbackStatus = string.IsNullOrWhiteSpace(saved.NaturalWalkbackStatus)
             ? "Natural walkback is watching."
             : saved.NaturalWalkbackStatus;
+        saved.TouchSignatureStatus = string.IsNullOrWhiteSpace(saved.TouchSignatureStatus)
+            ? "Touch signature is watching."
+            : saved.TouchSignatureStatus;
         saved.RoutineTimingStatus = string.IsNullOrWhiteSpace(saved.RoutineTimingStatus)
             ? "Routine timing is watching."
             : saved.RoutineTimingStatus;
@@ -2135,18 +2276,22 @@ public sealed class DefenderStateStore
         var naturalWalkbackStep = Math.Min(
             naturalPlan.StepCelsius,
             Math.Round(Math.Max(0.1, state.Settings.NaturalWalkbackStepCelsius), 1));
+        var currentReading = state.HomeAssistantThermostat is { } currentThermostat
+            ? new ThermostatReading(
+                state.HomeAssistantEntityId ?? string.Empty,
+                currentThermostat.CurrentTemperatureCelsius,
+                currentThermostat.SetPointCelsius,
+                currentThermostat.HvacMode,
+                currentThermostat.HvacAction,
+                currentThermostat.FanMode,
+                currentThermostat.AvailableFanModes)
+            : null;
         var naturalWalkbackActive = state.Settings.NaturalWalkbackEnabled
             && state.ExternalTouchTimes.Count >= Math.Max(1, state.Settings.NaturalWalkbackTriggerTouches)
-            && state.HomeAssistantThermostat is { } thermostat
-            && thermostat.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + state.Settings.NaturalWalkbackSafetyBandCelsius
-            && !ShouldBypassNaturalRecovery(new ThermostatReading(
-                state.HomeAssistantEntityId ?? string.Empty,
-                thermostat.CurrentTemperatureCelsius,
-                thermostat.SetPointCelsius,
-                thermostat.HvacMode,
-                thermostat.HvacAction,
-                thermostat.FanMode,
-                thermostat.AvailableFanModes));
+            && currentReading is { } walkbackReading
+            && walkbackReading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + state.Settings.NaturalWalkbackSafetyBandCelsius
+            && !ShouldBypassNaturalRecovery(walkbackReading);
+        var touchSignature = BuildTouchSignatureAnalysis(currentReading, naturalWalkbackStep, now);
         var roomTrend = BuildRoomTrend(now);
         var thermalMomentum = BuildThermalMomentum(now, state.HomeAssistantThermostat?.CurrentTemperatureCelsius);
         PruneComfortMemory(now);
@@ -2199,6 +2344,13 @@ public sealed class DefenderStateStore
                 string.IsNullOrWhiteSpace(state.NaturalWalkbackStatus)
                     ? "Natural walkback is watching."
                     : state.NaturalWalkbackStatus),
+            new TouchSignatureSnapshot(
+                state.Settings.TouchSignatureEnabled,
+                touchSignature.Active,
+                touchSignature.SampleCount,
+                touchSignature.LearnedStepCelsius,
+                touchSignature.EffectiveStepCelsius,
+                touchSignature.Status),
             new RoutineTimingSnapshot(
                 state.Settings.RoutineTimingEnabled,
                 routineTimingSeconds > 0,
@@ -2327,6 +2479,7 @@ public sealed class DefenderStateStore
         state.NaturalHoldCount = 0;
         state.NaturalRecoveryStatus = status;
         state.NaturalWalkbackStatus = "Natural walkback is watching.";
+        state.TouchSignatureStatus = "Touch signature is watching.";
         ClearRoutineTiming("Routine timing is watching.");
         ClearComfortBudget("Comfort budget is watching.");
         ClearNaturalCadence("Natural cadence is watching.");
@@ -2502,6 +2655,12 @@ public sealed class DefenderStateStore
             NaturalWalkbackStepCelsius = settings.NaturalWalkbackStepCelsius,
             NaturalWalkbackJitterCelsius = settings.NaturalWalkbackJitterCelsius,
             NaturalWalkbackSafetyBandCelsius = settings.NaturalWalkbackSafetyBandCelsius,
+            TouchSignatureEnabled = settings.TouchSignatureEnabled,
+            TouchSignatureTriggerTouches = settings.TouchSignatureTriggerTouches,
+            TouchSignatureRetentionMinutes = settings.TouchSignatureRetentionMinutes,
+            TouchSignatureMinimumStepCelsius = settings.TouchSignatureMinimumStepCelsius,
+            TouchSignatureMaximumStepCelsius = settings.TouchSignatureMaximumStepCelsius,
+            TouchSignatureSafetyBandCelsius = settings.TouchSignatureSafetyBandCelsius,
             RoutineTimingEnabled = settings.RoutineTimingEnabled,
             RoutineTimingTriggerTouches = settings.RoutineTimingTriggerTouches,
             RoutineTimingIntervalMinutes = settings.RoutineTimingIntervalMinutes,
@@ -2642,6 +2801,8 @@ public sealed class DefenderStateStore
 
         public string NaturalWalkbackStatus { get; set; } = "Natural walkback is watching.";
 
+        public string TouchSignatureStatus { get; set; } = "Touch signature is watching.";
+
         public DateTimeOffset? RoutineTimingDueAt { get; set; }
 
         public string RoutineTimingStatus { get; set; } = "Routine timing is watching.";
@@ -2735,6 +2896,13 @@ public sealed class DefenderStateStore
         int MaxHolds,
         int CommandGapSeconds,
         bool IsAdaptive);
+
+    private sealed record TouchSignatureAnalysis(
+        bool Active,
+        int SampleCount,
+        double? LearnedStepCelsius,
+        double EffectiveStepCelsius,
+        string Status);
 
     private sealed record RoomTemperatureSample(
         DateTimeOffset Timestamp,

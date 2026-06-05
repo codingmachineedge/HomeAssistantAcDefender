@@ -39,6 +39,12 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Walkback step C: normal nudge size while walkback is active.
 - Tiny variation C: small random change so walkback nudges are not identical.
 - Walkback safe band C: extra warmth allowed before walkback stops being subtle.
+- Touch signature: learns recent real wall-step size and shapes safe nudges to match.
+- Signature touches: wall steps needed before signature shaping starts.
+- Signature memory minutes: how long recent wall steps remain useful.
+- Small signature step C: smallest learned safe nudge size.
+- Large signature step C: biggest learned safe nudge size.
+- Signature safe band C: extra warmth allowed before signature shaping stops.
 - Routine timing: waits for a normal comfort-check rhythm after repeated wall changes.
 - Routine touches: recent wall touches needed before routine timing starts.
 - Routine minutes: normal minute rhythm for safe corrections.

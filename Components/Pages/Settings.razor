@@ -351,6 +351,70 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_touchSignatureEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _touchSignatureEnabled = v))"
+                           Label="Touch signature"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Learns wall-step size and shapes safe nudges to match.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_touchSignatureTriggerTouches"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _touchSignatureTriggerTouches = value))"
+                                         Label="Signature touches"
+                                         HelperText="How many wall steps it needs to learn."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_touchSignatureRetentionMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _touchSignatureRetentionMinutes = value))"
+                                         Label="Signature memory minutes"
+                                         HelperText="How long wall steps stay useful."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="1440" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_touchSignatureMinimumStepCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _touchSignatureMinimumStepCelsius = value))"
+                                         Label="Small signature step C"
+                                         HelperText="Smallest learned nudge size."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_touchSignatureMaximumStepCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _touchSignatureMaximumStepCelsius = value))"
+                                         Label="Large signature step C"
+                                         HelperText="Biggest learned nudge size."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_touchSignatureSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _touchSignatureSafetyBandCelsius = value))"
+                                         Label="Signature safe band C"
+                                         HelperText="Skip the signature if room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_routineTimingEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _routineTimingEnabled = v))"
                            Label="Routine timing"
@@ -1043,6 +1107,12 @@
     private double _naturalWalkbackStepCelsius = 0.5;
     private double _naturalWalkbackJitterCelsius = 0.1;
     private double _naturalWalkbackSafetyBandCelsius = 1.0;
+    private bool _touchSignatureEnabled = true;
+    private int _touchSignatureTriggerTouches = 2;
+    private int _touchSignatureRetentionMinutes = 90;
+    private double _touchSignatureMinimumStepCelsius = 0.3;
+    private double _touchSignatureMaximumStepCelsius = 1.0;
+    private double _touchSignatureSafetyBandCelsius = 1.0;
     private bool _routineTimingEnabled = true;
     private int _routineTimingTriggerTouches = 2;
     private int _routineTimingIntervalMinutes = 5;
@@ -1139,6 +1209,12 @@
         _naturalWalkbackStepCelsius = settings.NaturalWalkbackStepCelsius;
         _naturalWalkbackJitterCelsius = settings.NaturalWalkbackJitterCelsius;
         _naturalWalkbackSafetyBandCelsius = settings.NaturalWalkbackSafetyBandCelsius;
+        _touchSignatureEnabled = settings.TouchSignatureEnabled;
+        _touchSignatureTriggerTouches = settings.TouchSignatureTriggerTouches;
+        _touchSignatureRetentionMinutes = settings.TouchSignatureRetentionMinutes;
+        _touchSignatureMinimumStepCelsius = settings.TouchSignatureMinimumStepCelsius;
+        _touchSignatureMaximumStepCelsius = settings.TouchSignatureMaximumStepCelsius;
+        _touchSignatureSafetyBandCelsius = settings.TouchSignatureSafetyBandCelsius;
         _routineTimingEnabled = settings.RoutineTimingEnabled;
         _routineTimingTriggerTouches = settings.RoutineTimingTriggerTouches;
         _routineTimingIntervalMinutes = settings.RoutineTimingIntervalMinutes;
@@ -1282,6 +1358,12 @@
             _naturalWalkbackStepCelsius,
             _naturalWalkbackJitterCelsius,
             _naturalWalkbackSafetyBandCelsius,
+            _touchSignatureEnabled,
+            _touchSignatureTriggerTouches,
+            _touchSignatureRetentionMinutes,
+            _touchSignatureMinimumStepCelsius,
+            _touchSignatureMaximumStepCelsius,
+            _touchSignatureSafetyBandCelsius,
             _routineTimingEnabled,
             _routineTimingTriggerTouches,
             _routineTimingIntervalMinutes,

@@ -18,6 +18,7 @@ public sealed record DefenderSnapshot(
     CoolModeRestoreSnapshot CoolModeRestore,
     NaturalRecoverySnapshot NaturalRecovery,
     NaturalWalkbackSnapshot NaturalWalkback,
+    TouchSignatureSnapshot TouchSignature,
     RoutineTimingSnapshot RoutineTiming,
     ComfortBudgetSnapshot ComfortBudget,
     NaturalCadenceSnapshot NaturalCadence,
@@ -105,6 +106,14 @@ public sealed record NaturalWalkbackSnapshot(
     bool Active,
     int SuspicionScore,
     double StepCelsius,
+    string Status);
+
+public sealed record TouchSignatureSnapshot(
+    bool Enabled,
+    bool Active,
+    int SampleCount,
+    double? LearnedStepCelsius,
+    double EffectiveStepCelsius,
     string Status);
 
 public sealed record RoutineTimingSnapshot(
@@ -270,6 +279,18 @@ public sealed class DefenderSettings
     public double NaturalWalkbackJitterCelsius { get; set; } = 0.1;
 
     public double NaturalWalkbackSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool TouchSignatureEnabled { get; set; } = true;
+
+    public int TouchSignatureTriggerTouches { get; set; } = 2;
+
+    public int TouchSignatureRetentionMinutes { get; set; } = 90;
+
+    public double TouchSignatureMinimumStepCelsius { get; set; } = 0.3;
+
+    public double TouchSignatureMaximumStepCelsius { get; set; } = 1.0;
+
+    public double TouchSignatureSafetyBandCelsius { get; set; } = 1.0;
 
     public bool RoutineTimingEnabled { get; set; } = true;
 

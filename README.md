@@ -19,6 +19,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Room Trend Guard so the defender keeps observing when the room is stable or cooling after a wall change, and resumes when it starts warming.
 - Adds Thermal Momentum so the defender can wait when the room is already cooling fast enough to reach target soon.
 - Adds Natural Walkback so safe-band recovery moves get smaller and less predictable after repeated wall thermostat touches.
+- Adds Touch Signature so safe nudges can match the size of recent real wall thermostat steps.
 - Adds Routine Timing so safe corrections after repeated touches wait for normal-looking comfort-check intervals.
 - Adds Comfort Budget so repeated safe corrections can rest before another adjustment.
 - Adds Natural Cadence so repeated safe corrections wait for a variable future slot based on wall-touch pressure.
@@ -75,14 +76,15 @@ Every cycle:
 12. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
 13. Apply Comfort Sync quiet recovery timing unless the room or upstairs is too warm.
 14. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
-15. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
-16. Respect Comfort Budget when too many safe adjustments happened recently.
-17. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-18. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-19. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-20. Optionally set fan saver mode when near target.
-21. Correct the thermostat setpoint when it does not match the defender decision.
-22. Update the real-time dashboard status.
+15. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
+16. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
+17. Respect Comfort Budget when too many safe adjustments happened recently.
+18. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
+19. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+20. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+21. Optionally set fan saver mode when near target.
+22. Correct the thermostat setpoint when it does not match the defender decision.
+23. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -141,6 +143,12 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `NaturalWalkbackStepCelsius`: normal maximum nudge size while walkback is active.
 - `NaturalWalkbackJitterCelsius`: tiny variation added to walkback step size so nudges are not identical.
 - `NaturalWalkbackSafetyBandCelsius`: extra room warmth allowed before walkback stops being subtle.
+- `TouchSignatureEnabled`: learns recent real wall-step size and shapes safe nudges to match.
+- `TouchSignatureTriggerTouches`: recent wall steps needed before signature shaping starts.
+- `TouchSignatureRetentionMinutes`: how long recent wall steps remain useful.
+- `TouchSignatureMinimumStepCelsius`: smallest learned safe nudge size.
+- `TouchSignatureMaximumStepCelsius`: biggest learned safe nudge size.
+- `TouchSignatureSafetyBandCelsius`: extra room warmth allowed before touch signature stops.
 - `RoutineTimingEnabled`: waits for a normal-looking comfort-check rhythm after repeated safe wall changes.
 - `RoutineTimingTriggerTouches`: recent wall touches needed before routine timing can hold.
 - `RoutineTimingIntervalMinutes`: minute rhythm used for safe correction timing.
@@ -191,6 +199,8 @@ Adaptive quiet levels are shown on the dashboard:
 - `Softest`: maximum adaptive quietness before comfort safety overrides.
 
 Natural Walkback is the last command-shaping layer before a real setpoint command is sent. When recent wall touches reach the trigger count and the room is still inside the walkback safe band, the defender uses smaller safe-band nudges with tiny variation. If the room needs warm-room defense, it skips walkback and still commands one degree below current room temperature.
+
+Touch Signature learns from recent real wall thermostat changes. If enough wall steps exist and the room is still inside the signature safe band, safe nudges use about the learned bounded wall-step size. If the room gets too warm or upstairs comfort needs direct cooling, the signature clears and the real correction path continues.
 
 Routine Timing is a timing layer for safe corrections. When repeated wall changes happen and the room is still inside its safe band, the next correction waits until a normal minute rhythm, with small wiggle time. If the room gets too warm or upstairs comfort needs direct cooling, Routine Timing clears and the real correction path continues.
 

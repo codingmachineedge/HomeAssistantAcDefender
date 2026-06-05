@@ -25,6 +25,8 @@ Comfort Sync is implemented inside `DefenderStateStore` and consumed by `AcDefen
 
 Natural Walkback is part of that same state-store command selection path. It calculates touch pressure from recent external wall changes, then uses smaller safe-band setpoint steps before `AcDefenderService` sends the real Home Assistant command. It is skipped when the room needs the direct one-degree-below-room cooling correction.
 
+Touch Signature is another command-shaping layer in `DefenderStateStore`. It reads recent real external thermostat audit entries, learns a bounded wall-step size, and applies that size only to safe nudges. It does not invent state and it is skipped when direct comfort correction is needed.
+
 Routine Timing is another `DefenderStateStore` timing guard consumed by `AcDefenderService`. It can hold a safe correction until a normal-looking minute rhythm after repeated wall touches, then clears before the real Home Assistant command is sent. It is skipped when room comfort needs direct correction.
 
 Comfort Budget is stored in `DefenderStateStore` as recent real setpoint command timestamps. `AcDefenderService` checks it before sending another safe correction. It limits only safe repeated commands and clears when comfort safety requires direct correction.
