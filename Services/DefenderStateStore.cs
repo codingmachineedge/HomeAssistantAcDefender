@@ -133,6 +133,12 @@ public sealed class DefenderStateStore
             state.Settings.NaturalWalkbackStepCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackStepCelsius, 0.1, 5.0), 1);
             state.Settings.NaturalWalkbackJitterCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackJitterCelsius, 0.0, 0.5), 1);
             state.Settings.NaturalWalkbackSafetyBandCelsius = Math.Round(Math.Clamp(request.NaturalWalkbackSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.RoutineTimingEnabled = request.RoutineTimingEnabled;
+            state.Settings.RoutineTimingTriggerTouches = Math.Clamp(request.RoutineTimingTriggerTouches, 1, 20);
+            state.Settings.RoutineTimingIntervalMinutes = Math.Clamp(request.RoutineTimingIntervalMinutes, 1, 60);
+            state.Settings.RoutineTimingJitterMinutes = Math.Clamp(request.RoutineTimingJitterMinutes, 0, 30);
+            state.Settings.RoutineTimingMaxDelayMinutes = Math.Clamp(request.RoutineTimingMaxDelayMinutes, 1, 180);
+            state.Settings.RoutineTimingSafetyBandCelsius = Math.Round(Math.Clamp(request.RoutineTimingSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.ComfortCompromiseEnabled = request.ComfortCompromiseEnabled;
             state.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(request.ComfortCompromiseTriggerTouches, 1, 20);
             state.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(request.ComfortCompromiseHoldMinutes, 0, 240);
@@ -290,6 +296,8 @@ public sealed class DefenderStateStore
                 state.PendingCommandSetPointCelsius = setPoint;
                 state.PendingCommandAt = state.UpdatedAt;
                 state.LastDefenderCommandAt = state.UpdatedAt;
+                state.RoutineTimingDueAt = null;
+                state.RoutineTimingStatus = "Routine timing used its comfort-check slot; watching for the next one.";
             }
 
             AddEvent("info", message);
@@ -758,6 +766,82 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool TryRespectRoutineTiming(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassRoutineTiming,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.RoutineTimingEnabled)
+            {
+                ClearRoutineTiming("Routine timing is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            var triggerTouches = Math.Max(1, state.Settings.RoutineTimingTriggerTouches);
+            if (state.ExternalTouchTimes.Count < triggerTouches)
+            {
+                ClearRoutineTiming($"Routine timing is watching for repeated wall changes ({state.ExternalTouchTimes.Count}/{triggerTouches}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassRoutineTiming || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearRoutineTiming("Room comfort needs help now, so routine timing is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.RoutineTimingSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearRoutineTiming($"Room is above {allowedRoomTemperature:0.0} C, so routine timing is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearRoutineTiming("Routine timing is lined up; no comfort-check slot needed.");
+                SaveState();
+                return false;
+            }
+
+            if (state.RoutineTimingDueAt is { } dueAt)
+            {
+                if (dueAt > now)
+                {
+                    waitUntil = dueAt;
+                    message = $"Routine timing is holding until {dueAt.ToLocalTime():HH:mm:ss} so the next comfort adjustment lands on a normal rhythm.";
+                    state.RoutineTimingStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearRoutineTiming("Routine timing slot arrived; the next comfort adjustment can continue.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = CalculateRoutineTimingDueAt(now);
+            state.RoutineTimingDueAt = waitUntil;
+            message = $"Routine timing is holding until {waitUntil.ToLocalTime():HH:mm:ss} so the next comfort adjustment lands on a normal rhythm.";
+            state.RoutineTimingStatus = message;
+            SaveState();
+            return waitUntil > now;
+        }
+    }
+
     public double CalculateNaturalCommandSetPoint(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -875,6 +959,7 @@ public sealed class DefenderStateStore
             if (state.NaturalRecoveryStatus == status
                 && state.NaturalHoldUntil is null
                 && state.NaturalHoldCount == 0
+                && state.RoutineTimingDueAt is null
                 && state.ConflictQuietUntil is null
                 && state.RoomTrendHoldUntil is null
                 && state.ThermalMomentumHoldUntil is null)
@@ -900,6 +985,9 @@ public sealed class DefenderStateStore
             state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
                 ? "Natural walkback is lined up; no setpoint walk needed."
                 : "Natural walkback is off.";
+            ClearRoutineTiming(state.Settings.RoutineTimingEnabled
+                ? "Routine timing is lined up; no comfort-check slot needed."
+                : "Routine timing is off.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
         }
@@ -1415,6 +1503,42 @@ public sealed class DefenderStateStore
             : random.Next(minDelay, maxDelay + 1);
     }
 
+    private DateTimeOffset CalculateRoutineTimingDueAt(DateTimeOffset now)
+    {
+        var intervalMinutes = Math.Clamp(state.Settings.RoutineTimingIntervalMinutes, 1, 60);
+        var jitterMinutes = Math.Clamp(state.Settings.RoutineTimingJitterMinutes, 0, 30);
+        var localNow = now.ToLocalTime();
+        var localMinute = new DateTimeOffset(
+            localNow.Year,
+            localNow.Month,
+            localNow.Day,
+            localNow.Hour,
+            localNow.Minute,
+            0,
+            localNow.Offset);
+
+        var remainder = localMinute.Minute % intervalMinutes;
+        var minutesUntilBoundary = remainder == 0
+            ? intervalMinutes
+            : intervalMinutes - remainder;
+        var jitterSeconds = jitterMinutes <= 0
+            ? 0
+            : random.Next(0, jitterMinutes * 60 + 1);
+
+        var dueAt = localMinute
+            .AddMinutes(minutesUntilBoundary)
+            .AddSeconds(jitterSeconds)
+            .ToUniversalTime();
+        var maxDueAt = now.AddMinutes(Math.Max(1, state.Settings.RoutineTimingMaxDelayMinutes));
+        if (dueAt > maxDueAt)
+        {
+            dueAt = maxDueAt;
+        }
+
+        var minimumDueAt = now.AddSeconds(15);
+        return dueAt < minimumDueAt ? minimumDueAt : dueAt;
+    }
+
     private int CalculateNaturalHoldSeconds()
     {
         if (!state.Settings.NaturalRecoveryEnabled)
@@ -1642,6 +1766,11 @@ public sealed class DefenderStateStore
         saved.Settings.NaturalWalkbackStepCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackStepCelsius, 0.1, 5.0), 1);
         saved.Settings.NaturalWalkbackJitterCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackJitterCelsius, 0.0, 0.5), 1);
         saved.Settings.NaturalWalkbackSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalWalkbackSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.RoutineTimingTriggerTouches = Math.Clamp(saved.Settings.RoutineTimingTriggerTouches, 1, 20);
+        saved.Settings.RoutineTimingIntervalMinutes = Math.Clamp(saved.Settings.RoutineTimingIntervalMinutes, 1, 60);
+        saved.Settings.RoutineTimingJitterMinutes = Math.Clamp(saved.Settings.RoutineTimingJitterMinutes, 0, 30);
+        saved.Settings.RoutineTimingMaxDelayMinutes = Math.Clamp(saved.Settings.RoutineTimingMaxDelayMinutes, 1, 180);
+        saved.Settings.RoutineTimingSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.RoutineTimingSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(saved.Settings.ComfortCompromiseTriggerTouches, 1, 20);
         saved.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(saved.Settings.ComfortCompromiseHoldMinutes, 0, 240);
         saved.Settings.ComfortCompromiseDecayMinutes = Math.Clamp(saved.Settings.ComfortCompromiseDecayMinutes, 1, 240);
@@ -1683,6 +1812,9 @@ public sealed class DefenderStateStore
         saved.NaturalWalkbackStatus = string.IsNullOrWhiteSpace(saved.NaturalWalkbackStatus)
             ? "Natural walkback is watching."
             : saved.NaturalWalkbackStatus;
+        saved.RoutineTimingStatus = string.IsNullOrWhiteSpace(saved.RoutineTimingStatus)
+            ? "Routine timing is watching."
+            : saved.RoutineTimingStatus;
         saved.ComfortCompromiseStatus = string.IsNullOrWhiteSpace(saved.ComfortCompromiseStatus)
             ? "Comfort compromise is watching for repeated wall changes."
             : saved.ComfortCompromiseStatus;
@@ -1739,6 +1871,9 @@ public sealed class DefenderStateStore
             : 0;
         var thermalMomentumSeconds = state.ThermalMomentumHoldUntil is { } momentumUntil && momentumUntil > now
             ? (int)Math.Ceiling((momentumUntil - now).TotalSeconds)
+            : 0;
+        var routineTimingSeconds = state.RoutineTimingDueAt is { } routineDueAt && routineDueAt > now
+            ? (int)Math.Ceiling((routineDueAt - now).TotalSeconds)
             : 0;
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         var naturalWalkbackScore = CalculateTouchSuspicionScore(now);
@@ -1809,6 +1944,16 @@ public sealed class DefenderStateStore
                 string.IsNullOrWhiteSpace(state.NaturalWalkbackStatus)
                     ? "Natural walkback is watching."
                     : state.NaturalWalkbackStatus),
+            new RoutineTimingSnapshot(
+                state.Settings.RoutineTimingEnabled,
+                routineTimingSeconds > 0,
+                routineTimingSeconds,
+                state.Settings.RoutineTimingIntervalMinutes,
+                state.Settings.RoutineTimingJitterMinutes,
+                string.IsNullOrWhiteSpace(state.RoutineTimingStatus)
+                    ? "Routine timing is watching."
+                    : state.RoutineTimingStatus,
+                routineTimingSeconds > 0 ? state.RoutineTimingDueAt : null),
             new ComfortCompromiseSnapshot(
                 state.Settings.ComfortCompromiseEnabled,
                 comfortCompromiseSeconds > 0,
@@ -1907,6 +2052,7 @@ public sealed class DefenderStateStore
         state.NaturalHoldCount = 0;
         state.NaturalRecoveryStatus = status;
         state.NaturalWalkbackStatus = "Natural walkback is watching.";
+        ClearRoutineTiming("Routine timing is watching.");
         ClearComfortCompromise("Comfort compromise reset after website target change.");
         state.ComfortMemoryEffectiveTargetCelsius = null;
         state.ComfortMemoryStatus = "Comfort memory is watching wall choices.";
@@ -1927,6 +2073,12 @@ public sealed class DefenderStateStore
         state.ManualComfortGraceUntil = null;
         state.ManualComfortGraceSetPointCelsius = null;
         state.ManualComfortGraceStatus = "No wall-change grace active.";
+    }
+
+    private void ClearRoutineTiming(string status)
+    {
+        state.RoutineTimingDueAt = null;
+        state.RoutineTimingStatus = status;
     }
 
     private void ClearComfortCompromise(string status)
@@ -2061,6 +2213,12 @@ public sealed class DefenderStateStore
             NaturalWalkbackStepCelsius = settings.NaturalWalkbackStepCelsius,
             NaturalWalkbackJitterCelsius = settings.NaturalWalkbackJitterCelsius,
             NaturalWalkbackSafetyBandCelsius = settings.NaturalWalkbackSafetyBandCelsius,
+            RoutineTimingEnabled = settings.RoutineTimingEnabled,
+            RoutineTimingTriggerTouches = settings.RoutineTimingTriggerTouches,
+            RoutineTimingIntervalMinutes = settings.RoutineTimingIntervalMinutes,
+            RoutineTimingJitterMinutes = settings.RoutineTimingJitterMinutes,
+            RoutineTimingMaxDelayMinutes = settings.RoutineTimingMaxDelayMinutes,
+            RoutineTimingSafetyBandCelsius = settings.RoutineTimingSafetyBandCelsius,
             ComfortCompromiseEnabled = settings.ComfortCompromiseEnabled,
             ComfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches,
             ComfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes,
@@ -2184,6 +2342,10 @@ public sealed class DefenderStateStore
         public string NaturalRecoveryStatus { get; set; } = "Comfort sync is ready.";
 
         public string NaturalWalkbackStatus { get; set; } = "Natural walkback is watching.";
+
+        public DateTimeOffset? RoutineTimingDueAt { get; set; }
+
+        public string RoutineTimingStatus { get; set; } = "Routine timing is watching.";
 
         public DateTimeOffset? ComfortCompromiseStartedAt { get; set; }
 

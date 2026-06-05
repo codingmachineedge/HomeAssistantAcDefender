@@ -18,6 +18,7 @@ public sealed record DefenderSnapshot(
     CoolModeRestoreSnapshot CoolModeRestore,
     NaturalRecoverySnapshot NaturalRecovery,
     NaturalWalkbackSnapshot NaturalWalkback,
+    RoutineTimingSnapshot RoutineTiming,
     ComfortCompromiseSnapshot ComfortCompromise,
     ComfortMemorySnapshot ComfortMemory,
     ConflictQuietSnapshot ConflictQuiet,
@@ -103,6 +104,15 @@ public sealed record NaturalWalkbackSnapshot(
     int SuspicionScore,
     double StepCelsius,
     string Status);
+
+public sealed record RoutineTimingSnapshot(
+    bool Enabled,
+    bool Waiting,
+    int SecondsRemaining,
+    int IntervalMinutes,
+    int JitterMinutes,
+    string Status,
+    DateTimeOffset? DueAt);
 
 public sealed record ComfortCompromiseSnapshot(
     bool Enabled,
@@ -240,6 +250,18 @@ public sealed class DefenderSettings
     public double NaturalWalkbackJitterCelsius { get; set; } = 0.1;
 
     public double NaturalWalkbackSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool RoutineTimingEnabled { get; set; } = true;
+
+    public int RoutineTimingTriggerTouches { get; set; } = 2;
+
+    public int RoutineTimingIntervalMinutes { get; set; } = 5;
+
+    public int RoutineTimingJitterMinutes { get; set; } = 2;
+
+    public int RoutineTimingMaxDelayMinutes { get; set; } = 12;
+
+    public double RoutineTimingSafetyBandCelsius { get; set; } = 1.0;
 
     public bool ComfortCompromiseEnabled { get; set; } = true;
 

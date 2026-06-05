@@ -39,6 +39,12 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Walkback step C: normal nudge size while walkback is active.
 - Tiny variation C: small random change so walkback nudges are not identical.
 - Walkback safe band C: extra warmth allowed before walkback stops being subtle.
+- Routine timing: waits for a normal comfort-check rhythm after repeated wall changes.
+- Routine touches: recent wall touches needed before routine timing starts.
+- Routine minutes: normal minute rhythm for safe corrections.
+- Routine wiggle minutes: small extra wait so timing is not exact.
+- Max routine wait: longest safe routine timing hold.
+- Routine safe band C: extra warmth allowed before routine timing stops waiting.
 - Comfort compromise: temporarily blends repeated wall choices while the room is still safe.
 - Compromise touches: recent wall touches needed before blending starts.
 - Compromise hold minutes: how long the wall choice can rest.

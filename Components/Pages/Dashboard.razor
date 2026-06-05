@@ -78,6 +78,9 @@
                 <MudAlert Class="mt-2" Severity="@NaturalWalkbackSeverity" Variant="Variant.Outlined">@NaturalWalkbackText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if safe corrections are walking back slowly after repeated wall touches.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@RoutineTimingSeverity" Variant="Variant.Outlined">@RoutineTimingText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if a safe adjustment is waiting for a normal comfort-check rhythm.</MudText>
+
                 <MudAlert Class="mt-2" Severity="@ComfortCompromiseSeverity" Variant="Variant.Outlined">@ComfortCompromiseText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if a wall choice is being blended back gently while the room is safe.</MudText>
 
@@ -162,6 +165,8 @@
                     <MetricCard Label="Touch pressure" Value="@NaturalWalkbackScoreText" Help="How strong recent wall changes are." />
                     <MetricCard Label="Cool restore" Value="@CoolModeRestoreWaitText" Help="How long before cool mode comes back." />
                     <MetricCard Label="Walk step" Value="@NaturalWalkbackStepText" Help="Safe-band nudge size after repeated touches." />
+                    <MetricCard Label="Routine wait" Value="@RoutineTimingWaitText" Help="Wait for a normal-looking comfort check." />
+                    <MetricCard Label="Routine rhythm" Value="@RoutineTimingRhythmText" Help="Minute rhythm with small wiggle time." />
                     <MetricCard Label="Blend target" Value="@ComfortCompromiseTargetText" Help="Temporary target while a wall choice fades back." />
                     <MetricCard Label="Blend wait" Value="@ComfortCompromiseWaitText" Help="How long the temporary blend remains." />
                     <MetricCard Label="Memory bias" Value="@ComfortMemoryOffsetText" Help="Small learned time-of-day adjustment." />
@@ -287,6 +292,9 @@
     private string NaturalWalkbackText => Snapshot?.NaturalWalkback.Status ?? "Natural walkback is watching.";
     private string NaturalWalkbackScoreText => Snapshot?.NaturalWalkback.Enabled == true ? $"{Snapshot.NaturalWalkback.SuspicionScore}/100" : "Off";
     private string NaturalWalkbackStepText => Snapshot?.NaturalWalkback.Enabled == true ? $"{Snapshot.NaturalWalkback.StepCelsius:0.0} C" : "Off";
+    private string RoutineTimingText => Snapshot?.RoutineTiming.Status ?? "Routine timing is watching.";
+    private string RoutineTimingWaitText => Snapshot?.RoutineTiming.Waiting == true ? $"{Snapshot.RoutineTiming.SecondsRemaining}s" : "Ready";
+    private string RoutineTimingRhythmText => Snapshot?.RoutineTiming.Enabled == true ? $"{Snapshot.RoutineTiming.IntervalMinutes}+{Snapshot.RoutineTiming.JitterMinutes} min" : "Off";
     private string ComfortCompromiseText => Snapshot?.ComfortCompromise.Status ?? "Comfort compromise is watching.";
     private string ComfortCompromiseTargetText => Snapshot?.ComfortCompromise.EffectiveTargetCelsius is { } target ? $"{target:0.0} C" : "Ready";
     private string ComfortCompromiseWaitText => Snapshot?.ComfortCompromise.Active == true ? $"{Snapshot.ComfortCompromise.SecondsRemaining}s" : "Ready";
@@ -331,6 +339,9 @@
     private Severity NaturalWalkbackSeverity => Snapshot?.NaturalWalkback.Active == true
         ? Severity.Warning
         : Snapshot?.NaturalWalkback.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity RoutineTimingSeverity => Snapshot?.RoutineTiming.Waiting == true
+        ? Severity.Warning
+        : Snapshot?.RoutineTiming.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity ComfortCompromiseSeverity => Snapshot?.ComfortCompromise.Active == true
         ? Severity.Warning
         : Snapshot?.ComfortCompromise.Enabled == true ? Severity.Info : Severity.Normal;

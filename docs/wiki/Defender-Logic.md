@@ -17,11 +17,12 @@ Every cycle performs these steps:
 13. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
 14. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
 15. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
-16. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-17. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-18. Apply fan energy saver when enabled and near target.
-19. Correct the real thermostat setpoint when needed.
-20. Update the next-action status label.
+16. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
+17. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+18. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+19. Apply fan energy saver when enabled and near target.
+20. Correct the real thermostat setpoint when needed.
+21. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -77,6 +78,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Sends warm-room corrections to the room-temperature defender target instead of walking down from the wall setpoint.
 - Automatically changes quiet level when repeated wall touches happen, shrinking nudge size and increasing wait/hold/command spacing.
 - Uses Natural Walkback for small safe-band setpoint steps when repeated wall touches make a direct correction too obvious.
+- Uses Routine Timing so safe corrections land on normal-looking comfort-check intervals.
 - Uses Comfort Memory to remember a tiny expiring time-of-day preference after repeated safe wall choices.
 - Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
@@ -102,6 +104,16 @@ targetTemperature + naturalWalkbackSafetyBandCelsius
 the next safe-band correction walks toward the website target in smaller nudges. A tiny optional variation changes the nudge size so every correction is not identical.
 
 Natural Walkback never changes the warm-room defender rule. If the room needs active cooling, the command still starts one degree below current room temperature and continues down toward the website target. If the room crosses the safety band, the normal direct comfort correction path wins.
+
+## Routine Timing
+
+Routine Timing is a safe-correction timing guard. After repeated wall changes, it can hold the next correction until a normal minute rhythm plus a small random wiggle:
+
+```text
+currentRoomTemperature <= targetTemperature + routineTimingSafetyBandCelsius
+```
+
+It only delays while the room remains safe. If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the routine safe band, the hold clears and the real correction path continues.
 
 ## Comfort Compromise
 

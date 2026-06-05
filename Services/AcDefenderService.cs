@@ -129,6 +129,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectRoutineTiming(reading, expectedSetPoint, comfort.BypassCooldown, now, out var routineUntil, out var routineMessage))
+                {
+                    stateStore.SetNextAction(routineMessage, routineUntil);
+                    return;
+                }
+
                 var commandSetPoint = stateStore.CalculateNaturalCommandSetPoint(reading, expectedSetPoint, comfort.BypassCooldown);
                 stateStore.SetNextAction($"Setting real thermostat to {commandSetPoint:0.0} C from the room-temperature defender target.", now);
                 await homeAssistantClient.SetCoolingAsync(reading.EntityId, commandSetPoint, cancellationToken);
