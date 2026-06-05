@@ -168,4 +168,18 @@ app.MapPost("/api/thermostat/fan", async (FanModeRequest request, AcDefenderServ
     }
 });
 
+app.MapPost("/api/thermostat/off", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        await defender.TurnThermostatOffAsync(cancellationToken);
+        return Results.Ok(store.GetSnapshot());
+    }
+    catch (Exception ex)
+    {
+        store.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
+    }
+});
+
 app.Run();

@@ -46,6 +46,39 @@ body {
   box-shadow: 0 18px 40px rgba(24, 35, 31, 0.08);
 }
 
+.compact-panel {
+  padding: 18px;
+}
+
+.dashboard-shell,
+.settings-shell {
+  min-width: 0;
+}
+
+.app-tabs {
+  min-width: 0;
+}
+
+.app-tabs .mud-tabs-toolbar {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.app-tabs .mud-tab {
+  min-width: auto !important;
+  width: auto;
+  max-width: none;
+  letter-spacing: 0;
+  padding-left: 18px;
+  padding-right: 18px;
+  white-space: nowrap;
+}
+
+.app-tabs .mud-tabs-panels {
+  padding-top: 16px;
+}
+
 .target-card {
   min-height: 100%;
 }
@@ -55,6 +88,19 @@ body {
   font-weight: 900;
   line-height: 1;
   margin-top: 8px;
+}
+
+.reading-tile {
+  min-height: 68px;
+  border: 1px solid #dbe4df;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f9fbfa;
+  overflow-wrap: anywhere;
+}
+
+.compact-reading-grid .reading-tile .helper-text {
+  display: none;
 }
 
 .helper-text {
@@ -69,6 +115,7 @@ body {
   padding: 14px;
   background: #f9fbfa;
   border-radius: 8px;
+  overflow-wrap: anywhere;
 }
 
 .sensor-row,
@@ -87,6 +134,10 @@ body {
   max-height: 360px;
   overflow: auto;
   padding-right: 4px;
+}
+
+.tall-list {
+  max-height: 520px;
 }
 
 .wrap-gap {
@@ -118,8 +169,33 @@ body {
     padding: 16px;
   }
 
+  .compact-panel {
+    padding: 14px;
+  }
+
   .target-readout {
-    font-size: 3rem;
+    font-size: 2.5rem;
+  }
+
+  .reading-tile {
+    min-height: 62px;
+    padding: 10px;
+  }
+
+  .app-tabs .mud-tabs-panels {
+    padding-top: 10px;
+  }
+
+  .app-tabs .mud-tab {
+    min-width: auto !important;
+    flex: 0 0 auto;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .scroll-list,
+  .tall-list {
+    max-height: 420px;
   }
 
   .top-bar .mud-toolbar {

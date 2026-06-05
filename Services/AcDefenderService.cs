@@ -36,6 +36,12 @@ public sealed class AcDefenderService
                 return;
             }
 
+            if (!snapshot.DefenderEnabled)
+            {
+                stateStore.SetNextAction("Defender paused; still reading the real thermostat 24/7.", nextCheck);
+                return;
+            }
+
             if (!string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
             {
                 var now = DateTimeOffset.UtcNow;
@@ -49,12 +55,6 @@ public sealed class AcDefenderService
                 await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "cool", cancellationToken);
                 stateStore.RecordCoolModeRestoreCommand(reading.HvacMode);
                 stateStore.RecordCommand($"Home Assistant {reading.EntityId} mode restored to cool.");
-                return;
-            }
-
-            if (!snapshot.DefenderEnabled)
-            {
-                stateStore.SetNextAction("Defender paused; still checking thermostat 24/7.", nextCheck);
                 return;
             }
 
@@ -234,6 +234,14 @@ public sealed class AcDefenderService
         var reading = await RequireReadingAsync(cancellationToken);
         await homeAssistantClient.SetFanModeAsync(reading.EntityId, fanMode, cancellationToken);
         stateStore.RecordCommand($"Home Assistant {reading.EntityId} fan set to {fanMode}.");
+    }
+
+    public async Task TurnThermostatOffAsync(CancellationToken cancellationToken)
+    {
+        var reading = await RequireReadingAsync(cancellationToken);
+        await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
+        stateStore.RecordCommand($"Home Assistant {reading.EntityId} thermostat turned off while defender is paused.");
+        stateStore.SetNextAction("Thermostat off command sent; defender is paused and will keep reading status.", DateTimeOffset.UtcNow.AddSeconds(options.CurrentValue.PollIntervalSeconds));
     }
 
     public async Task RefreshRealThermostatAsync(CancellationToken cancellationToken)

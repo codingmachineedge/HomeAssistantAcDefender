@@ -4,8 +4,57 @@
 
 <PageTitle>Settings - Home Assistant AC Defender</PageTitle>
 
-<MudStack Spacing="3">
-    <MudGrid Spacing="3">
+<MudStack Spacing="2" Class="settings-shell">
+    <MudPaper Class="panel-card compact-panel">
+        <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
+            <div>
+                <MudText Typo="Typo.overline">Settings</MudText>
+                <MudText Typo="Typo.h5">Tabbed defender controls</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">Use the tabs to stay near the setting you want instead of scrolling through every control.</MudText>
+            </div>
+            <div class="action-with-help">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveSettings" StartIcon="@Icons.Material.Filled.Save">Save settings</MudButton>
+                <MudText Typo="Typo.caption" Class="helper-text">Stores these choices.</MudText>
+            </div>
+        </MudStack>
+
+        <MudGrid Spacing="2" Class="mt-2">
+            <MudItem xs="12" md="8">
+                <MudTextField T="string"
+                              @bind-Value="_settingsSearch"
+                              Immediate="true"
+                              Clearable="true"
+                              Placeholder="Search settings groups"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Label="Find a setting"
+                              HelperText="Type words like schedule, weather, fan, upstairs, cooldown, touch, or echo."
+                              Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudText Typo="Typo.subtitle2">@StatusText</MudText>
+                <MudText Typo="Typo.caption" Class="helper-text">This label says when settings were saved.</MudText>
+            </MudItem>
+        </MudGrid>
+
+        @if (!string.IsNullOrWhiteSpace(_settingsSearch))
+        {
+            <MudStack Row="true" Spacing="1" Class="wrap-gap mt-2">
+                @foreach (var result in SettingsSearchResults)
+                {
+                    <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined">@result</MudChip>
+                }
+                @if (!SettingsSearchResults.Any())
+                {
+                    <MudText Typo="Typo.caption" Class="helper-text">No setting group matches that search.</MudText>
+                }
+            </MudStack>
+        }
+    </MudPaper>
+
+    <MudTabs Class="app-tabs" Elevation="0" Rounded="true">
+        <MudTabPanel Text="Automation">
+            <MudGrid Spacing="3">
         <MudItem xs="12" md="6">
             <MudPaper Class="panel-card">
                 <MudText Typo="Typo.overline">Automation</MudText>
@@ -202,7 +251,11 @@
                 </MudGrid>
             </MudPaper>
         </MudItem>
+            </MudGrid>
+        </MudTabPanel>
 
+        <MudTabPanel Text="Natural Timing">
+            <MudGrid Spacing="3">
         <MudItem xs="12" md="6">
             <MudPaper Class="panel-card">
                 <MudText Typo="Typo.overline">Comfort Sync</MudText>
@@ -1231,7 +1284,11 @@
                 </MudGrid>
             </MudPaper>
         </MudItem>
+            </MudGrid>
+        </MudTabPanel>
 
+        <MudTabPanel Text="Comfort">
+            <MudGrid Spacing="3">
         <MudItem xs="12" md="6">
             <MudPaper Class="panel-card">
                 <MudText Typo="Typo.overline">Fan Energy Saver</MudText>
@@ -1351,7 +1408,9 @@
             </MudPaper>
         </MudItem>
     </MudGrid>
+        </MudTabPanel>
 
+        <MudTabPanel Text="Schedule">
     <MudPaper Class="panel-card">
         <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
             <div>
@@ -1365,15 +1424,39 @@
             </div>
         </MudStack>
 
+        <MudGrid Spacing="2" Class="mt-2">
+            <MudItem xs="12" md="8">
+                <MudTextField T="string"
+                              @bind-Value="_scheduleSearch"
+                              Immediate="true"
+                              Clearable="true"
+                              Placeholder="Search schedule rules"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Label="Find schedule"
+                              HelperText="Search by rule name, days, time, target, or weather rule."
+                              Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined">@ScheduleResultText</MudChip>
+                <MudText Typo="Typo.caption" Class="helper-text">Shows how many rules match the search.</MudText>
+            </MudItem>
+        </MudGrid>
+
         @if (_schedule.Count == 0)
         {
             <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">No schedule rules yet.</MudAlert>
             <MudText Typo="Typo.caption" Class="helper-text">Add a rule when you want the defender to follow a clock.</MudText>
         }
+        else if (!FilteredSchedule.Any())
+        {
+            <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">No schedule rules match that search.</MudAlert>
+            <MudText Typo="Typo.caption" Class="helper-text">Clear the search to see every rule again.</MudText>
+        }
         else
         {
             <MudStack Spacing="2" Class="mt-3">
-                @foreach (var entry in _schedule)
+                @foreach (var entry in FilteredSchedule)
                 {
                     <MudPaper Class="schedule-card" Outlined="true">
                         <MudGrid Spacing="2">
@@ -1473,6 +1556,8 @@
             <MudText Typo="Typo.caption" Class="helper-text">This label says when settings were saved.</MudText>
         </MudStack>
     </MudPaper>
+        </MudTabPanel>
+    </MudTabs>
 </MudStack>
 
 @code {
@@ -1493,7 +1578,18 @@
         ("outdoor-above-target", "Outdoor above target"),
         ("outdoor-below-target", "Outdoor below target")
     ];
+    private static readonly SettingsGroup[] SettingGroups =
+    [
+        new("Automation", "Schedule and weather", "Time rules, weather activation, cooldown, cool restore, conflict quiet, and weather drift."),
+        new("Natural Timing", "Quiet recovery", "Adaptive waits, nudge size, command gaps, safe bands, and hold chance."),
+        new("Natural Timing", "Touch behavior", "Natural walkback, touch signature, visibility guard, routine timing, budget, cadence, compromise, and memory."),
+        new("Natural Timing", "Sensor timing", "Setpoint echo, repeat command, Home Assistant sensor rhythm, cooling runway, room trend, and thermal momentum."),
+        new("Comfort", "Fan saver", "Fan mode and near-target energy saver."),
+        new("Comfort", "Upstairs comfort", "Upstairs temperature sensors, too-hot threshold, comfort target, boost, and presence rules."),
+        new("Schedule", "Custom schedule", "Add, remove, search, and edit target temperature schedule rules.")
+    ];
 
+    private string _settingsSearch = "";
     private bool _scheduleEnabled;
     private string _weatherActivationMode = "always";
     private int _baseCooldownSeconds = 45;
@@ -1621,12 +1717,31 @@
     private bool _homePresenceRequired;
     private string _presenceEntityIds = "";
     private readonly List<ScheduleEntry> _schedule = [];
+    private string _scheduleSearch = "";
     private bool _dirty;
     private string _settingsStatus = "";
 
     private string StatusText => _dirty
         ? "Unsaved changes"
         : string.IsNullOrWhiteSpace(_settingsStatus) ? "No changes saved yet" : _settingsStatus;
+
+    private IEnumerable<string> SettingsSearchResults =>
+        SettingGroups
+            .Where(group => MatchesSettingsSearch(_settingsSearch, group.Tab, group.Name, group.Description))
+            .Select(group => $"{group.Tab}: {group.Name}");
+
+    private IEnumerable<ScheduleEntry> FilteredSchedule =>
+        _schedule.Where(entry => MatchesSettingsSearch(
+            _scheduleSearch,
+            entry.Name,
+            entry.Days,
+            entry.StartTime,
+            entry.EndTime,
+            $"{entry.TargetTemperatureCelsius:0.0}",
+            entry.WeatherActivationMode,
+            Summary(entry)));
+
+    private string ScheduleResultText => $"{FilteredSchedule.Count()}/{_schedule.Count} rules";
 
     protected override void OnInitialized()
     {
@@ -1988,4 +2103,14 @@
         var weather = ScheduleWeatherOptions.FirstOrDefault(option => option.Value == entry.WeatherActivationMode).Label ?? "Always";
         return $"{(entry.Enabled ? "Active" : "Off")} / {dayText} / {entry.StartTime}-{entry.EndTime} / {entry.TargetTemperatureCelsius:0.0} C / {weather}";
     }
+
+    private static bool MatchesSettingsSearch(string search, params string[] values)
+    {
+        var terms = (search ?? string.Empty)
+            .Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        return terms.Length == 0
+            || terms.All(term => values.Any(value => value.Contains(term, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private sealed record SettingsGroup(string Tab, string Name, string Description);
 }
