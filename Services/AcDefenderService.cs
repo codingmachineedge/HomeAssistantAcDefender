@@ -82,7 +82,8 @@ public sealed class AcDefenderService
 
             var quietBypassNow = DateTimeOffset.UtcNow;
             var coolerIntentBypass = stateStore.ShouldBypassQuietTimingForCoolerIntent(reading, quietBypassNow);
-            var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass;
+            var superDefenderBypass = stateStore.ShouldBypassQuietTimingForSuperDefender(reading, quietBypassNow);
+            var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass || superDefenderBypass;
 
             if (!bypassQuietTiming
                 && stateStore.TryRespectWallSettlingGuard(reading, false, quietBypassNow, out var settlingUntil, out var settlingMessage))
@@ -129,6 +130,10 @@ public sealed class AcDefenderService
             else if (coolerIntentBypass)
             {
                 stateStore.SetNextAction("Cooler wall intent detected; bypassing quiet waits so comfort can catch up.", quietBypassNow);
+            }
+            else if (superDefenderBypass)
+            {
+                stateStore.SetNextAction("Super Defender detected repeated phone/Home Assistant changes; bypassing quiet waits while cooling is needed.", quietBypassNow);
             }
 
             if (stateStore.ShouldUseFanSaver(reading))

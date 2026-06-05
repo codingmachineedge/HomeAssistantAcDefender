@@ -19,6 +19,8 @@ The application is one ASP.NET Core process with two responsibilities:
 
 The app records setpoints it commands itself and treats matching Home Assistant updates inside the command grace window as app-originated. Other setpoint changes are logged as external thermostat touches.
 
+When Home Assistant includes state `context` data, the audit log also stores the context ID, parent ID, and user ID. A `user_id` is labeled as a Home Assistant user or phone app change. A `parent_id` is labeled as a Home Assistant automation, script, or service chain. A context ID without those fields is labeled as a thermostat/device change.
+
 Website command debounce is also stored in `DefenderStateStore`. Dashboard handlers and HTTP POST endpoints call the same gate before accepting manual target changes, defender toggles, settings saves, thermostat refresh, exact target, boost, fan mode, or thermostat-off commands. Emergency protocols intentionally bypass an active debounce, then start a new two-minute debounce window.
 
 ## Comfort Sync
@@ -48,6 +50,8 @@ Comfort Memory is also evaluated inside `CalculateExpectedSetPoint`, before temp
 Touch Intent is evaluated in `DefenderStateStore` after a real external wall change is logged. It classifies recent wall choices as warmer, cooler, mixed, or learning, then can extend Manual Comfort Grace only while room temperature is inside its safe band. It does not issue commands and clears before direct cooling decisions.
 
 Cooler Intent Fast Lane is also evaluated in `DefenderStateStore` after a real external wall change is logged, then checked by `AcDefenderService` before quiet timing guards. When recent real wall choices clearly move cooler and the room is still above the website target, it clears safe quiet waits for a short configured window. It does not change the target or create fake thermostat state.
+
+Super Defender is evaluated from the same real Home Assistant readings and audit path. Repeated user/phone or automation-sourced changes inside the configured window arm a strict response hold. While armed, `AcDefenderService` can bypass quiet timing if the room still needs cooling and the safety band does not allow a normal natural hold. It does not send router, Wi-Fi, or firewall commands; the UI only explains that network blocking must be a manual router/MAC decision because automatic blocking can remove thermostat visibility and recovery.
 
 Setpoint Echo is evaluated in `DefenderStateStore` using the same pending setpoint command record that attributes Home Assistant updates to the app. `AcDefenderService` can wait for that real echo before sending another safe command, and bypasses the wait when direct comfort correction is needed.
 

@@ -490,7 +490,8 @@ public sealed class HomeAssistantClient
             hvacMode,
             TryGetAttributeString(root, "hvac_action") ?? hvacMode,
             TryGetAttributeString(root, "fan_mode"),
-            TryGetAttributeStringArray(root, "fan_modes"));
+            TryGetAttributeStringArray(root, "fan_modes"),
+            TryGetContext(root));
     }
 
     private static WeatherReading ParseWeatherState(JsonElement root, string entityId)
@@ -663,6 +664,27 @@ public sealed class HomeAssistantClient
         return root.TryGetProperty("state", out var stateElement)
             ? stateElement.GetString() ?? "unknown"
             : "unknown";
+    }
+
+    private static HomeAssistantStateContext? TryGetContext(JsonElement root)
+    {
+        if (!root.TryGetProperty("context", out var context)
+            || context.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new HomeAssistantStateContext(
+            TryGetString(context, "id"),
+            TryGetString(context, "parent_id"),
+            TryGetString(context, "user_id"));
+    }
+
+    private static string? TryGetString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
     }
 
     private static DateTimeOffset? TryGetTimestamp(JsonElement root, string propertyName)

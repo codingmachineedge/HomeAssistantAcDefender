@@ -41,6 +41,7 @@ public sealed record DefenderSnapshot(
     RoomTrendSnapshot RoomTrend,
     ThermalMomentumSnapshot ThermalMomentum,
     WeatherDriftSnapshot WeatherDrift,
+    SuperDefenderSnapshot SuperDefender,
     CoolingFailureSnapshot CoolingFailure,
     ComfortSnapshot Comfort,
     DefenderSettings Settings,
@@ -56,7 +57,8 @@ public sealed record ThermostatSnapshot(
     string HvacAction,
     string? FanMode,
     IReadOnlyList<string> AvailableFanModes,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    HomeAssistantStateContext? Context);
 
 public sealed record WeatherSnapshot(
     double? OutdoorTemperatureCelsius,
@@ -96,7 +98,13 @@ public sealed record ThermostatReading(
     string HvacMode,
     string HvacAction,
     string? FanMode,
-    IReadOnlyList<string> AvailableFanModes);
+    IReadOnlyList<string> AvailableFanModes,
+    HomeAssistantStateContext? Context = null);
+
+public sealed record HomeAssistantStateContext(
+    string? Id,
+    string? ParentId,
+    string? UserId);
 
 public sealed record WeatherReading(
     string EntityId,
@@ -331,6 +339,18 @@ public sealed record WeatherDriftSnapshot(
     string Status,
     DateTimeOffset? Until);
 
+public sealed record SuperDefenderSnapshot(
+    bool Enabled,
+    bool Active,
+    bool BypassingQuietTiming,
+    int SecondsRemaining,
+    int RecentRemoteChangeCount,
+    string LastChangeSource,
+    string LastChangeDetail,
+    string Status,
+    string NetworkLockdownStatus,
+    DateTimeOffset? Until);
+
 public sealed record CoolingFailureSnapshot(
     bool Enabled,
     bool Alerting,
@@ -361,7 +381,12 @@ public sealed record ThermostatChangeAudit(
     double NewSetPointCelsius,
     double? RoomTemperatureCelsius,
     double? OutdoorTemperatureCelsius,
-    string? WeatherCondition);
+    string? WeatherCondition,
+    string ChangeSource = "thermostat-device",
+    string SourceDetail = "Home Assistant did not attach a user context.",
+    string? ContextId = null,
+    string? ContextParentId = null,
+    string? ContextUserId = null);
 
 public sealed class DefenderSettings
 {
@@ -634,6 +659,18 @@ public sealed class DefenderSettings
     public int WeatherDriftHoldMinutes { get; set; } = 7;
 
     public double WeatherDriftSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool SuperDefenderModeEnabled { get; set; } = true;
+
+    public int SuperDefenderRemoteChangeThreshold { get; set; } = 2;
+
+    public int SuperDefenderWindowMinutes { get; set; } = 30;
+
+    public int SuperDefenderHoldMinutes { get; set; } = 45;
+
+    public double SuperDefenderSafetyBandCelsius { get; set; } = 1.5;
+
+    public bool SuperDefenderBypassQuietTiming { get; set; } = true;
 
     public bool FanEnergySaverEnabled { get; set; }
 

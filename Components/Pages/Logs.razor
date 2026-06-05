@@ -8,15 +8,15 @@
 <MudStack Spacing="3">
     <MudGrid Spacing="3">
         <MudItem xs="12" lg="6">
-            <SectionCard Title="Thermostat touch log"
-                         Subtitle="External wall changes"
-                         Help="Search by temperature, room, outdoor, weather, or time. Click a row for full JSON.">
+            <SectionCard Title="Thermostat change log"
+                         Subtitle="External thermostat changes"
+                         Help="Search by temperature, source, room, outdoor, weather, or time. Click a row for full JSON.">
                 <Actions>
                     <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">@FilteredTouchCount</MudChip>
                 </Actions>
                 <ChildContent>
                     <MudTextField @bind-Value="_touchSearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
-                                  Placeholder="Search wall touches" Adornment="Adornment.Start"
+                                  Placeholder="Search thermostat changes" Adornment="Adornment.Start"
                                   AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mb-2" />
                     <MudStack Spacing="1" Class="scroll-list tall-list">
                         @if (FilteredThermostatChanges.Any())
@@ -25,6 +25,7 @@
                             {
                                 <MudPaper Class="touch-row clickable-row" Elevation="0" @onclick="@(() => SelectTouchLog(change))">
                                     <MudText Typo="Typo.subtitle2">@($"{change.PreviousSetPointCelsius:0.0} C → {change.NewSetPointCelsius:0.0} C")</MudText>
+                                    <MudText Typo="Typo.caption" Class="helper-text">@SourceText(change)</MudText>
                                     <MudText Typo="Typo.caption" Class="helper-text">@Format.DateTimeText(change.Timestamp)</MudText>
                                     <MudText Typo="Typo.caption" Class="helper-text">@($"{Format.Temp(change.RoomTemperatureCelsius)} room · {Format.Temp(change.OutdoorTemperatureCelsius)} outdoor · {change.WeatherCondition ?? "weather --"}")</MudText>
                                 </MudPaper>
@@ -99,7 +100,11 @@
                 Format.DateTimeText(change.Timestamp),
                 Format.Temp(change.RoomTemperatureCelsius),
                 Format.Temp(change.OutdoorTemperatureCelsius),
-                change.WeatherCondition));
+                change.WeatherCondition,
+                change.ChangeSource,
+                change.SourceDetail,
+                change.ContextUserId,
+                change.ContextParentId));
 
     private IEnumerable<DefenderEvent> FilteredEvents =>
         (Snapshot?.Events ?? Array.Empty<DefenderEvent>())
@@ -109,8 +114,15 @@
 
     private void SelectTouchLog(ThermostatChangeAudit change)
     {
-        _selectedLogTitle = $"Wall touch {Format.DateTimeText(change.Timestamp)}";
+        _selectedLogTitle = $"Thermostat change {Format.DateTimeText(change.Timestamp)}";
         _selectedLogJson = JsonSerializer.Serialize(new { Type = "thermostat-change", Change = change, Latest = BuildLogContext() }, LogJsonOptions);
+    }
+
+    private static string SourceText(ThermostatChangeAudit change)
+    {
+        return string.IsNullOrWhiteSpace(change.ChangeSource)
+            ? "source: unknown"
+            : $"source: {change.ChangeSource}";
     }
 
     private void SelectEventLog(DefenderEvent item)
@@ -133,6 +145,7 @@
         Snapshot?.NextAction,
         Snapshot?.LastCommand,
         Snapshot?.Emergency,
+        Snapshot?.SuperDefender,
         Snapshot?.CoolingFailure
     };
 

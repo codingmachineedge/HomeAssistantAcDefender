@@ -476,6 +476,27 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Super Defender", GuardCategory.System,
+            "Detects repeated phone/Home Assistant thermostat changes and tightens correction timing without cutting thermostat Wi-Fi.",
+            "Home Assistant context on climate state changes: user_id, parent_id, and context id.",
+            "Changes with user_id count as Home Assistant user or phone changes. Changes with parent_id count as automation/script changes. Repeated remote-style changes inside the configured window arm Super Defender for the hold minutes. While active and the room still needs cooling, it can bypass subtle quiet waits. Wi-Fi blocking is intentionally manual only because cutting the thermostat off can also remove monitoring and recovery.",
+            "Shows source attribution, arms a strict response window, and can bypass quiet timing while cooling is needed.",
+            ["SuperDefenderModeEnabled", "SuperDefenderRemoteChangeThreshold", "SuperDefenderWindowMinutes", "SuperDefenderHoldMinutes", "SuperDefenderSafetyBandCelsius", "SuperDefenderBypassQuietTiming"],
+            s =>
+            {
+                var d = s.SuperDefender;
+                var tone = d.BypassingQuietTiming ? GuardTone.Alert : d.Active ? GuardTone.Warning : GuardTone.Calm;
+                var label = !d.Enabled ? "Off" : d.BypassingQuietTiming ? "Strict" : d.Active ? "Armed" : "Watching";
+                return new GuardLiveView(d.Enabled, d.Active || d.BypassingQuietTiming, label, tone, d.Status,
+                [
+                    new("Remote changes", d.Enabled ? d.RecentRemoteChangeCount.ToString() : "Off", "Phone/Home Assistant-style changes inside the window."),
+                    new("Strict wait", d.Active ? $"{d.SecondsRemaining}s" : "Ready", "Time left in the strict window."),
+                    new("Last source", d.LastChangeSource, "Best source classification from Home Assistant context."),
+                    new("Wi-Fi block", "Manual only", d.NetworkLockdownStatus),
+                ]);
+            }),
+
+        new GuardInfo(
             "Emergency Protocols", GuardCategory.System,
             "One-tap stand-down modes for too-cold, someone-upset, and suspicion situations.",
             "The chosen protocol and its remaining window.",

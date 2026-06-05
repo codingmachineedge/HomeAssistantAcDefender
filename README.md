@@ -12,6 +12,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Restores the thermostat to `cool` if anyone changes HVAC mode away from cooling, with an optional short delay while the room is still safe.
 - Detects when someone changes the thermostat outside the website.
 - Logs external thermostat touches with date, time, previous setpoint, new setpoint, room temperature, outdoor temperature, and weather condition when Home Assistant exposes those values.
+- Classifies Home Assistant user/phone changes, Home Assistant automation changes, and thermostat/device changes when Home Assistant includes context data.
 - Uses a dynamic cooldown after manual thermostat touches so corrections do not happen instantly every time.
 - Adds Conflict Quiet so repeated wall touches can trigger a temporary stand-down while the room is still safe.
 - Adds Comfort Sync quiet recovery: randomized extra waits, optional extra holds, command spacing, adaptive quiet levels, and small setpoint nudges so repeated wall changes do not create an obvious immediate tug-of-war.
@@ -31,6 +32,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Comfort Memory so repeated safe wall choices can teach a small time-of-day bias that expires automatically.
 - Adds Touch Intent so clear warmer wall-choice patterns can get extra safe grace instead of an obvious immediate fight-back.
 - Adds Cooler Intent Fast Lane so repeated cooler wall choices can skip quiet waits and cool sooner without changing the website target.
+- Adds Super Defender so repeated Home Assistant user/phone or automation changes can temporarily bypass quiet waits while the room still needs cooling.
 - Adds a two-minute website command debounce so fast button tapping does not spam Home Assistant.
 - Adds emergency protocols for too-cold, someone-upset, and suspicion quiet situations.
 - Adds a repeated mega alert when cool mode is demanded but the thermostat stays idle or cooling does not lower room temperature.
@@ -82,6 +84,8 @@ The usage entities are optional Home Assistant sensor IDs. `UsagePowerEntityId` 
 
 For Alectra readings, install the Alectra Hui Home Assistant integration or run the Windows publisher first. It creates `sensor.alectra_hui_current_power`, `sensor.alectra_hui_energy_today`, `sensor.alectra_hui_hourly_cost`, `sensor.alectra_hui_cost_today`, and the `sensor.alectra_hui_current_bill*` bill entities; AC Defender only reads those entities after Home Assistant has created them. The Energy tab also lists every Home Assistant entity whose entity ID contains `alectra_hui`, including setting controls like the auto-switch, current-plan selector, and live-poll number.
 
+When Home Assistant includes a climate state `context`, the defender stores it with the thermostat reading and audit log. A `user_id` is treated as a Home Assistant user or phone app change. A `parent_id` is treated as a Home Assistant automation, script, or service-chain change. A context ID without either field is treated as a thermostat/device-side change. This source label is an attribution helper, not a fake thermostat state.
+
 ## Defender Logic
 
 Every cycle:
@@ -111,10 +115,11 @@ Every cycle:
 23. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
 24. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
 25. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
-26. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-27. Optionally set fan saver mode when near target.
-28. Correct the thermostat setpoint when it does not match the defender decision.
-29. Update the real-time dashboard status.
+26. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
+27. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+28. Optionally set fan saver mode when near target.
+29. Correct the thermostat setpoint when it does not match the defender decision.
+30. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -123,6 +128,8 @@ Website command debounce is a separate two-minute guard around manual website ac
 Cooling failure watch reads only real Home Assistant data. It raises a repeated mega alert when the climate entity is in `cool`, room temperature is clearly above the setpoint, and `hvac_action` stays idle for several minutes. It also watches for the fallback case where `hvac_action` says cooling but the room does not drop over the retained sample window.
 
 Emergency protocols are real controls on the dashboard. `Too cold` pauses the defender and turns the thermostat off through Home Assistant. `Someone upset` and `Suspicion quiet` start observe-only windows where the worker keeps reading the thermostat 24/7 but does not send corrective thermostat commands until the quiet window ends.
+
+Super Defender is the strict response mode for repeated phone/Home Assistant changes. It watches only real Home Assistant context data from the climate entity. When enough remote-style changes happen inside the configured window, it arms for a hold period. While armed, if the room is still above target and not inside a safe natural-recovery band, it can bypass quiet timing so the normal warm-room correction runs sooner. The app intentionally does not send router or Wi-Fi blocking commands. If you want to block thermostat network access, use router/MAC controls manually and only if you accept the risk that the defender may lose thermostat monitoring and recovery.
 
 ## Cool Mode Restore
 
@@ -276,6 +283,12 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `WeatherDriftMinimumChangeCelsius`: outdoor warming needed before a safe correction can continue as weather-driven.
 - `WeatherDriftHoldMinutes`: how long to wait for the weather slot while room comfort is still safe.
 - `WeatherDriftSafetyBandCelsius`: extra room warmth allowed before Weather Drift stops waiting.
+- `SuperDefenderModeEnabled`: watches repeated Home Assistant user/phone or automation changes and can arm strict timing.
+- `SuperDefenderRemoteChangeThreshold`: remote-style changes needed before Super Defender arms.
+- `SuperDefenderWindowMinutes`: time window used to count remote-style changes.
+- `SuperDefenderHoldMinutes`: how long strict response stays armed after the threshold is crossed.
+- `SuperDefenderSafetyBandCelsius`: extra room warmth allowed before Super Defender leaves normal quiet timing in place.
+- `SuperDefenderBypassQuietTiming`: lets armed Super Defender bypass quiet waits while cooling is still needed.
 
 Example: if the room is `25.0 C`, the website target is `22.0 C`, and the thermostat was manually moved to `26.0 C`, the first defender command is `24.0 C` because it starts one degree below current room temperature, not one degree below the wall setting. If Home Assistant says cooling has stopped while the room is still above target, later decisions continue down to `23.0 C`, then `22.0 C`.
 

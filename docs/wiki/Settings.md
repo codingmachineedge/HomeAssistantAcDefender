@@ -17,6 +17,12 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Touches to stand down: how many recent wall changes trigger the stand-down.
 - Stand-down minutes: how long to stop fighting back while the room is still safe.
 - Safe room band C: extra warmth allowed above target while standing down.
+- Super Defender: watches repeated Home Assistant user/phone or automation thermostat changes.
+- Bypass quiet waits: lets armed Super Defender skip quiet timing while the room still needs cooling.
+- Remote changes: how many remote-style changes arm Super Defender.
+- Remote window minutes: how long remote-style changes count.
+- Strict hold minutes: how long the strict response remains armed.
+- Strict safe band C: extra warmth allowed before Super Defender leaves normal quiet timing alone.
 
 ## Comfort Sync
 

@@ -25,6 +25,7 @@ tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 tests.ComfortPaceWaitsAfterFrequentWallTouchesButBypassesHotRoom();
 tests.ComfortEnvelopeObservesSmallSafeWallPreferenceButBypassesHotRoom();
+tests.SuperDefenderClassifiesRemoteHomeAssistantChangesAndBypassesQuietTiming();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -859,6 +860,76 @@ internal sealed class DefenderSetPointRegressionTests
         if (hotRoom)
         {
             throw new InvalidOperationException("Comfort Envelope must step aside when the room is too warm.");
+        }
+    }
+
+    public void SuperDefenderClassifiesRemoteHomeAssistantChangesAndBypassesQuietTiming()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.SuperDefenderModeEnabled = true;
+        settings.SuperDefenderRemoteChangeThreshold = 2;
+        settings.SuperDefenderWindowMinutes = 30;
+        settings.SuperDefenderHoldMinutes = 20;
+        settings.SuperDefenderSafetyBandCelsius = 2.0;
+        settings.SuperDefenderBypassQuietTiming = true;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var baseline = new ThermostatReading(
+            "climate.dining_room",
+            23.0,
+            22.0,
+            "cool",
+            "idle",
+            null,
+            [],
+            new HomeAssistantStateContext("ctx-base", null, null));
+        store.RecordHomeAssistantReading(baseline);
+
+        var firstRemote = baseline with
+        {
+            SetPointCelsius = 24.0,
+            Context = new HomeAssistantStateContext("ctx-user-1", null, "ha-user")
+        };
+        store.RecordHomeAssistantReading(firstRemote);
+        var snapshot = store.GetSnapshot();
+        var latest = snapshot.ThermostatChanges.First();
+        if (latest.ChangeSource != "home-assistant-user"
+            || latest.ContextUserId != "ha-user"
+            || !latest.SourceDetail.Contains("user_id", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Home Assistant user context should classify a thermostat change as phone/Home Assistant user source.");
+        }
+
+        var secondRemote = baseline with
+        {
+            SetPointCelsius = 25.0,
+            Context = new HomeAssistantStateContext("ctx-user-2", null, "ha-user")
+        };
+        store.RecordHomeAssistantReading(secondRemote);
+        snapshot = store.GetSnapshot();
+        if (!snapshot.SuperDefender.Active
+            || snapshot.SuperDefender.RecentRemoteChangeCount < 2
+            || snapshot.SuperDefender.LastChangeSource != "home-assistant-user"
+            || !snapshot.SuperDefender.NetworkLockdownStatus.Contains("not", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Repeated Home Assistant user changes should arm Super Defender and expose the no-automatic-Wi-Fi-block status.");
+        }
+
+        var bypass = store.ShouldBypassQuietTimingForSuperDefender(secondRemote, DateTimeOffset.UtcNow);
+        if (!bypass)
+        {
+            throw new InvalidOperationException("Super Defender should bypass quiet timing while active and room temperature remains above target.");
+        }
+
+        var nearTargetBypass = store.ShouldBypassQuietTimingForSuperDefender(
+            secondRemote with { CurrentTemperatureCelsius = 22.0 },
+            DateTimeOffset.UtcNow);
+        if (nearTargetBypass)
+        {
+            throw new InvalidOperationException("Super Defender should not bypass quiet timing when the room is already at target.");
         }
     }
 

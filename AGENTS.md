@@ -19,6 +19,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Comfort Memory may apply only small, expiring time-of-day offsets learned from real wall touches while room comfort is inside the configured safety band. It must skip warmer offsets when upstairs is hot.
 - Touch Intent may extend only safe wall-change grace after a clear warmer wall-touch pattern. It must clear or step aside immediately when room comfort needs direct cooling.
 - Cooler Intent Fast Lane may bypass quiet waits only after repeated real cooler wall touches while the room is above target. It must not lower the website target or change the warm-room current-minus-1 C command rule.
+- Super Defender may bypass quiet waits only after repeated Home Assistant user/phone or automation-sourced changes while the room still needs cooling. It must use real Home Assistant context metadata and must not send automated router, Wi-Fi, or firewall blocking commands.
 - Setpoint Echo may delay only safe follow-up setpoint commands while Home Assistant has not reported back the last defender setpoint. It must clear or step aside immediately when room comfort needs direct cooling.
 - Repeat Quiet may delay only safe identical follow-up setpoint commands. It must not block a different one-degree step-down command, and it must clear or step aside immediately when room comfort needs direct cooling.
 - Sensor Rhythm may delay only safe corrections so commands land near real Home Assistant reading cadence. It must clear immediately when room comfort needs direct cooling.

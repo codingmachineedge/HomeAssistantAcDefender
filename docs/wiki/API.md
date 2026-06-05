@@ -39,8 +39,9 @@ The status snapshot includes:
 - `coolingRunway`: fresh-cooling hold status, wait seconds, pressure, cooling start time, and expiry time.
 - `roomTrend`: real room trend direction, delta, sample count, hold status, and remaining hold seconds.
 - `thermalMomentum`: real cooling rate, estimated minutes to target, hold status, and remaining hold seconds.
+- `superDefender`: repeated Home Assistant user/phone or automation change status, active flag, strict wait bypass flag, recent remote-change count, last source, remaining seconds, and manual-only network-lockdown warning.
 - `coolingFailure`: mega-alert status, active seconds, alert count, suspected time, next repeat alert time, and status message.
-- `thermostatChanges`: external thermostat touch audit log.
+- `thermostatChanges`: external thermostat touch audit log, including previous/new setpoint, room/outdoor/weather context, source label, Home Assistant context ID, parent ID, user ID, and the raw JSON details shown by the Logs page.
 - `comfort`: upstairs comfort and presence status.
 
 ## Usage
@@ -67,7 +68,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, Comfort Pace, Comfort Envelope, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Comfort Pace, Comfort Envelope, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 

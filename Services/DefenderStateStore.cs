@@ -278,6 +278,16 @@ public sealed class DefenderStateStore
             state.Settings.WeatherDriftMinimumChangeCelsius = Math.Round(Math.Clamp(request.WeatherDriftMinimumChangeCelsius, 0.1, 5.0), 1);
             state.Settings.WeatherDriftHoldMinutes = Math.Clamp(request.WeatherDriftHoldMinutes, 1, 120);
             state.Settings.WeatherDriftSafetyBandCelsius = Math.Round(Math.Clamp(request.WeatherDriftSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.SuperDefenderModeEnabled = request.SuperDefenderModeEnabled;
+            state.Settings.SuperDefenderRemoteChangeThreshold = Math.Clamp(request.SuperDefenderRemoteChangeThreshold, 1, 20);
+            state.Settings.SuperDefenderWindowMinutes = Math.Clamp(request.SuperDefenderWindowMinutes, 1, 1440);
+            state.Settings.SuperDefenderHoldMinutes = Math.Clamp(request.SuperDefenderHoldMinutes, 0, 240);
+            state.Settings.SuperDefenderSafetyBandCelsius = Math.Round(Math.Clamp(request.SuperDefenderSafetyBandCelsius, 0.1, 10.0), 1);
+            state.Settings.SuperDefenderBypassQuietTiming = request.SuperDefenderBypassQuietTiming;
+            if (!state.Settings.SuperDefenderModeEnabled)
+            {
+                ClearSuperDefender("Super Defender is off.");
+            }
             state.Settings.FanEnergySaverEnabled = request.FanEnergySaverEnabled;
             state.Settings.FanEnergySaverThresholdCelsius = Math.Clamp(request.FanEnergySaverThresholdCelsius, 0.1, 5.0);
             state.Settings.FanEnergySaverMode = string.IsNullOrWhiteSpace(request.FanEnergySaverMode)
@@ -371,6 +381,9 @@ public sealed class DefenderStateStore
                 HvacAction = reading.HvacAction,
                 FanMode = reading.FanMode,
                 AvailableFanModes = reading.AvailableFanModes.ToList(),
+                ContextId = reading.Context?.Id,
+                ContextParentId = reading.Context?.ParentId,
+                ContextUserId = reading.Context?.UserId,
                 UpdatedAt = now
             };
             TrackCoolingRunway(reading, previousHvacAction, now);
@@ -863,6 +876,56 @@ public sealed class DefenderStateStore
             var analysis = BuildCoolerIntentAnalysis(now);
             state.CoolerIntentStatus = $"Cooler intent fast lane is active until {until.ToLocalTime():HH:mm:ss}; repeated cooler touches skip quiet waits while the room is above target.";
             state.TouchIntentStatus = analysis.Status;
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>Super Defender bypasses subtle waits after repeated Home Assistant-origin changes while the room still needs cooling.</summary>
+    public bool ShouldBypassQuietTimingForSuperDefender(ThermostatReading reading, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            PruneRemoteChangeTimes(now);
+
+            if (!state.Settings.SuperDefenderModeEnabled)
+            {
+                ClearSuperDefender("Super Defender is off.");
+                SaveState();
+                return false;
+            }
+
+            if (state.SuperDefenderUntil is not { } until || until <= now)
+            {
+                state.SuperDefenderUntil = null;
+                state.SuperDefenderStatus = "Super Defender is watching for repeated phone or Home Assistant changes.";
+                SaveState();
+                return false;
+            }
+
+            if (!state.Settings.SuperDefenderBypassQuietTiming)
+            {
+                state.SuperDefenderStatus = $"Super Defender is active until {until.ToLocalTime():HH:mm:ss}, but quiet bypass is off.";
+                SaveState();
+                return false;
+            }
+
+            if (reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius)
+            {
+                state.SuperDefenderStatus = "Super Defender is active, but the room is already at target so it is only watching.";
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.SuperDefenderSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature && !ShouldBypassNaturalRecovery(reading))
+            {
+                state.SuperDefenderStatus = $"Super Defender is active, but room is above {allowedRoomTemperature:0.0} C so normal comfort safety is leading.";
+                SaveState();
+                return false;
+            }
+
+            state.SuperDefenderStatus = $"Super Defender is active until {until.ToLocalTime():HH:mm:ss}; repeated phone/Home Assistant changes are bypassing quiet waits while cooling is needed.";
             SaveState();
             return true;
         }
@@ -2612,6 +2675,14 @@ public sealed class DefenderStateStore
             return;
         }
 
+        var source = ClassifyChangeSource(reading);
+        state.LastChangeSource = source.Kind;
+        state.LastChangeSourceDetail = source.Detail;
+        state.LastChangeContextId = reading.Context?.Id;
+        state.LastChangeContextParentId = reading.Context?.ParentId;
+        state.LastChangeContextUserId = reading.Context?.UserId;
+        TrackSuperDefenderSource(source, now);
+
         PruneTouchTimes(now);
         state.ExternalTouchTimes.Add(now);
         RecordVisibilityNoticeIfNeeded(now);
@@ -2641,7 +2712,7 @@ public sealed class DefenderStateStore
         }
 
         state.NaturalRecoveryStatus = state.Settings.NaturalRecoveryEnabled
-            ? $"Manual thermostat touch noticed; comfort sync is in {plan.QuietLevel.ToLowerInvariant()} mode and will wait {cooldownSeconds}s before a quiet nudge."
+            ? $"Manual {source.Label} change noticed; comfort sync is in {plan.QuietLevel.ToLowerInvariant()} mode and will wait {cooldownSeconds}s before a quiet nudge."
             : "Manual thermostat touch noticed; quiet recovery is off.";
         var touchScore = CalculateTouchSuspicionScore(now);
         state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
@@ -2681,7 +2752,12 @@ public sealed class DefenderStateStore
             Math.Round(reading.SetPointCelsius, 1),
             reading.CurrentTemperatureCelsius,
             state.Weather?.OutdoorTemperatureCelsius,
-            state.Weather?.Condition);
+            state.Weather?.Condition,
+            source.Kind,
+            source.Detail,
+            reading.Context?.Id,
+            reading.Context?.ParentId,
+            reading.Context?.UserId);
 
         state.ThermostatChanges.Insert(0, audit);
         if (state.ThermostatChanges.Count > 100)
@@ -2695,7 +2771,85 @@ public sealed class DefenderStateStore
         TryStartComfortCompromise(reading, now);
 
         AddEvent("warning",
-            $"External thermostat change: {previous:0.0} C to {reading.SetPointCelsius:0.0} C at {now:yyyy-MM-dd HH:mm:ss}.");
+            $"External thermostat change ({source.Label}): {previous:0.0} C to {reading.SetPointCelsius:0.0} C at {now:yyyy-MM-dd HH:mm:ss}.");
+    }
+
+    private ChangeSourceClassification ClassifyChangeSource(ThermostatReading reading)
+    {
+        var context = reading.Context;
+        if (!string.IsNullOrWhiteSpace(context?.UserId))
+        {
+            return new ChangeSourceClassification(
+                "home-assistant-user",
+                "Home Assistant user or phone",
+                $"Home Assistant attached user_id {context.UserId}; this usually means a phone/app/dashboard/service user changed it.",
+                true);
+        }
+
+        if (!string.IsNullOrWhiteSpace(context?.ParentId))
+        {
+            return new ChangeSourceClassification(
+                "home-assistant-automation",
+                "Home Assistant automation",
+                $"Home Assistant attached parent_id {context.ParentId}; this usually means an automation/script/service chain changed it.",
+                true);
+        }
+
+        if (!string.IsNullOrWhiteSpace(context?.Id))
+        {
+            return new ChangeSourceClassification(
+                "thermostat-device",
+                "thermostat/device",
+                $"Home Assistant context {context.Id} had no user_id or parent_id; this is most likely the thermostat, Nest cloud, or device-origin sync.",
+                false);
+        }
+
+        return new ChangeSourceClassification(
+            "unknown",
+            "unknown source",
+            "Home Assistant did not include context on this climate state, so the source cannot be proven.",
+            false);
+    }
+
+    private void TrackSuperDefenderSource(ChangeSourceClassification source, DateTimeOffset now)
+    {
+        PruneRemoteChangeTimes(now);
+
+        if (!state.Settings.SuperDefenderModeEnabled)
+        {
+            ClearSuperDefender("Super Defender is off.");
+            return;
+        }
+
+        if (!source.CountsAsRemote)
+        {
+            state.SuperDefenderStatus = $"Last change looked like {source.Label}; Super Defender is watching for phone/Home Assistant changes.";
+            return;
+        }
+
+        state.RemoteChangeTimes.Add(now);
+        PruneRemoteChangeTimes(now);
+
+        var threshold = Math.Max(1, state.Settings.SuperDefenderRemoteChangeThreshold);
+        var count = state.RemoteChangeTimes.Count;
+        if (count < threshold)
+        {
+            state.SuperDefenderStatus = $"Remote-style change logged ({count}/{threshold}); Super Defender is watching.";
+            return;
+        }
+
+        var holdMinutes = Math.Max(0, state.Settings.SuperDefenderHoldMinutes);
+        if (holdMinutes <= 0)
+        {
+            state.SuperDefenderStatus = "Remote-style pattern reached, but Super Defender hold is set to 0 min.";
+            return;
+        }
+
+        state.SuperDefenderUntil = now.AddMinutes(holdMinutes);
+        state.SuperDefenderStatus = $"Super Defender armed until {state.SuperDefenderUntil.Value.ToLocalTime():HH:mm:ss} after {count} phone/Home Assistant-style changes.";
+        AddEvent(
+            "warning",
+            $"Super Defender armed after {count} remote-style thermostat changes. Automatic Wi-Fi blocking is not enabled; use router controls manually only if you accept the HVAC connectivity risk.");
     }
 
     private void ApplyTouchIntentGrace(ThermostatReading reading, DateTimeOffset now)
@@ -3817,6 +3971,22 @@ public sealed class DefenderStateStore
         }
     }
 
+    private void PruneRemoteChangeTimes(DateTimeOffset now)
+    {
+        state.RemoteChangeTimes ??= [];
+        var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.SuperDefenderWindowMinutes));
+        state.RemoteChangeTimes.RemoveAll(item => now - item > window);
+        if (state.RemoteChangeTimes.Count > 200)
+        {
+            state.RemoteChangeTimes.RemoveRange(0, state.RemoteChangeTimes.Count - 200);
+        }
+
+        if (state.SuperDefenderUntil is { } until && until <= now)
+        {
+            state.SuperDefenderUntil = null;
+        }
+    }
+
     private void PruneDefenderCommandTimes(DateTimeOffset now)
     {
         var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.ComfortBudgetWindowMinutes));
@@ -3861,6 +4031,23 @@ public sealed class DefenderStateStore
         if (saved.VisibilityGuardUntil is { } until && until <= now)
         {
             saved.VisibilityGuardUntil = null;
+        }
+    }
+
+    private static void PruneLoadedRemoteChangeTimes(DefenderRuntimeState saved)
+    {
+        var now = DateTimeOffset.UtcNow;
+        saved.RemoteChangeTimes ??= [];
+        var window = TimeSpan.FromMinutes(Math.Max(1, saved.Settings.SuperDefenderWindowMinutes));
+        saved.RemoteChangeTimes.RemoveAll(item => now - item > window);
+        if (saved.RemoteChangeTimes.Count > 200)
+        {
+            saved.RemoteChangeTimes.RemoveRange(0, saved.RemoteChangeTimes.Count - 200);
+        }
+
+        if (saved.SuperDefenderUntil is { } until && until <= now)
+        {
+            saved.SuperDefenderUntil = null;
         }
     }
 
@@ -4038,6 +4225,10 @@ public sealed class DefenderStateStore
         saved.Settings.WeatherDriftMinimumChangeCelsius = Math.Round(Math.Clamp(saved.Settings.WeatherDriftMinimumChangeCelsius, 0.1, 5.0), 1);
         saved.Settings.WeatherDriftHoldMinutes = Math.Clamp(saved.Settings.WeatherDriftHoldMinutes, 1, 120);
         saved.Settings.WeatherDriftSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.WeatherDriftSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.SuperDefenderRemoteChangeThreshold = Math.Clamp(saved.Settings.SuperDefenderRemoteChangeThreshold, 1, 20);
+        saved.Settings.SuperDefenderWindowMinutes = Math.Clamp(saved.Settings.SuperDefenderWindowMinutes, 1, 1440);
+        saved.Settings.SuperDefenderHoldMinutes = Math.Clamp(saved.Settings.SuperDefenderHoldMinutes, 0, 240);
+        saved.Settings.SuperDefenderSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.SuperDefenderSafetyBandCelsius, 0.1, 10.0), 1);
         saved.Settings.DefenderRunsContinuously = true;
         saved.Schedule ??= [];
         saved.Events ??= [];
@@ -4051,8 +4242,10 @@ public sealed class DefenderStateStore
         saved.ComfortMemorySlots ??= [];
         saved.DefenderCommandTimes ??= [];
         saved.VisibilityNoticeTimes ??= [];
+        saved.RemoteChangeTimes ??= [];
         PruneLoadedDefenderCommandTimes(saved);
         PruneLoadedVisibilityNoticeTimes(saved);
+        PruneLoadedRemoteChangeTimes(saved);
         PruneLoadedHomeAssistantReadingTimes(saved);
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
@@ -4207,6 +4400,25 @@ public sealed class DefenderStateStore
             saved.WeatherDriftHoldUntil = null;
             saved.WeatherDriftStatus = "Weather drift guard is watching.";
         }
+        saved.SuperDefenderStatus = string.IsNullOrWhiteSpace(saved.SuperDefenderStatus)
+            ? "Super Defender is watching for repeated phone or Home Assistant changes."
+            : saved.SuperDefenderStatus;
+        saved.LastChangeSource = string.IsNullOrWhiteSpace(saved.LastChangeSource)
+            ? "none"
+            : saved.LastChangeSource;
+        saved.LastChangeSourceDetail = string.IsNullOrWhiteSpace(saved.LastChangeSourceDetail)
+            ? "No external thermostat change has been logged yet."
+            : saved.LastChangeSourceDetail;
+        if (!saved.Settings.SuperDefenderModeEnabled)
+        {
+            saved.SuperDefenderUntil = null;
+            saved.SuperDefenderStatus = "Super Defender is off.";
+        }
+        else if (saved.SuperDefenderUntil is { } superUntil && superUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.SuperDefenderUntil = null;
+            saved.SuperDefenderStatus = "Super Defender is watching for repeated phone or Home Assistant changes.";
+        }
         saved.EmergencyProtocol = string.IsNullOrWhiteSpace(saved.EmergencyProtocol)
             ? "None"
             : saved.EmergencyProtocol;
@@ -4294,6 +4506,14 @@ public sealed class DefenderStateStore
         var weatherDriftSeconds = state.WeatherDriftHoldUntil is { } weatherDriftUntil && weatherDriftUntil > now
             ? (int)Math.Ceiling((weatherDriftUntil - now).TotalSeconds)
             : 0;
+        PruneRemoteChangeTimes(now);
+        var superDefenderSeconds = state.SuperDefenderUntil is { } superUntil && superUntil > now
+            ? (int)Math.Ceiling((superUntil - now).TotalSeconds)
+            : 0;
+        var superDefenderBypassing = state.Settings.SuperDefenderModeEnabled
+            && state.Settings.SuperDefenderBypassQuietTiming
+            && superDefenderSeconds > 0
+            && state.HomeAssistantThermostat?.CurrentTemperatureCelsius > state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius;
         var coolingFailureAlerting = state.CoolingFailureSuspectedAt is not null
             && state.CoolingFailureStatus.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase);
         var coolingFailureSeconds = coolingFailureAlerting && state.CoolingFailureSuspectedAt is { } failureSince
@@ -4362,7 +4582,8 @@ public sealed class DefenderStateStore
                 currentThermostat.HvacMode,
                 currentThermostat.HvacAction,
                 currentThermostat.FanMode,
-                currentThermostat.AvailableFanModes)
+                currentThermostat.AvailableFanModes,
+                currentThermostat.ToContext())
             : null;
         double? comfortEnvelopeMinimum = null;
         double? comfortEnvelopeMaximum = null;
@@ -4677,6 +4898,21 @@ public sealed class DefenderStateStore
                     ? "Weather drift guard is watching."
                     : state.WeatherDriftStatus,
                 weatherDriftSeconds > 0 ? state.WeatherDriftHoldUntil : null),
+            new SuperDefenderSnapshot(
+                state.Settings.SuperDefenderModeEnabled,
+                superDefenderSeconds > 0,
+                superDefenderBypassing,
+                superDefenderSeconds,
+                state.RemoteChangeTimes.Count,
+                string.IsNullOrWhiteSpace(state.LastChangeSource) ? "none" : state.LastChangeSource,
+                string.IsNullOrWhiteSpace(state.LastChangeSourceDetail)
+                    ? "No external thermostat change has been logged yet."
+                    : state.LastChangeSourceDetail,
+                string.IsNullOrWhiteSpace(state.SuperDefenderStatus)
+                    ? "Super Defender is watching for repeated phone or Home Assistant changes."
+                    : state.SuperDefenderStatus,
+                "Automatic Wi-Fi blocking is intentionally not sent by AC Defender. Use router/MAC controls manually only if you accept the risk of cutting off thermostat recovery and monitoring.",
+                superDefenderSeconds > 0 ? state.SuperDefenderUntil : null),
             new CoolingFailureSnapshot(
                 true,
                 coolingFailureAlerting,
@@ -4866,6 +5102,12 @@ public sealed class DefenderStateStore
     {
         state.WeatherDriftHoldUntil = null;
         state.WeatherDriftStatus = status;
+    }
+
+    private void ClearSuperDefender(string status)
+    {
+        state.SuperDefenderUntil = null;
+        state.SuperDefenderStatus = status;
     }
 
     private List<DateTimeOffset> GetRecentWallSettlingTouches(DateTimeOffset now)
@@ -5130,6 +5372,12 @@ public sealed class DefenderStateStore
             WeatherDriftMinimumChangeCelsius = settings.WeatherDriftMinimumChangeCelsius,
             WeatherDriftHoldMinutes = settings.WeatherDriftHoldMinutes,
             WeatherDriftSafetyBandCelsius = settings.WeatherDriftSafetyBandCelsius,
+            SuperDefenderModeEnabled = settings.SuperDefenderModeEnabled,
+            SuperDefenderRemoteChangeThreshold = settings.SuperDefenderRemoteChangeThreshold,
+            SuperDefenderWindowMinutes = settings.SuperDefenderWindowMinutes,
+            SuperDefenderHoldMinutes = settings.SuperDefenderHoldMinutes,
+            SuperDefenderSafetyBandCelsius = settings.SuperDefenderSafetyBandCelsius,
+            SuperDefenderBypassQuietTiming = settings.SuperDefenderBypassQuietTiming,
             FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
             FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
             FanEnergySaverMode = settings.FanEnergySaverMode,
@@ -5376,6 +5624,22 @@ public sealed class DefenderStateStore
 
         public string WeatherDriftStatus { get; set; } = "Weather drift guard is watching.";
 
+        public DateTimeOffset? SuperDefenderUntil { get; set; }
+
+        public string SuperDefenderStatus { get; set; } = "Super Defender is watching for repeated phone or Home Assistant changes.";
+
+        public List<DateTimeOffset> RemoteChangeTimes { get; set; } = [];
+
+        public string LastChangeSource { get; set; } = "none";
+
+        public string LastChangeSourceDetail { get; set; } = "No external thermostat change has been logged yet.";
+
+        public string? LastChangeContextId { get; set; }
+
+        public string? LastChangeContextParentId { get; set; }
+
+        public string? LastChangeContextUserId { get; set; }
+
         public List<RoomTemperatureSample> RoomTemperatureSamples { get; set; } = [];
 
         public List<WeatherSample> WeatherSamples { get; set; } = [];
@@ -5496,6 +5760,12 @@ public sealed class DefenderStateStore
 
         public List<string> AvailableFanModes { get; set; } = [];
 
+        public string? ContextId { get; set; }
+
+        public string? ContextParentId { get; set; }
+
+        public string? ContextUserId { get; set; }
+
         public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
         public ThermostatSnapshot ToSnapshot()
@@ -5507,7 +5777,17 @@ public sealed class DefenderStateStore
                 HvacAction,
                 FanMode,
                 AvailableFanModes.ToArray(),
-                UpdatedAt);
+                UpdatedAt,
+                ToContext());
+        }
+
+        public HomeAssistantStateContext? ToContext()
+        {
+            return string.IsNullOrWhiteSpace(ContextId)
+                && string.IsNullOrWhiteSpace(ContextParentId)
+                && string.IsNullOrWhiteSpace(ContextUserId)
+                ? null
+                : new HomeAssistantStateContext(ContextId, ContextParentId, ContextUserId);
         }
     }
 
@@ -5538,3 +5818,9 @@ public sealed record ComfortRuleResult(
     bool BypassCooldown,
     double EffectiveTargetCelsius,
     string Status);
+
+internal sealed record ChangeSourceClassification(
+    string Kind,
+    string Label,
+    string Detail,
+    bool CountsAsRemote);

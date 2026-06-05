@@ -20,7 +20,7 @@ sequence. The first guard that wants to wait stops the cycle and reports its nex
 5. **Cool Mode Restore** — bring the HVAC mode back to `cool` (after a short safe delay).
 6. **Schedule & weather rules** — choose the target and decide whether corrective action is allowed.
 7. **Upstairs Comfort Guard** — lower the target and add boost when upstairs is hot.
-8. Decide whether **severe upstairs heat** or **Cooler Intent Fast Lane** should bypass quiet timing.
+8. Decide whether **severe upstairs heat**, **Cooler Intent Fast Lane**, or **Super Defender** should bypass quiet timing.
 9. **Wall Settling**, **Conflict Quiet**, **Manual Comfort Grace**, and **Dynamic Cooldown** may each hold.
 10. **Fan Energy Saver** — move the fan to a saver mode when near target.
 11. Compute the **expected setpoint** (1 °C below room when the room is warm — see below).
@@ -163,6 +163,14 @@ When people keep dialing the wall cooler, it skips quiet waits so the room cools
 - **Watches:** the net cooler movement of recent wall changes and whether the room is above target.
 - **Logic:** if repeated touches move the wall cooler by at least the cool threshold and the room is above target, it clears the quiet waits (cooldown, grace, conflict quiet, cadence, repeat quiet, sensor rhythm, runway, …) for the hold minutes. It never lowers the website target.
 - **Settings:** `CoolerIntentFastLaneEnabled`, `CoolerIntentMinimumTouches`, `CoolerIntentWindowMinutes`, `CoolerIntentHoldMinutes`, `CoolerIntentNetCoolThresholdCelsius`, `CoolerIntentSafetyBandCelsius`.
+
+---
+
+### Super Defender
+Treats repeated phone/Home Assistant changes as a stricter signal than a single wall touch.
+- **Watches:** Home Assistant climate state `context.user_id`, `context.parent_id`, and `context.id` from real thermostat readings.
+- **Logic:** `user_id` is labeled as a Home Assistant user or phone app change, `parent_id` as an automation/script/service chain, and context without either field as a thermostat/device change. When enough remote-style changes happen inside the configured window, Super Defender arms for a hold period. While armed, if the room is above target and not inside the configured safe natural-recovery band, it can bypass quiet waits so the normal 1 C-below-room correction runs sooner. It does not automatically block Wi-Fi, router, or firewall access because that can remove thermostat monitoring and recovery; the app shows a manual-only network-lockdown warning instead.
+- **Settings:** `SuperDefenderModeEnabled`, `SuperDefenderRemoteChangeThreshold`, `SuperDefenderWindowMinutes`, `SuperDefenderHoldMinutes`, `SuperDefenderSafetyBandCelsius`, `SuperDefenderBypassQuietTiming`.
 
 ---
 

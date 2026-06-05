@@ -27,6 +27,21 @@
         </ChildContent>
     </SectionCard>
 
+    <SectionCard Title="Super Defender"
+                 Subtitle="@(Snapshot?.SuperDefender.Active == true ? "Armed" : "Watching")"
+                 Help="Detects repeated phone/Home Assistant thermostat changes and can tighten response without cutting Wi-Fi.">
+        <Actions>
+            <MudChip T="string" Color="@(Snapshot?.SuperDefender.BypassingQuietTiming == true ? Color.Error : Snapshot?.SuperDefender.Active == true ? Color.Warning : Color.Default)" Variant="Variant.Outlined" Size="Size.Small">
+                @(Snapshot?.SuperDefender.BypassingQuietTiming == true ? "Strict" : Snapshot?.SuperDefender.Active == true ? "Armed" : "Ready")
+            </MudChip>
+        </Actions>
+        <ChildContent>
+            <MudText Typo="Typo.body2">@Snapshot?.SuperDefender.Status</MudText>
+            <MudText Typo="Typo.caption" Class="helper-text">Last source: @(Snapshot?.SuperDefender.LastChangeSource ?? "none")</MudText>
+            <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot?.SuperDefender.NetworkLockdownStatus</MudAlert>
+        </ChildContent>
+    </SectionCard>
+
     <MudGrid Spacing="3">
         <MudItem xs="12" md="6">
             <SectionCard Title="Target" Help="The cool number the defender keeps.">

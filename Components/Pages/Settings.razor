@@ -77,6 +77,21 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("super defender phone home assistant remote wifi lockdown strict")) {
+                <MudExpansionPanel Text="Super Defender">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Super Defender" Value="_superDefenderModeEnabled" ValueChanged="@(v => SetDirty(v, x => _superDefenderModeEnabled = x))" Help="Watch repeated phone or Home Assistant changes and tighten response." />
+                        <SettingSwitch Label="Bypass quiet waits" Value="_superDefenderBypassQuietTiming" ValueChanged="@(v => SetDirty(v, x => _superDefenderBypassQuietTiming = x))" Help="Skip subtle timing holds while Super Defender is active and cooling is needed." />
+                        <SettingInt Label="Remote changes" Value="_superDefenderRemoteChangeThreshold" ValueChanged="@(v => SetDirty(v, x => _superDefenderRemoteChangeThreshold = x))" Min="1" Max="20" Help="How many phone/Home Assistant-style changes arm it." />
+                        <SettingInt Label="Remote window" Unit="min" Value="_superDefenderWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _superDefenderWindowMinutes = x))" Min="1" Max="1440" />
+                        <SettingInt Label="Strict hold" Unit="min" Value="_superDefenderHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _superDefenderHoldMinutes = x))" Min="0" Max="240" />
+                        <SettingDouble Label="Strict safe band" Value="_superDefenderSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _superDefenderSafetyBandCelsius = x))" Min="0.1" Max="10" />
+                        <MudItem xs="12">
+                            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">Wi-Fi blocking is not automated here. Use router/MAC controls manually only if you accept the risk of losing thermostat monitoring and recovery.</MudAlert>
+                        </MudItem>
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
         </MudExpansionPanels>
     </SectionCard>
 
@@ -612,6 +627,12 @@
     private double _weatherDriftMinimumChangeCelsius = 0.3;
     private int _weatherDriftHoldMinutes = 7;
     private double _weatherDriftSafetyBandCelsius = 1.0;
+    private bool _superDefenderModeEnabled = true;
+    private int _superDefenderRemoteChangeThreshold = 2;
+    private int _superDefenderWindowMinutes = 30;
+    private int _superDefenderHoldMinutes = 45;
+    private double _superDefenderSafetyBandCelsius = 1.5;
+    private bool _superDefenderBypassQuietTiming = true;
     private bool _fanEnergySaverEnabled;
     private double _fanEnergySaverThresholdCelsius = 0.6;
     private string _fanEnergySaverMode = "auto";
@@ -789,6 +810,12 @@
         _weatherDriftMinimumChangeCelsius = settings.WeatherDriftMinimumChangeCelsius;
         _weatherDriftHoldMinutes = settings.WeatherDriftHoldMinutes;
         _weatherDriftSafetyBandCelsius = settings.WeatherDriftSafetyBandCelsius;
+        _superDefenderModeEnabled = settings.SuperDefenderModeEnabled;
+        _superDefenderRemoteChangeThreshold = settings.SuperDefenderRemoteChangeThreshold;
+        _superDefenderWindowMinutes = settings.SuperDefenderWindowMinutes;
+        _superDefenderHoldMinutes = settings.SuperDefenderHoldMinutes;
+        _superDefenderSafetyBandCelsius = settings.SuperDefenderSafetyBandCelsius;
+        _superDefenderBypassQuietTiming = settings.SuperDefenderBypassQuietTiming;
         _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
         _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
         _fanEnergySaverMode = settings.FanEnergySaverMode;
@@ -1005,6 +1032,12 @@
             _weatherDriftMinimumChangeCelsius,
             _weatherDriftHoldMinutes,
             _weatherDriftSafetyBandCelsius,
+            _superDefenderModeEnabled,
+            _superDefenderRemoteChangeThreshold,
+            _superDefenderWindowMinutes,
+            _superDefenderHoldMinutes,
+            _superDefenderSafetyBandCelsius,
+            _superDefenderBypassQuietTiming,
             _fanEnergySaverEnabled,
             _fanEnergySaverThresholdCelsius,
             _fanEnergySaverMode,
