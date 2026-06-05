@@ -914,6 +914,59 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_comfortEnvelopeEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _comfortEnvelopeEnabled = v))"
+                           Label="Comfort Envelope"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Lets tiny safe wall preferences rest instead of correcting every small difference.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_comfortEnvelopeTriggerTouches"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortEnvelopeTriggerTouches = value))"
+                                         Label="Envelope touches"
+                                         HelperText="How many wall changes start the safe range."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_comfortEnvelopeHoldMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _comfortEnvelopeHoldMinutes = value))"
+                                         Label="Envelope minutes"
+                                         HelperText="How long the small safe preference can rest."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_comfortEnvelopeMaxOffsetCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortEnvelopeMaxOffsetCelsius = value))"
+                                         Label="Envelope range C"
+                                         HelperText="Maximum setpoint difference allowed inside the safe range."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_comfortEnvelopeSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _comfortEnvelopeSafetyBandCelsius = value))"
+                                         Label="Envelope safe band C"
+                                         HelperText="Stop observing if the room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_comfortCompromiseEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _comfortCompromiseEnabled = v))"
                            Label="Comfort compromise"
@@ -1751,6 +1804,7 @@
         new(1, "Recovery", "Quiet recovery", "Adaptive waits, nudge size, command gaps, safe bands, walkback, and hold chance."),
         new(2, "Wall Touch", "Touch behavior", "Wall settling, touch signature, visibility guard, routine timing, budget, cadence, Comfort Pace, compromise, memory, manual grace, and intent."),
         new(2, "Wall Touch", "Comfort Pace", "High-frequency wall touches, natural climate slots, weather timing, sensor beat, and calm correction pacing."),
+        new(2, "Wall Touch", "Comfort Envelope", "Temporary safe wall preference range, small setpoint differences, and automatic fade-back after repeated touches."),
         new(3, "Sensor Timing", "Sensor timing", "Setpoint echo, repeat command, Home Assistant sensor rhythm, cooling runway, room trend, and thermal momentum."),
         new(4, "Comfort", "Fan saver", "Fan mode and near-target energy saver."),
         new(4, "Comfort", "Upstairs comfort", "Upstairs temperature sensors, too-hot threshold, comfort target, boost, and presence rules."),
@@ -1834,6 +1888,11 @@
     private double _naturalChangePlannerSafetyBandCelsius = 1.1;
     private bool _naturalChangePlannerPreferWeatherSlots = true;
     private bool _naturalChangePlannerPreferSensorBeat = true;
+    private bool _comfortEnvelopeEnabled = true;
+    private int _comfortEnvelopeTriggerTouches = 2;
+    private int _comfortEnvelopeHoldMinutes = 18;
+    private double _comfortEnvelopeMaxOffsetCelsius = 0.8;
+    private double _comfortEnvelopeSafetyBandCelsius = 1.0;
     private bool _comfortCompromiseEnabled = true;
     private int _comfortCompromiseTriggerTouches = 2;
     private int _comfortCompromiseHoldMinutes = 20;
@@ -2009,6 +2068,11 @@
         _naturalChangePlannerSafetyBandCelsius = settings.NaturalChangePlannerSafetyBandCelsius;
         _naturalChangePlannerPreferWeatherSlots = settings.NaturalChangePlannerPreferWeatherSlots;
         _naturalChangePlannerPreferSensorBeat = settings.NaturalChangePlannerPreferSensorBeat;
+        _comfortEnvelopeEnabled = settings.ComfortEnvelopeEnabled;
+        _comfortEnvelopeTriggerTouches = settings.ComfortEnvelopeTriggerTouches;
+        _comfortEnvelopeHoldMinutes = settings.ComfortEnvelopeHoldMinutes;
+        _comfortEnvelopeMaxOffsetCelsius = settings.ComfortEnvelopeMaxOffsetCelsius;
+        _comfortEnvelopeSafetyBandCelsius = settings.ComfortEnvelopeSafetyBandCelsius;
         _comfortCompromiseEnabled = settings.ComfortCompromiseEnabled;
         _comfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches;
         _comfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes;
@@ -2142,6 +2206,14 @@
 
     private void SaveSettings()
     {
+        var gate = StateStore.TryBeginWebsiteCommand("save settings");
+        if (!gate.Accepted)
+        {
+            _settingsStatus = $"Wait {gate.Snapshot.WebsiteCommandDebounce.SecondsRemaining}s";
+            Snackbar.Add(gate.Message, Severity.Warning);
+            return;
+        }
+
         var request = new SettingsRequest(
             _scheduleEnabled,
             _weatherActivationMode,
@@ -2218,6 +2290,11 @@
             _naturalChangePlannerSafetyBandCelsius,
             _naturalChangePlannerPreferWeatherSlots,
             _naturalChangePlannerPreferSensorBeat,
+            _comfortEnvelopeEnabled,
+            _comfortEnvelopeTriggerTouches,
+            _comfortEnvelopeHoldMinutes,
+            _comfortEnvelopeMaxOffsetCelsius,
+            _comfortEnvelopeSafetyBandCelsius,
             _comfortCompromiseEnabled,
             _comfortCompromiseTriggerTouches,
             _comfortCompromiseHoldMinutes,

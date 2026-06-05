@@ -53,6 +53,17 @@ app.MapGet("/api/usage/live", async (HomeAssistantClient homeAssistantClient, Ca
         return Results.BadRequest(new { error = ex.Message });
     }
 });
+app.MapGet("/api/usage/alectra-hui", async (HomeAssistantClient homeAssistantClient, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await homeAssistantClient.GetAlectraHuiEntitiesAsync(cancellationToken));
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
 app.MapGet("/api/usage/history", async (
     string? entityId,
     DateTimeOffset? from,
@@ -114,12 +125,24 @@ app.MapPost("/api/target", (TargetTemperatureRequest request, DefenderStateStore
 
 app.MapPost("/api/defender", (DefenderEnabledRequest request, DefenderStateStore store) =>
 {
+    var gate = store.TryBeginWebsiteCommand(request.Enabled ? "turn defender on" : "pause defender");
+    if (!gate.Accepted)
+    {
+        return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
     var snapshot = store.SetDefenderEnabled(request.Enabled);
     return Results.Ok(snapshot);
 });
 
 app.MapPost("/api/settings", (SettingsRequest request, DefenderStateStore store) =>
 {
+    var gate = store.TryBeginWebsiteCommand("save settings");
+    if (!gate.Accepted)
+    {
+        return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
     var snapshot = store.UpdateSettings(request);
     return Results.Ok(snapshot);
 });

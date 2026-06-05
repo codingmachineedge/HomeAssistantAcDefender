@@ -69,9 +69,11 @@ public static class CliCommands
             await TryGetUsageEntityAsync(httpClient, options.PowerEntityId),
             await TryGetUsageEntityAsync(httpClient, options.EnergyEntityId),
             await TryGetUsageEntityAsync(httpClient, options.CostEntityId),
+            await TryGetUsageEntityAsync(httpClient, options.HourlyCostEntityId),
             await TryGetUsageEntityAsync(httpClient, options.CurrentBillEntityId),
             await TryGetUsageEntityAsync(httpClient, options.CurrentBillDueEntityId),
             await TryGetUsageEntityAsync(httpClient, options.CurrentBillStatusEntityId),
+            Array.Empty<UsageEntityReading>(),
             true,
             DateTimeOffset.UtcNow);
 
@@ -85,6 +87,7 @@ public static class CliCommands
         PrintReading("Power", snapshot.Power);
         PrintReading("Energy", snapshot.Energy);
         PrintReading("Cost", snapshot.Cost);
+        PrintReading("Hourly cost", snapshot.HourlyCost);
         PrintReading("Current bill", snapshot.CurrentBill);
         PrintReading("Bill due", snapshot.CurrentBillDue);
         PrintReading("Bill status", snapshot.CurrentBillStatus);
@@ -334,6 +337,7 @@ Options:
   --power ENTITY     Overrides HomeAssistant__UsagePowerEntityId for usage-live.
   --energy ENTITY    Overrides HomeAssistant__UsageEnergyEntityId.
   --cost ENTITY      Overrides HomeAssistant__UsageCostEntityId for usage-live.
+  --hourly-cost ENTITY Overrides HomeAssistant__UsageHourlyCostEntityId.
   --bill ENTITY      Overrides HomeAssistant__UsageCurrentBillEntityId for usage-live.
   --bill-due ENTITY  Overrides HomeAssistant__UsageCurrentBillDueEntityId.
   --bill-status ENTITY Overrides HomeAssistant__UsageCurrentBillStatusEntityId.
@@ -348,6 +352,7 @@ Options:
         string PowerEntityId,
         string EnergyEntityId,
         string CostEntityId,
+        string HourlyCostEntityId,
         string CurrentBillEntityId,
         string CurrentBillDueEntityId,
         string CurrentBillStatusEntityId,
@@ -368,6 +373,7 @@ Options:
                 TryGetValue(args, "--power") ?? configuration["HomeAssistant:UsagePowerEntityId"] ?? "sensor.alectra_hui_current_power",
                 TryGetValue(args, "--energy") ?? configuration["HomeAssistant:UsageEnergyEntityId"] ?? "sensor.alectra_hui_energy_today",
                 TryGetValue(args, "--cost") ?? configuration["HomeAssistant:UsageCostEntityId"] ?? "sensor.alectra_hui_cost_today",
+                TryGetValue(args, "--hourly-cost") ?? configuration["HomeAssistant:UsageHourlyCostEntityId"] ?? "sensor.alectra_hui_hourly_cost",
                 TryGetValue(args, "--bill") ?? configuration["HomeAssistant:UsageCurrentBillEntityId"] ?? "sensor.alectra_hui_current_bill",
                 TryGetValue(args, "--bill-due") ?? configuration["HomeAssistant:UsageCurrentBillDueEntityId"] ?? "sensor.alectra_hui_current_bill_due",
                 TryGetValue(args, "--bill-status") ?? configuration["HomeAssistant:UsageCurrentBillStatusEntityId"] ?? "sensor.alectra_hui_current_bill_status",

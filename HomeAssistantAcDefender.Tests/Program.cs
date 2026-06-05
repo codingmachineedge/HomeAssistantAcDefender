@@ -22,6 +22,7 @@ tests.WeatherDriftWaitsOnlyForSafeStableOutdoorConditions();
 tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 tests.ComfortPaceWaitsAfterFrequentWallTouchesButBypassesHotRoom();
+tests.ComfortEnvelopeObservesSmallSafeWallPreferenceButBypassesHotRoom();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
 internal sealed class DefenderSetPointRegressionTests
@@ -315,6 +316,18 @@ internal sealed class DefenderSetPointRegressionTests
             || second.Snapshot.WebsiteCommandDebounce.LastCommand != "force cooling")
         {
             throw new InvalidOperationException("Blocked website command should report the active debounce and previous command.");
+        }
+
+        var settingsSave = store.TryBeginWebsiteCommand("save settings");
+        if (settingsSave.Accepted)
+        {
+            throw new InvalidOperationException("Settings save should be blocked during the same website debounce window.");
+        }
+
+        var defenderToggle = store.TryBeginWebsiteCommand("pause defender");
+        if (defenderToggle.Accepted)
+        {
+            throw new InvalidOperationException("Defender toggle should be blocked during the same website debounce window.");
         }
 
         SetRuntimeProperty(store, "WebsiteCommandDebounceUntil", DateTimeOffset.UtcNow.AddSeconds(-1));
@@ -693,6 +706,84 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.NaturalChangePlanner.Waiting)
         {
             throw new InvalidOperationException("Comfort Pace should clear its wait after comfort safety takes over.");
+        }
+    }
+
+    public void ComfortEnvelopeObservesSmallSafeWallPreferenceButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.ComfortEnvelopeEnabled = true;
+        settings.ComfortEnvelopeTriggerTouches = 2;
+        settings.ComfortEnvelopeHoldMinutes = 10;
+        settings.ComfortEnvelopeMaxOffsetCelsius = 0.8;
+        settings.ComfortEnvelopeSafetyBandCelsius = 1.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.4,
+            22.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(safeReading);
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 22.5 });
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 22.6 });
+
+        var now = DateTimeOffset.UtcNow;
+        var held = store.TryRespectComfortEnvelope(
+            safeReading with { SetPointCelsius = 22.6 },
+            22.0,
+            bypassEnvelope: false,
+            now,
+            out var waitUntil,
+            out var message);
+
+        if (!held || waitUntil <= now || !message.Contains("Comfort envelope", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Comfort Envelope should observe a small safe wall preference after repeated touches.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.ComfortEnvelope.Active
+            || snapshot.ComfortEnvelope.PreferredSetPointCelsius is not 22.6
+            || snapshot.ComfortEnvelope.MinimumAllowedSetPointCelsius is not 21.2
+            || snapshot.ComfortEnvelope.MaximumAllowedSetPointCelsius is not 22.8)
+        {
+            throw new InvalidOperationException("Comfort Envelope snapshot should show the active safe range and preferred wall setpoint.");
+        }
+
+        var outsideEnvelope = store.TryRespectComfortEnvelope(
+            safeReading with { SetPointCelsius = 23.2 },
+            22.0,
+            bypassEnvelope: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (outsideEnvelope)
+        {
+            throw new InvalidOperationException("Comfort Envelope should not hold wall preferences outside its configured range.");
+        }
+
+        store.RecordHomeAssistantReading(safeReading);
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 22.5 });
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 22.6 });
+        var hotRoom = store.TryRespectComfortEnvelope(
+            safeReading with { CurrentTemperatureCelsius = 24.1, SetPointCelsius = 22.6 },
+            22.0,
+            bypassEnvelope: false,
+            now.AddSeconds(2),
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Comfort Envelope must step aside when the room is too warm.");
         }
     }
 

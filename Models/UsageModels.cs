@@ -12,9 +12,11 @@ public sealed record UsageLiveSnapshot(
     UsageEntityReading? Power,
     UsageEntityReading? Energy,
     UsageEntityReading? Cost,
+    UsageEntityReading? HourlyCost,
     UsageEntityReading? CurrentBill,
     UsageEntityReading? CurrentBillDue,
     UsageEntityReading? CurrentBillStatus,
+    IReadOnlyList<UsageEntityReading> AlectraHuiEntities,
     bool HomeAssistantConfigured,
     DateTimeOffset UpdatedAt);
 

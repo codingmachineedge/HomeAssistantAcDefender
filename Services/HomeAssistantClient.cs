@@ -144,18 +144,47 @@ public sealed class HomeAssistantClient
     {
         if (!IsConfigured)
         {
-            return new UsageLiveSnapshot(null, null, null, null, null, null, false, DateTimeOffset.UtcNow);
+            return new UsageLiveSnapshot(null, null, null, null, null, null, null, Array.Empty<UsageEntityReading>(), false, DateTimeOffset.UtcNow);
         }
 
         var current = options.CurrentValue;
         var power = await TryGetUsageEntityAsync(current.UsagePowerEntityId, cancellationToken);
         var energy = await TryGetUsageEntityAsync(current.UsageEnergyEntityId, cancellationToken);
         var cost = await TryGetUsageEntityAsync(current.UsageCostEntityId, cancellationToken);
+        var hourlyCost = await TryGetUsageEntityAsync(current.UsageHourlyCostEntityId, cancellationToken);
         var currentBill = await TryGetUsageEntityAsync(current.UsageCurrentBillEntityId, cancellationToken);
         var currentBillDue = await TryGetUsageEntityAsync(current.UsageCurrentBillDueEntityId, cancellationToken);
         var currentBillStatus = await TryGetUsageEntityAsync(current.UsageCurrentBillStatusEntityId, cancellationToken);
+        var alectraHuiEntities = await GetAlectraHuiEntitiesAsync(cancellationToken);
 
-        return new UsageLiveSnapshot(power, energy, cost, currentBill, currentBillDue, currentBillStatus, true, DateTimeOffset.UtcNow);
+        return new UsageLiveSnapshot(power, energy, cost, hourlyCost, currentBill, currentBillDue, currentBillStatus, alectraHuiEntities, true, DateTimeOffset.UtcNow);
+    }
+
+    public async Task<IReadOnlyList<UsageEntityReading>> GetAlectraHuiEntitiesAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return Array.Empty<UsageEntityReading>();
+        }
+
+        var entities = new List<UsageEntityReading>();
+        foreach (var entity in await GetStatesAsync(cancellationToken))
+        {
+            var entityId = GetEntityId(entity);
+            if (string.IsNullOrWhiteSpace(entityId)
+                || !entityId.Contains("alectra_hui", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            entities.Add(ParseUsageEntity(entity));
+        }
+
+        return entities
+            .OrderBy(entity => EntityDomainRank(entity.EntityId))
+            .ThenBy(entity => entity.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entity => entity.EntityId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     public async Task<UsageHistorySnapshot> GetUsageHistoryAsync(
@@ -389,6 +418,24 @@ public sealed class HomeAssistantClient
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         return document.RootElement.Clone().EnumerateArray();
+    }
+
+    private static int EntityDomainRank(string entityId)
+    {
+        if (entityId.StartsWith("sensor.", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        if (entityId.StartsWith("switch.", StringComparison.OrdinalIgnoreCase)
+            || entityId.StartsWith("select.", StringComparison.OrdinalIgnoreCase)
+            || entityId.StartsWith("number.", StringComparison.OrdinalIgnoreCase)
+            || entityId.StartsWith("button.", StringComparison.OrdinalIgnoreCase))
+        {
+            return 1;
+        }
+
+        return 2;
     }
 
     private async Task CallServiceAsync(string domain, string service, object payload, CancellationToken cancellationToken)

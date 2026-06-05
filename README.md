@@ -26,6 +26,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Comfort Budget so repeated safe corrections can rest before another adjustment.
 - Adds Natural Cadence so repeated safe corrections wait for a variable future slot based on wall-touch pressure.
 - Adds Comfort Pace so frequent wall changes can wait for a calmer weather, Home Assistant sensor, or clock-aligned climate slot before a safe correction.
+- Adds Comfort Envelope so small safe wall setpoint differences can rest briefly after repeated touches instead of being corrected immediately.
 - Adds Comfort Compromise so repeated wall choices can influence a temporary safe target that fades back naturally.
 - Adds Comfort Memory so repeated safe wall choices can teach a small time-of-day bias that expires automatically.
 - Adds Touch Intent so clear warmer wall-choice patterns can get extra safe grace instead of an obvious immediate fight-back.
@@ -67,6 +68,7 @@ HomeAssistant__OutdoorTemperatureEntityId=sensor.outdoor_temperature
 HomeAssistant__UsagePowerEntityId=sensor.alectra_hui_current_power
 HomeAssistant__UsageEnergyEntityId=sensor.alectra_hui_energy_today
 HomeAssistant__UsageCostEntityId=sensor.alectra_hui_cost_today
+HomeAssistant__UsageHourlyCostEntityId=sensor.alectra_hui_hourly_cost
 HomeAssistant__UsageCurrentBillEntityId=sensor.alectra_hui_current_bill
 HomeAssistant__UsageCurrentBillDueEntityId=sensor.alectra_hui_current_bill_due
 HomeAssistant__UsageCurrentBillStatusEntityId=sensor.alectra_hui_current_bill_status
@@ -76,9 +78,9 @@ HomeAssistant__Password=optional-bookkeeping-only
 
 If `HomeAssistant__WeatherEntityId` is blank, the app discovers the first `weather.*` entity. If no weather entity exists, `HomeAssistant__OutdoorTemperatureEntityId` can provide only outdoor temperature.
 
-The usage entities are optional Home Assistant sensor IDs. `UsagePowerEntityId` is shown as current live power, `UsageEnergyEntityId` is used for daily energy and default history, `UsageCostEntityId` is shown as current daily cost, and the bill entity IDs show the current bill amount, due date, and bill fetch status when available. Historical usage uses Home Assistant recorder history from `api/history/period`, so the entity must be recorded by Home Assistant.
+The usage entities are optional Home Assistant sensor IDs. `UsagePowerEntityId` is shown as current live power, `UsageEnergyEntityId` is used for daily energy and default history, `UsageHourlyCostEntityId` is the newest hourly interval cost, `UsageCostEntityId` is shown as current daily cost, and the bill entity IDs show the current bill amount, due date, and bill fetch status when available. Historical usage uses Home Assistant recorder history from `api/history/period`, so the entity must be recorded by Home Assistant.
 
-For Alectra readings, install the Alectra Hui Home Assistant integration or run the Windows publisher first. It creates `sensor.alectra_hui_current_power`, `sensor.alectra_hui_energy_today`, `sensor.alectra_hui_cost_today`, and the `sensor.alectra_hui_current_bill*` bill entities; AC Defender only reads those entities after Home Assistant has created them.
+For Alectra readings, install the Alectra Hui Home Assistant integration or run the Windows publisher first. It creates `sensor.alectra_hui_current_power`, `sensor.alectra_hui_energy_today`, `sensor.alectra_hui_hourly_cost`, `sensor.alectra_hui_cost_today`, and the `sensor.alectra_hui_current_bill*` bill entities; AC Defender only reads those entities after Home Assistant has created them. The Energy tab also lists every Home Assistant entity whose entity ID contains `alectra_hui`, including setting controls like the auto-switch, current-plan selector, and live-poll number.
 
 ## Defender Logic
 
@@ -104,18 +106,19 @@ Every cycle:
 18. Respect Comfort Budget when too many safe adjustments happened recently.
 19. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
 20. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
-21. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-22. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-23. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-24. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
-25. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-26. Optionally set fan saver mode when near target.
-27. Correct the thermostat setpoint when it does not match the defender decision.
-28. Update the real-time dashboard status.
+21. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
+22. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+23. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+24. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+25. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
+26. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+27. Optionally set fan saver mode when near target.
+28. Correct the thermostat setpoint when it does not match the defender decision.
+29. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
-Website command debounce is a separate two-minute guard around manual website actions such as target changes, force cooling, fan changes, refresh, and emergency controls. The first click is accepted, later clicks show the remaining wait instead of sending repeated Home Assistant calls. Emergency protocols bypass any active debounce so urgent action can still run, then start a fresh debounce window.
+Website command debounce is a separate two-minute guard around manual website actions such as target changes, defender toggles, settings saves, force cooling, fan changes, refresh, and thermostat-off controls. The first click is accepted, later clicks show the remaining wait instead of sending repeated Home Assistant calls or state writes. Emergency protocols bypass any active debounce so urgent action can still run, then start a fresh debounce window.
 
 Cooling failure watch reads only real Home Assistant data. It raises a repeated mega alert when the climate entity is in `cool`, room temperature is clearly above the setpoint, and `hvac_action` stays idle for several minutes. It also watches for the fallback case where `hvac_action` says cooling but the room does not drop over the retained sample window.
 
@@ -213,6 +216,11 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `NaturalChangePlannerSafetyBandCelsius`: extra room warmth allowed before Comfort Pace stops waiting.
 - `NaturalChangePlannerPreferWeatherSlots`: lets real weather updates or outdoor warming shorten the selected wait.
 - `NaturalChangePlannerPreferSensorBeat`: lines the selected wait up with the learned Home Assistant climate reading rhythm.
+- `ComfortEnvelopeEnabled`: lets small safe wall setpoint differences rest briefly after repeated touches.
+- `ComfortEnvelopeTriggerTouches`: recent wall touches needed before Comfort Envelope can hold.
+- `ComfortEnvelopeHoldMinutes`: how long the safe accepted range can rest.
+- `ComfortEnvelopeMaxOffsetCelsius`: maximum setpoint difference allowed inside the accepted range.
+- `ComfortEnvelopeSafetyBandCelsius`: extra room warmth allowed before Comfort Envelope stops waiting.
 - `ComfortCompromiseEnabled`: lets repeated wall choices temporarily influence the effective target while safe.
 - `ComfortCompromiseTriggerTouches`: recent wall touches needed before a compromise starts.
 - `ComfortCompromiseHoldMinutes`: how long the wall preference can rest before fading back.
@@ -292,6 +300,8 @@ Comfort Budget is a rolling command limiter for safe corrections. If too many au
 Natural Cadence picks a variable future slot for safe corrections after repeated wall touches. The slot gets later as touch pressure or recent command pressure rises, and it has a small jitter so safe nudges do not land at identical times. If the room gets too warm or upstairs comfort needs direct cooling, cadence clears and the real correction path continues.
 
 Comfort Pace is the high-frequency wall-change planner. When enough wall touches happen and the room is still inside its safety band, it chooses a calmer slot from touch pressure, recent command pressure, real outdoor weather movement, the learned Home Assistant sensor beat, and 5/10-minute local clock boundaries. It waits only for safe corrections; if the room gets too warm or direct cooling is needed, it clears immediately and the real correction path continues.
+
+Comfort Envelope accepts tiny safe wall preferences for a short time. When repeated wall touches keep the thermostat inside the configured setpoint range and the real room is still under the safety band, the defender observes instead of correcting that small difference immediately. The dashboard shows the accepted range, preferred wall setpoint, remaining hold, and status. If the room gets too warm, the setpoint moves outside the range, or direct cooling is needed, the envelope clears and the real correction path continues.
 
 Comfort Compromise is a temporary effective target. If wall changes repeat and the room is still inside the compromise safe band, the latest wall setpoint can influence the defender target up to the configured maximum offset. After the hold time, that influence fades back to the website target over the decay window. If the room gets too warm, the compromise clears immediately and normal warm-room defense resumes.
 
@@ -394,6 +404,7 @@ This stream emits the full defender snapshot every second.
 GET  /api/status
 GET  /api/settings
 GET  /api/usage/live
+GET  /api/usage/alectra-hui
 GET  /api/usage/history?hours=24
 GET  /api/status/stream
 POST /api/target/generate
@@ -417,7 +428,7 @@ dotnet run -- usage-history --hours 24
 dotnet run -- usage-history --entity sensor.alectra_hui_energy_today --from 2026-06-05T00:00:00 --to 2026-06-05T23:59:59 --json
 ```
 
-Each command reads `HomeAssistant__BaseUrl`, `HomeAssistant__AccessToken`, and the usage sensor settings from environment/config. You can override them with `--base-url`, `--token`, `--power`, `--energy`, `--cost`, and `--entity`.
+Each command reads `HomeAssistant__BaseUrl`, `HomeAssistant__AccessToken`, and the usage sensor settings from environment/config. You can override them with `--base-url`, `--token`, `--power`, `--energy`, `--hourly-cost`, `--cost`, and `--entity`.
 
 ## Docker
 

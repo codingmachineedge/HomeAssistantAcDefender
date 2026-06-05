@@ -6,6 +6,7 @@
 GET /api/status
 GET /api/settings
 GET /api/usage/live
+GET /api/usage/alectra-hui
 GET /api/usage/history
 GET /api/status/stream
 ```
@@ -26,6 +27,7 @@ The status snapshot includes:
 - `comfortBudget`: safe correction budget status, wait seconds, recent command count, max commands, and due time.
 - `naturalCadence`: variable safe-correction slot status, wait seconds, touch pressure, recent command count, and due time.
 - `naturalChangePlanner`: Comfort Pace status, wait seconds, touch pressure, recent touches, recent command count, selected reason, and due time.
+- `comfortEnvelope`: safe wall-preference range status, active flag, wait seconds, recent touch count, preferred wall setpoint, accepted min/max setpoints, and expiry time.
 - `comfortCompromise`: temporary blended target status, preferred wall setpoint, effective target, remaining seconds, and expiry time.
 - `comfortMemory`: learned time-window status, active flag, sample count, learned offset, and effective target.
 - `conflictQuiet`: repeated-touch stand-down status, remaining seconds, trigger touch count, comfort band, and expiry time.
@@ -45,11 +47,14 @@ The status snapshot includes:
 
 ```text
 GET /api/usage/live
+GET /api/usage/alectra-hui
 GET /api/usage/history?hours=24
 GET /api/usage/history?entityId=sensor.alectra_hui_energy_today&from=2026-06-05T00:00:00Z&to=2026-06-05T23:59:59Z
 ```
 
-`/api/usage/live` returns the configured Home Assistant usage sensors for current power, daily energy, daily cost, current bill, bill due date, and bill fetch status.
+`/api/usage/live` returns the configured Home Assistant usage sensors for current power, daily energy, hourly cost, daily cost, current bill, bill due date, bill fetch status, and an `alectraHuiEntities` list containing every Home Assistant entity whose entity ID contains `alectra_hui`.
+
+`/api/usage/alectra-hui` returns only the full Alectra Hui entity list used by the Energy dashboard.
 
 `/api/usage/history` reads Home Assistant recorder history for the configured energy entity by default. Pass `entityId` to inspect another sensor, `hours` for a window ending now, or explicit `from` and `to` timestamps.
 
@@ -62,7 +67,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, Comfort Pace, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Comfort Pace, Comfort Envelope, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 
@@ -83,7 +88,7 @@ All thermostat command endpoints act on the real configured Home Assistant clima
 { "protocol": "too-cold" }
 ```
 
-Supported protocols are `too-cold`, `someone-upset`, and `suspicion`. Normal website command endpoints are protected by a two-minute debounce and return `429` with the current snapshot when another command is attempted too quickly. Emergency commands bypass an active debounce, then start a fresh debounce window.
+Supported protocols are `too-cold`, `someone-upset`, and `suspicion`. Normal website command endpoints, including target changes, defender toggles, settings saves, thermostat refresh, exact target, boost, fan mode, and thermostat off, are protected by a two-minute debounce and return `429` with the current snapshot when another command is attempted too quickly. Emergency commands bypass an active debounce, then start a fresh debounce window.
 
 ## CLI Usage
 
@@ -92,4 +97,4 @@ dotnet run -- usage-live [--json]
 dotnet run -- usage-history [--entity sensor.name] [--hours 24] [--from timestamp] [--to timestamp] [--json]
 ```
 
-CLI commands use the same Home Assistant base URL, token, and usage sensor configuration as the web app. They can be overridden with `--base-url`, `--token`, `--power`, `--energy`, `--cost`, and `--entity`.
+CLI commands use the same Home Assistant base URL, token, and usage sensor configuration as the web app. They can be overridden with `--base-url`, `--token`, `--power`, `--energy`, `--hourly-cost`, `--cost`, and `--entity`.

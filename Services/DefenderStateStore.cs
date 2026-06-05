@@ -203,6 +203,15 @@ public sealed class DefenderStateStore
             {
                 ClearNaturalChangePlanner("Comfort Pace is off.");
             }
+            state.Settings.ComfortEnvelopeEnabled = request.ComfortEnvelopeEnabled;
+            state.Settings.ComfortEnvelopeTriggerTouches = Math.Clamp(request.ComfortEnvelopeTriggerTouches, 1, 20);
+            state.Settings.ComfortEnvelopeHoldMinutes = Math.Clamp(request.ComfortEnvelopeHoldMinutes, 0, 240);
+            state.Settings.ComfortEnvelopeMaxOffsetCelsius = Math.Round(Math.Clamp(request.ComfortEnvelopeMaxOffsetCelsius, 0.1, 5.0), 1);
+            state.Settings.ComfortEnvelopeSafetyBandCelsius = Math.Round(Math.Clamp(request.ComfortEnvelopeSafetyBandCelsius, 0.1, 5.0), 1);
+            if (!state.Settings.ComfortEnvelopeEnabled)
+            {
+                ClearComfortEnvelope("Comfort envelope is off.");
+            }
             state.Settings.ComfortCompromiseEnabled = request.ComfortCompromiseEnabled;
             state.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(request.ComfortCompromiseTriggerTouches, 1, 20);
             state.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(request.ComfortCompromiseHoldMinutes, 0, 240);
@@ -414,6 +423,7 @@ public sealed class DefenderStateStore
                 state.NaturalCadenceDueAt = null;
                 state.NaturalCadenceStatus = "Natural cadence used its quiet slot; watching for the next safe rhythm.";
                 ClearNaturalChangePlanner("Comfort Pace used its climate slot; watching for the next calm opening.");
+                ClearComfortEnvelope("Real comfort command sent; comfort envelope is watching again.");
                 ClearRepeatCommand("Repeat quiet used its slot; watching for identical follow-up commands.");
             }
 
@@ -1818,6 +1828,86 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool TryRespectComfortEnvelope(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassEnvelope,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.ComfortEnvelopeEnabled)
+            {
+                ClearComfortEnvelope("Comfort envelope is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            var triggerTouches = Math.Max(1, state.Settings.ComfortEnvelopeTriggerTouches);
+            var recentTouches = state.ExternalTouchTimes.Count;
+            if (recentTouches < triggerTouches)
+            {
+                ClearComfortEnvelope($"Comfort envelope is watching for repeated wall preferences ({recentTouches}/{triggerTouches}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassEnvelope || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearComfortEnvelope("Room comfort needs help now, so comfort envelope is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.ComfortEnvelopeSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearComfortEnvelope($"Room is above {allowedRoomTemperature:0.0} C, so comfort envelope lets correction continue.");
+                SaveState();
+                return false;
+            }
+
+            var maxOffset = Math.Max(0.1, state.Settings.ComfortEnvelopeMaxOffsetCelsius);
+            var minimumAllowed = Math.Round(expectedSetPointCelsius - maxOffset, 1);
+            var maximumAllowed = Math.Round(expectedSetPointCelsius + maxOffset, 1);
+            if (reading.SetPointCelsius < minimumAllowed - 0.05 || reading.SetPointCelsius > maximumAllowed + 0.05)
+            {
+                ClearComfortEnvelope($"Wall preference is outside the {minimumAllowed:0.0}-{maximumAllowed:0.0} C comfort envelope.");
+                SaveState();
+                return false;
+            }
+
+            var holdMinutes = Math.Max(0, state.Settings.ComfortEnvelopeHoldMinutes);
+            if (holdMinutes <= 0)
+            {
+                ClearComfortEnvelope("Comfort envelope hold is set to 0 min.");
+                SaveState();
+                return false;
+            }
+
+            if (state.ComfortEnvelopeUntil is not { } until || until <= now)
+            {
+                until = now.AddMinutes(holdMinutes);
+                state.ComfortEnvelopeUntil = until;
+            }
+
+            state.ComfortEnvelopePreferredSetPointCelsius = Math.Round(reading.SetPointCelsius, 1);
+            state.ComfortEnvelopeMinimumAllowedSetPointCelsius = minimumAllowed;
+            state.ComfortEnvelopeMaximumAllowedSetPointCelsius = maximumAllowed;
+            waitUntil = until;
+            message = $"Comfort envelope is observing {reading.SetPointCelsius:0.0} C until {until.ToLocalTime():HH:mm:ss}; it is inside the safe {minimumAllowed:0.0}-{maximumAllowed:0.0} C range.";
+            state.ComfortEnvelopeStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
     public bool TryRespectVisibilityGuard(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -2131,6 +2221,7 @@ public sealed class DefenderStateStore
                 && state.ComfortBudgetHoldUntil is null
                 && state.NaturalCadenceDueAt is null
                 && state.NaturalChangePlannerDueAt is null
+                && state.ComfortEnvelopeUntil is null
                 && state.RepeatCommandHoldUntil is null
                 && state.VisibilityGuardUntil is null
                 && state.SensorRhythmDueAt is null
@@ -2190,6 +2281,9 @@ public sealed class DefenderStateStore
             ClearNaturalChangePlanner(state.Settings.NaturalChangePlannerEnabled
                 ? "Comfort Pace is lined up; no natural slot needed."
                 : "Comfort Pace is off.");
+            ClearComfortEnvelope(state.Settings.ComfortEnvelopeEnabled
+                ? "Comfort envelope is lined up; no safe preference hold needed."
+                : "Comfort envelope is off.");
             ClearRepeatCommand(state.Settings.RepeatCommandGuardEnabled
                 ? "Repeat quiet is lined up; no identical command hold needed."
                 : "Repeat quiet is off.");
@@ -2223,6 +2317,7 @@ public sealed class DefenderStateStore
                     ResetCoolingDefenderStep();
                     ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
                     ClearNaturalChangePlanner($"Schedule {activeSchedule.Name} changed the target, so Comfort Pace reset.");
+                    ClearComfortEnvelope($"Schedule {activeSchedule.Name} changed the target, so comfort envelope reset.");
                     ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
                     ClearCoolingRunway($"Schedule {activeSchedule.Name} changed the target, so cooling runway reset.");
                     ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
@@ -2266,6 +2361,7 @@ public sealed class DefenderStateStore
                 state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
                 ClearNaturalCadence("Upstairs comfort changed the target, so natural cadence reset.");
                 ClearNaturalChangePlanner("Upstairs comfort changed the target, so Comfort Pace reset.");
+                ClearComfortEnvelope("Upstairs comfort changed the target, so comfort envelope reset.");
                 ClearRepeatCommand("Upstairs comfort changed the target, so repeat quiet reset.");
                 ClearCoolingRunway("Upstairs comfort changed the target, so cooling runway reset.");
                 ClearComfortCompromise("Upstairs comfort changed the target, so comfort compromise reset.");
@@ -2529,6 +2625,13 @@ public sealed class DefenderStateStore
         state.NaturalChangePlannerStatus = state.Settings.NaturalChangePlannerEnabled
             ? $"Comfort Pace saw touch pressure {touchScore}/100; frequent wall changes will use a calmer climate slot if the room stays safe."
             : "Comfort Pace is off.";
+        state.ComfortEnvelopeUntil = null;
+        state.ComfortEnvelopePreferredSetPointCelsius = Math.Round(reading.SetPointCelsius, 1);
+        state.ComfortEnvelopeMinimumAllowedSetPointCelsius = null;
+        state.ComfortEnvelopeMaximumAllowedSetPointCelsius = null;
+        state.ComfortEnvelopeStatus = state.Settings.ComfortEnvelopeEnabled
+            ? $"Wall preference {reading.SetPointCelsius:0.0} C logged; comfort envelope can observe small safe differences."
+            : "Comfort envelope is off.";
         state.TouchSignatureStatus = state.Settings.TouchSignatureEnabled
             ? "Manual wall step logged; touch signature will shape safe nudges after enough samples."
             : "Touch signature is off.";
@@ -2662,6 +2765,7 @@ public sealed class DefenderStateStore
         ClearComfortBudget("Cooler intent fast lane is active, so comfort budget is stepping aside.");
         ClearNaturalCadence("Cooler intent fast lane is active, so natural cadence is stepping aside.");
         ClearNaturalChangePlanner("Cooler intent fast lane is active, so Comfort Pace is stepping aside.");
+        ClearComfortEnvelope("Cooler intent fast lane is active, so comfort envelope is stepping aside.");
         ClearVisibilityGuard("Cooler intent fast lane is active, so visibility guard is stepping aside.");
         ClearRepeatCommand("Cooler intent fast lane is active, so repeat quiet is stepping aside.");
         ClearCoolingRunway("Cooler intent fast lane is active, so cooling runway is stepping aside.");
@@ -3808,6 +3912,10 @@ public sealed class DefenderStateStore
             480);
         saved.Settings.NaturalChangePlannerJitterMinutes = Math.Clamp(saved.Settings.NaturalChangePlannerJitterMinutes, 0, 120);
         saved.Settings.NaturalChangePlannerSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalChangePlannerSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.ComfortEnvelopeTriggerTouches = Math.Clamp(saved.Settings.ComfortEnvelopeTriggerTouches, 1, 20);
+        saved.Settings.ComfortEnvelopeHoldMinutes = Math.Clamp(saved.Settings.ComfortEnvelopeHoldMinutes, 0, 240);
+        saved.Settings.ComfortEnvelopeMaxOffsetCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortEnvelopeMaxOffsetCelsius, 0.1, 5.0), 1);
+        saved.Settings.ComfortEnvelopeSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortEnvelopeSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(saved.Settings.ComfortCompromiseTriggerTouches, 1, 20);
         saved.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(saved.Settings.ComfortCompromiseHoldMinutes, 0, 240);
         saved.Settings.ComfortCompromiseDecayMinutes = Math.Clamp(saved.Settings.ComfortCompromiseDecayMinutes, 1, 240);
@@ -3923,6 +4031,25 @@ public sealed class DefenderStateStore
             saved.NaturalChangePlannerDueAt = null;
             saved.NaturalChangePlannerReason = "watching";
             saved.NaturalChangePlannerStatus = "Comfort Pace is watching.";
+        }
+        saved.ComfortEnvelopeStatus = string.IsNullOrWhiteSpace(saved.ComfortEnvelopeStatus)
+            ? "Comfort envelope is watching."
+            : saved.ComfortEnvelopeStatus;
+        if (!saved.Settings.ComfortEnvelopeEnabled)
+        {
+            saved.ComfortEnvelopeUntil = null;
+            saved.ComfortEnvelopePreferredSetPointCelsius = null;
+            saved.ComfortEnvelopeMinimumAllowedSetPointCelsius = null;
+            saved.ComfortEnvelopeMaximumAllowedSetPointCelsius = null;
+            saved.ComfortEnvelopeStatus = "Comfort envelope is off.";
+        }
+        else if (saved.ComfortEnvelopeUntil is { } envelopeUntil && envelopeUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.ComfortEnvelopeUntil = null;
+            saved.ComfortEnvelopePreferredSetPointCelsius = null;
+            saved.ComfortEnvelopeMinimumAllowedSetPointCelsius = null;
+            saved.ComfortEnvelopeMaximumAllowedSetPointCelsius = null;
+            saved.ComfortEnvelopeStatus = "Comfort envelope is watching.";
         }
         saved.ComfortCompromiseStatus = string.IsNullOrWhiteSpace(saved.ComfortCompromiseStatus)
             ? "Comfort compromise is watching for repeated wall changes."
@@ -4139,6 +4266,13 @@ public sealed class DefenderStateStore
         {
             ClearNaturalChangePlanner("Comfort Pace slot arrived; watching for the next calm opening.");
         }
+        var comfortEnvelopeSeconds = state.ComfortEnvelopeUntil is { } envelopeUntil && envelopeUntil > now
+            ? (int)Math.Ceiling((envelopeUntil - now).TotalSeconds)
+            : 0;
+        if (comfortEnvelopeSeconds == 0 && state.ComfortEnvelopeUntil is not null)
+        {
+            ClearComfortEnvelope("Comfort envelope ended; watching for the next safe wall preference.");
+        }
         PruneVisibilityNoticeTimes(now);
         var visibilityGuardSeconds = state.VisibilityGuardUntil is { } visibilityUntil && visibilityUntil > now
             ? (int)Math.Ceiling((visibilityUntil - now).TotalSeconds)
@@ -4161,6 +4295,28 @@ public sealed class DefenderStateStore
                 currentThermostat.FanMode,
                 currentThermostat.AvailableFanModes)
             : null;
+        double? comfortEnvelopeMinimum = null;
+        double? comfortEnvelopeMaximum = null;
+        if (state.Settings.ComfortEnvelopeEnabled
+            && state.ComfortEnvelopePreferredSetPointCelsius is not null
+            && currentReading is not null)
+        {
+            if (state.ComfortEnvelopeMinimumAllowedSetPointCelsius is { } minimum
+                && state.ComfortEnvelopeMaximumAllowedSetPointCelsius is { } maximum)
+            {
+                comfortEnvelopeMinimum = minimum;
+                comfortEnvelopeMaximum = maximum;
+            }
+            else
+            {
+                var envelopeTarget = state.ComfortCompromiseEffectiveTargetCelsius
+                    ?? state.ComfortMemoryEffectiveTargetCelsius
+                    ?? state.TargetTemperatureCelsius;
+                var maxOffset = Math.Max(0.1, state.Settings.ComfortEnvelopeMaxOffsetCelsius);
+                comfortEnvelopeMinimum = Math.Round(envelopeTarget - maxOffset, 1);
+                comfortEnvelopeMaximum = Math.Round(envelopeTarget + maxOffset, 1);
+            }
+        }
         var naturalWalkbackActive = state.Settings.NaturalWalkbackEnabled
             && state.ExternalTouchTimes.Count >= Math.Max(1, state.Settings.NaturalWalkbackTriggerTouches)
             && currentReading is { } walkbackReading
@@ -4303,6 +4459,18 @@ public sealed class DefenderStateStore
                     ? "Comfort Pace is watching."
                     : state.NaturalChangePlannerStatus,
                 naturalChangePlannerSeconds > 0 ? state.NaturalChangePlannerDueAt : null),
+            new ComfortEnvelopeSnapshot(
+                state.Settings.ComfortEnvelopeEnabled,
+                comfortEnvelopeSeconds > 0,
+                comfortEnvelopeSeconds,
+                state.ExternalTouchTimes.Count,
+                state.ComfortEnvelopePreferredSetPointCelsius,
+                comfortEnvelopeMinimum,
+                comfortEnvelopeMaximum,
+                string.IsNullOrWhiteSpace(state.ComfortEnvelopeStatus)
+                    ? "Comfort envelope is watching."
+                    : state.ComfortEnvelopeStatus,
+                comfortEnvelopeSeconds > 0 ? state.ComfortEnvelopeUntil : null),
             new ComfortCompromiseSnapshot(
                 state.Settings.ComfortCompromiseEnabled,
                 comfortCompromiseSeconds > 0,
@@ -4497,6 +4665,7 @@ public sealed class DefenderStateStore
         ClearComfortBudget("Comfort budget is watching.");
         ClearNaturalCadence("Natural cadence is watching.");
         ClearNaturalChangePlanner("Comfort Pace is watching.");
+        ClearComfortEnvelope("Comfort envelope is watching.");
         ClearRepeatCommand("Repeat quiet is watching.");
         ClearCoolingRunway("Cooling runway is watching.");
         ClearSensorRhythm("Sensor rhythm is watching.");
@@ -4562,6 +4731,15 @@ public sealed class DefenderStateStore
         state.NaturalChangePlannerDueAt = null;
         state.NaturalChangePlannerReason = "watching";
         state.NaturalChangePlannerStatus = status;
+    }
+
+    private void ClearComfortEnvelope(string status)
+    {
+        state.ComfortEnvelopeUntil = null;
+        state.ComfortEnvelopePreferredSetPointCelsius = null;
+        state.ComfortEnvelopeMinimumAllowedSetPointCelsius = null;
+        state.ComfortEnvelopeMaximumAllowedSetPointCelsius = null;
+        state.ComfortEnvelopeStatus = status;
     }
 
     private void ClearRepeatCommand(string status)
@@ -4818,6 +4996,11 @@ public sealed class DefenderStateStore
             NaturalChangePlannerSafetyBandCelsius = settings.NaturalChangePlannerSafetyBandCelsius,
             NaturalChangePlannerPreferWeatherSlots = settings.NaturalChangePlannerPreferWeatherSlots,
             NaturalChangePlannerPreferSensorBeat = settings.NaturalChangePlannerPreferSensorBeat,
+            ComfortEnvelopeEnabled = settings.ComfortEnvelopeEnabled,
+            ComfortEnvelopeTriggerTouches = settings.ComfortEnvelopeTriggerTouches,
+            ComfortEnvelopeHoldMinutes = settings.ComfortEnvelopeHoldMinutes,
+            ComfortEnvelopeMaxOffsetCelsius = settings.ComfortEnvelopeMaxOffsetCelsius,
+            ComfortEnvelopeSafetyBandCelsius = settings.ComfortEnvelopeSafetyBandCelsius,
             ComfortCompromiseEnabled = settings.ComfortCompromiseEnabled,
             ComfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches,
             ComfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes,
@@ -5022,6 +5205,16 @@ public sealed class DefenderStateStore
         public string NaturalChangePlannerReason { get; set; } = "watching";
 
         public string NaturalChangePlannerStatus { get; set; } = "Comfort Pace is watching.";
+
+        public DateTimeOffset? ComfortEnvelopeUntil { get; set; }
+
+        public double? ComfortEnvelopePreferredSetPointCelsius { get; set; }
+
+        public double? ComfortEnvelopeMinimumAllowedSetPointCelsius { get; set; }
+
+        public double? ComfortEnvelopeMaximumAllowedSetPointCelsius { get; set; }
+
+        public string ComfortEnvelopeStatus { get; set; } = "Comfort envelope is watching.";
 
         public DateTimeOffset? ComfortCompromiseStartedAt { get; set; }
 

@@ -26,6 +26,7 @@ public sealed record DefenderSnapshot(
     ComfortBudgetSnapshot ComfortBudget,
     NaturalCadenceSnapshot NaturalCadence,
     NaturalChangePlannerSnapshot NaturalChangePlanner,
+    ComfortEnvelopeSnapshot ComfortEnvelope,
     ComfortCompromiseSnapshot ComfortCompromise,
     ComfortMemorySnapshot ComfortMemory,
     ConflictQuietSnapshot ConflictQuiet,
@@ -195,6 +196,17 @@ public sealed record NaturalChangePlannerSnapshot(
     string PlannedReason,
     string Status,
     DateTimeOffset? DueAt);
+
+public sealed record ComfortEnvelopeSnapshot(
+    bool Enabled,
+    bool Active,
+    int SecondsRemaining,
+    int RecentTouchCount,
+    double? PreferredSetPointCelsius,
+    double? MinimumAllowedSetPointCelsius,
+    double? MaximumAllowedSetPointCelsius,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record ComfortCompromiseSnapshot(
     bool Enabled,
@@ -499,6 +511,16 @@ public sealed class DefenderSettings
     public bool NaturalChangePlannerPreferWeatherSlots { get; set; } = true;
 
     public bool NaturalChangePlannerPreferSensorBeat { get; set; } = true;
+
+    public bool ComfortEnvelopeEnabled { get; set; } = true;
+
+    public int ComfortEnvelopeTriggerTouches { get; set; } = 2;
+
+    public int ComfortEnvelopeHoldMinutes { get; set; } = 18;
+
+    public double ComfortEnvelopeMaxOffsetCelsius { get; set; } = 0.8;
+
+    public double ComfortEnvelopeSafetyBandCelsius { get; set; } = 1.0;
 
     public bool ComfortCompromiseEnabled { get; set; } = true;
 

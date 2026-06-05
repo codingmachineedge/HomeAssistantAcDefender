@@ -27,13 +27,15 @@ Every cycle performs these steps:
 23. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
 24. Respect Comfort Budget when too many safe adjustments happened recently.
 25. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-26. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-27. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-28. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-29. Apply fan energy saver when enabled and near target.
-30. Respect Repeat Quiet if the exact command about to be sent matches the last defender setpoint.
-31. Correct the real thermostat setpoint when needed.
-32. Update the next-action status label.
+26. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
+27. Respect Comfort Envelope when a small repeated wall setpoint is still inside the safe accepted range.
+28. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+29. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+30. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+31. Apply fan energy saver when enabled and near target.
+32. Respect Repeat Quiet if the exact command about to be sent matches the last defender setpoint.
+33. Correct the real thermostat setpoint when needed.
+34. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -94,6 +96,8 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Uses Routine Timing so safe corrections land on normal-looking comfort-check intervals.
 - Uses Comfort Budget so repeated safe corrections can rest before another adjustment.
 - Uses Natural Cadence so repeated safe corrections wait for a variable future slot based on touch pressure and recent command pressure.
+- Uses Comfort Pace so frequent wall touches can wait for a calmer weather, sensor, or clock-aligned climate slot.
+- Uses Comfort Envelope so tiny safe wall preferences can rest briefly inside a displayed accepted range.
 - Uses Comfort Memory to remember a tiny expiring time-of-day preference after repeated safe wall choices.
 - Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
 - Uses Touch Intent to classify recent wall choices and extend safe grace only when warmer intent is clear.
@@ -189,6 +193,28 @@ targetTemperature + naturalCadenceSafetyBandCelsius
 
 If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the cadence safe band, cadence clears immediately and the real correction path continues. It never changes the warm-room defender rule: active cooling still starts one degree below current room temperature and continues toward the website target.
 
+## Comfort Pace
+
+Comfort Pace is a high-frequency wall-change planner. When enough recent wall touches exist, it selects a future climate slot from touch pressure, recent automatic command pressure, real weather movement, learned Home Assistant sensor rhythm, and local 5/10-minute clock boundaries.
+
+It only waits while the real room temperature is inside:
+
+```text
+targetTemperature + naturalChangePlannerSafetyBandCelsius
+```
+
+If the room gets too warm, upstairs heat bypasses quiet timing, or direct comfort correction is needed, Comfort Pace clears immediately and the real correction path continues.
+
+## Comfort Envelope
+
+Comfort Envelope observes a small repeated wall setpoint difference instead of correcting it immediately. It starts only when recent wall touches reach the trigger count, the real room is still safe, and the current wall setpoint is inside:
+
+```text
+expectedSetPoint +/- comfortEnvelopeMaxOffsetCelsius
+```
+
+The accepted range is persisted and shown on the dashboard with the preferred wall setpoint and remaining hold time. If the wall setpoint moves outside the range, the room rises above `targetTemperature + comfortEnvelopeSafetyBandCelsius`, upstairs heat bypasses quiet timing, or direct comfort correction is needed, the envelope clears and the real correction path continues.
+
 ## Comfort Compromise
 
 Comfort Compromise creates a temporary effective target after repeated wall changes. It starts only when the touch trigger is reached and the real room temperature is still inside:
@@ -243,7 +269,7 @@ Manual Comfort Grace can extend by `touchIntentExtraGraceMinutes`. Cooler and mi
 
 Cooler Intent Fast Lane watches the same real external wall-touch audit log, but only reacts to a clear cooler pattern. It starts when enough recent wall changes move the setpoint cooler by at least the configured cooler-pattern threshold.
 
-While active, it clears safe quiet waits such as cooldown, Conflict Quiet, Manual Comfort Grace, Visibility Guard, Routine Timing, Comfort Budget, Natural Cadence, Repeat Quiet, Sensor Rhythm, Cooling Runway, Room Trend Guard, and Thermal Momentum. That lets the normal real correction path move sooner when someone is probably hot.
+While active, it clears safe quiet waits such as cooldown, Conflict Quiet, Manual Comfort Grace, Visibility Guard, Routine Timing, Comfort Budget, Natural Cadence, Comfort Pace, Comfort Envelope, Repeat Quiet, Sensor Rhythm, Cooling Runway, Room Trend Guard, and Thermal Momentum. That lets the normal real correction path move sooner when someone is probably hot.
 
 It only bypasses quiet timing while:
 

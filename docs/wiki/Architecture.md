@@ -19,6 +19,8 @@ The application is one ASP.NET Core process with two responsibilities:
 
 The app records setpoints it commands itself and treats matching Home Assistant updates inside the command grace window as app-originated. Other setpoint changes are logged as external thermostat touches.
 
+Website command debounce is also stored in `DefenderStateStore`. Dashboard handlers and HTTP POST endpoints call the same gate before accepting manual target changes, defender toggles, settings saves, thermostat refresh, exact target, boost, fan mode, or thermostat-off commands. Emergency protocols intentionally bypass an active debounce, then start a new two-minute debounce window.
+
 ## Comfort Sync
 
 Comfort Sync is implemented inside `DefenderStateStore` and consumed by `AcDefenderService`. The worker still talks only to the real Home Assistant climate entity. Comfort Sync decides whether to wait, whether to hold briefly, and which real setpoint command `HomeAssistantClient` sends. Warm-room corrections are anchored to current room temperature, so a raised wall setpoint does not become the starting point for the next cooling command.
@@ -36,6 +38,8 @@ Comfort Budget is stored in `DefenderStateStore` as recent real setpoint command
 Natural Cadence is a persisted timing slot in `DefenderStateStore`. `AcDefenderService` checks it after routine timing and comfort budget, then waits only for safe corrections. Its delay is based on recent wall-touch pressure and recent automatic command pressure, and it clears when direct comfort correction is needed.
 
 Comfort Pace is a higher-pressure timing slot in `DefenderStateStore` for frequent wall changes. `AcDefenderService` checks it before routine timing and other late safe-correction holds. It chooses a persisted due time from wall-touch pressure, recent command pressure, real weather movement, the learned Home Assistant sensor rhythm, and local 5/10-minute clock boundaries. It only delays safe corrections and clears immediately when direct comfort correction is needed.
+
+Comfort Envelope is a persisted safe wall-preference hold in `DefenderStateStore`. `AcDefenderService` checks it before room trend and thermal momentum once a correction is needed. It stores the exact accepted setpoint range used for the decision so the dashboard shows the same min/max values the worker enforced. It only observes small setpoint differences while the room remains safe and clears immediately when the room is too warm, the wall setpoint leaves the range, or direct comfort correction is needed.
 
 Comfort Compromise is evaluated inside `CalculateExpectedSetPoint`. It can temporarily adjust the effective target from repeated wall choices, but only while the real room temperature remains inside its safety band. Target changes from the website, schedule, or upstairs comfort clear the compromise.
 

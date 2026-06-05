@@ -137,6 +137,12 @@ public sealed class AcDefenderService
             if (changed)
             {
                 var now = DateTimeOffset.UtcNow;
+                if (stateStore.TryRespectComfortEnvelope(reading, expectedSetPoint, bypassQuietTiming, now, out var envelopeUntil, out var envelopeMessage))
+                {
+                    stateStore.SetNextAction(envelopeMessage, envelopeUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectRoomTrendGuard(reading, expectedSetPoint, bypassQuietTiming, now, out var trendUntil, out var trendMessage))
                 {
                     stateStore.SetNextAction(trendMessage, trendUntil);

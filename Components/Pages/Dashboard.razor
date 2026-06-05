@@ -280,6 +280,38 @@
                     }
                 </MudGrid>
 
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="wrap-gap mt-3">
+                    <div>
+                        <MudText Typo="Typo.overline">Alectra Hui Entities</MudText>
+                        <MudText Typo="Typo.body2" Class="helper-text">All Home Assistant entities whose entity ID contains alectra_hui.</MudText>
+                    </div>
+                    <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined">@AlectraHuiEntityCount</MudChip>
+                </MudStack>
+                <MudStack Spacing="1" Class="scroll-list compact-list mt-2">
+                    @if (AlectraHuiEntities.Any())
+                    {
+                        @foreach (var entity in AlectraHuiEntities)
+                        {
+                            <div class="sensor-row">
+                                <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween" Class="wrap-gap">
+                                    <div>
+                                        <MudText Typo="Typo.subtitle2">@entity.Name</MudText>
+                                        <MudText Typo="Typo.caption">@entity.EntityId</MudText>
+                                    </div>
+                                    <div class="text-right">
+                                        <MudText Typo="Typo.subtitle2">@UsageValue(entity)</MudText>
+                                        <MudText Typo="Typo.caption">@ShortTime(entity.LastChanged)</MudText>
+                                    </div>
+                                </MudStack>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">No Alectra Hui entities found in Home Assistant yet.</MudText>
+                    }
+                </MudStack>
+
                 @if (!string.IsNullOrWhiteSpace(UsageError))
                 {
                     <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">@UsageError</MudAlert>
@@ -517,7 +549,7 @@
     private static readonly string[] WallTouchDefenseMetricLabels =
     [
         "Touch count", "Touch pressure", "Walk step", "Touch step", "Touch samples", "Visibility wait", "Visibility pressure",
-        "Routine wait", "Routine rhythm", "Budget wait", "Budget used", "Cadence wait", "Cadence pressure", "Pace wait", "Pace pressure", "Pace reason", "Blend target",
+        "Routine wait", "Routine rhythm", "Budget wait", "Budget used", "Cadence wait", "Cadence pressure", "Pace wait", "Pace pressure", "Pace reason", "Envelope wait", "Envelope range", "Envelope setpoint", "Blend target",
         "Blend wait", "Memory bias", "Memory target", "Stand-down", "Wall settle", "Settle touches", "Wall grace",
         "Touch intent", "Intent grace", "Cooler fast lane", "Cooler net"
     ];
@@ -535,7 +567,7 @@
 
     private static readonly string[] WallTouchDefenseStatusNames =
     [
-        "Natural walkback", "Touch signature", "Visibility guard", "Routine timing", "Comfort budget", "Natural cadence", "Comfort Pace",
+        "Natural walkback", "Touch signature", "Visibility guard", "Routine timing", "Comfort budget", "Natural cadence", "Comfort Pace", "Comfort envelope",
         "Comfort compromise", "Comfort memory", "Conflict quiet", "Wall settling", "Manual grace", "Touch intent", "Cooler intent"
     ];
 
@@ -578,6 +610,12 @@
     private string NaturalChangePlannerWaitText => Snapshot?.NaturalChangePlanner.Waiting == true ? $"{Snapshot.NaturalChangePlanner.SecondsRemaining}s" : Snapshot?.NaturalChangePlanner.Enabled == true ? "Ready" : "Off";
     private string NaturalChangePlannerPressureText => Snapshot?.NaturalChangePlanner.Enabled == true ? $"{Snapshot.NaturalChangePlanner.TouchPressure}/100" : "Off";
     private string NaturalChangePlannerReasonText => Snapshot?.NaturalChangePlanner.Enabled == true ? Snapshot.NaturalChangePlanner.PlannedReason : "Off";
+    private string ComfortEnvelopeText => Snapshot?.ComfortEnvelope.Status ?? "Comfort envelope is watching.";
+    private string ComfortEnvelopeWaitText => Snapshot?.ComfortEnvelope.Active == true ? $"{Snapshot.ComfortEnvelope.SecondsRemaining}s" : Snapshot?.ComfortEnvelope.Enabled == true ? "Ready" : "Off";
+    private string ComfortEnvelopeRangeText => Snapshot?.ComfortEnvelope.MinimumAllowedSetPointCelsius is { } min && Snapshot.ComfortEnvelope.MaximumAllowedSetPointCelsius is { } max
+        ? $"{min:0.0}-{max:0.0} C"
+        : Snapshot?.ComfortEnvelope.Enabled == true ? "--" : "Off";
+    private string ComfortEnvelopeSetPointText => Snapshot?.ComfortEnvelope.PreferredSetPointCelsius is { } setPoint ? $"{setPoint:0.0} C" : Snapshot?.ComfortEnvelope.Enabled == true ? "--" : "Off";
     private string ComfortCompromiseText => Snapshot?.ComfortCompromise.Status ?? "Comfort compromise is watching.";
     private string ComfortCompromiseTargetText => Snapshot?.ComfortCompromise.EffectiveTargetCelsius is { } target ? $"{target:0.0} C" : "Ready";
     private string ComfortCompromiseWaitText => Snapshot?.ComfortCompromise.Active == true ? $"{Snapshot.ComfortCompromise.SecondsRemaining}s" : "Ready";
@@ -673,6 +711,9 @@
     private Severity NaturalChangePlannerSeverity => Snapshot?.NaturalChangePlanner.Waiting == true
         ? Severity.Warning
         : Snapshot?.NaturalChangePlanner.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity ComfortEnvelopeSeverity => Snapshot?.ComfortEnvelope.Active == true
+        ? Severity.Warning
+        : Snapshot?.ComfortEnvelope.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity ComfortCompromiseSeverity => Snapshot?.ComfortCompromise.Active == true
         ? Severity.Warning
         : Snapshot?.ComfortCompromise.Enabled == true ? Severity.Info : Severity.Normal;
@@ -798,6 +839,9 @@
         new("Pace wait", NaturalChangePlannerWaitText, "Calm climate slot after frequent wall changes."),
         new("Pace pressure", NaturalChangePlannerPressureText, "How strongly wall changes affect Comfort Pace."),
         new("Pace reason", NaturalChangePlannerReasonText, "Why the next calm slot was picked."),
+        new("Envelope wait", ComfortEnvelopeWaitText, "How long a small safe wall preference can rest."),
+        new("Envelope range", ComfortEnvelopeRangeText, "Setpoint range accepted while the room is safe."),
+        new("Envelope setpoint", ComfortEnvelopeSetPointText, "Latest wall setpoint being observed inside the safe range."),
         new("Blend target", ComfortCompromiseTargetText, "Temporary target while a wall choice fades back."),
         new("Blend wait", ComfortCompromiseWaitText, "How long the temporary blend remains."),
         new("Memory bias", ComfortMemoryOffsetText, "Small learned time-of-day adjustment."),
@@ -851,6 +895,7 @@
     [
         new("Power now", UsageValue(Usage?.Power), UsageHelp(Usage?.Power)),
         new("Energy today", UsageValue(Usage?.Energy), UsageHelp(Usage?.Energy)),
+        new("Hourly cost", UsageValue(Usage?.HourlyCost), UsageHelp(Usage?.HourlyCost)),
         new("Cost today", UsageValue(Usage?.Cost), UsageHelp(Usage?.Cost)),
         new("Current bill", UsageValue(Usage?.CurrentBill), UsageHelp(Usage?.CurrentBill) ?? UsageValue(Usage?.CurrentBillStatus)),
         new("Bill due", UsageValue(Usage?.CurrentBillDue), UsageHelp(Usage?.CurrentBillDue)),
@@ -862,6 +907,11 @@
         new("History updated", ShortTime(UsageHistoryUpdatedAt), "When AC Defender last checked recorder history.")
     ];
 
+    private IReadOnlyList<UsageEntityReading> AlectraHuiEntities =>
+        Usage?.AlectraHuiEntities ?? Array.Empty<UsageEntityReading>();
+
+    private string AlectraHuiEntityCount => $"{AlectraHuiEntities.Count} entities";
+
     private IReadOnlyList<StatusItem> PriorityStatuses =>
     [
         new("Next action", NextActionText, "This is the next thing the defender expects to do.", Severity.Info),
@@ -869,6 +919,7 @@
         new("Emergency", EmergencyText, "This says if an emergency quiet protocol is standing down corrections.", EmergencySeverity),
         new("Natural recovery", NaturalRecoveryText, "This says if comfort sync is waiting, nudging, or skipping quiet waits because it is too warm.", NaturalSeverity),
         new("Comfort Pace", NaturalChangePlannerText, "This says if frequent wall changes are being paced into a calmer climate slot.", NaturalChangePlannerSeverity),
+        new("Comfort envelope", ComfortEnvelopeText, "This says if a small safe wall preference is being left alone briefly.", ComfortEnvelopeSeverity),
         new("Cool mode restore", CoolModeRestoreText, "This says if cool mode is waiting before it comes back.", CoolModeRestoreSeverity),
         new("Upstairs comfort", Snapshot?.Comfort.Status ?? "Waiting for upstairs readings", "This says if upstairs is making the defender help sooner.", Snapshot?.Comfort.UpstairsTooHot == true ? Severity.Error : Severity.Info),
         new("Last command", LastCommandText, "This shows the last command the website sent to Home Assistant.", Severity.Info)
@@ -884,6 +935,7 @@
         new("Comfort budget", ComfortBudgetText, "This says if repeated safe adjustments are resting for a while.", ComfortBudgetSeverity),
         new("Natural cadence", NaturalCadenceText, "This says if safe nudges are waiting for a quieter natural time slot.", NaturalCadenceSeverity),
         new("Comfort Pace", NaturalChangePlannerText, "This says if frequent wall changes are waiting for a calmer weather, sensor, or routine slot.", NaturalChangePlannerSeverity),
+        new("Comfort envelope", ComfortEnvelopeText, "This says if a small safe wall preference is inside the accepted range and being observed.", ComfortEnvelopeSeverity),
         new("Comfort compromise", ComfortCompromiseText, "This says if a wall choice is being blended back gently while the room is safe.", ComfortCompromiseSeverity),
         new("Comfort memory", ComfortMemoryText, "This says if this time of day has a small learned comfort preference.", ComfortMemorySeverity),
         new("Cool mode restore", CoolModeRestoreText, "This says if cool mode is waiting before it comes back.", CoolModeRestoreSeverity),
@@ -1105,6 +1157,11 @@
 
     private async Task SetDefenderEnabled(bool enabled)
     {
+        if (!TryBeginWebsiteCommand(enabled ? "turn defender on" : "pause defender"))
+        {
+            return;
+        }
+
         Snapshot = StateStore.SetDefenderEnabled(enabled);
         Snackbar.Add(enabled ? "Defender turned on." : "Defender paused.", Severity.Info);
 
