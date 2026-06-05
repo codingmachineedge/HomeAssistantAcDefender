@@ -191,6 +191,16 @@ public sealed class DefenderStateStore
             state.Settings.TouchIntentNetWarmThresholdCelsius = Math.Round(Math.Clamp(request.TouchIntentNetWarmThresholdCelsius, 0.1, 5.0), 1);
             state.Settings.TouchIntentExtraGraceMinutes = Math.Clamp(request.TouchIntentExtraGraceMinutes, 0, 240);
             state.Settings.TouchIntentSafetyBandCelsius = Math.Round(Math.Clamp(request.TouchIntentSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.CoolerIntentFastLaneEnabled = request.CoolerIntentFastLaneEnabled;
+            state.Settings.CoolerIntentMinimumTouches = Math.Clamp(request.CoolerIntentMinimumTouches, 1, 20);
+            state.Settings.CoolerIntentWindowMinutes = Math.Clamp(request.CoolerIntentWindowMinutes, 1, 1440);
+            state.Settings.CoolerIntentHoldMinutes = Math.Clamp(request.CoolerIntentHoldMinutes, 0, 240);
+            state.Settings.CoolerIntentNetCoolThresholdCelsius = Math.Round(Math.Clamp(request.CoolerIntentNetCoolThresholdCelsius, 0.1, 5.0), 1);
+            state.Settings.CoolerIntentSafetyBandCelsius = Math.Round(Math.Clamp(request.CoolerIntentSafetyBandCelsius, 0.1, 5.0), 1);
+            if (!state.Settings.CoolerIntentFastLaneEnabled)
+            {
+                ClearCoolerIntent("Cooler intent fast lane is off.");
+            }
             state.Settings.SetpointEchoGuardEnabled = request.SetpointEchoGuardEnabled;
             state.Settings.SetpointEchoGraceSeconds = Math.Clamp(request.SetpointEchoGraceSeconds, 5, 300);
             state.Settings.SetpointEchoSafetyBandCelsius = Math.Round(Math.Clamp(request.SetpointEchoSafetyBandCelsius, 0.1, 5.0), 1);
@@ -590,6 +600,47 @@ public sealed class DefenderStateStore
             var intentText = warmerIntentActive ? " with warmer touch intent" : string.Empty;
             message = $"Room is still comfortable after wall change{intentText}; holding until {graceUntil.ToLocalTime():HH:mm:ss} unless room rises above {allowedRoomTemperature:0.0} C.";
             state.ManualComfortGraceStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
+    public bool ShouldBypassQuietTimingForCoolerIntent(ThermostatReading reading, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (!state.Settings.CoolerIntentFastLaneEnabled)
+            {
+                ClearCoolerIntent("Cooler intent fast lane is off.");
+                SaveState();
+                return false;
+            }
+
+            if (state.CoolerIntentUntil is not { } until || until <= now)
+            {
+                ClearCoolerIntent("Cooler intent fast lane is watching for repeated cooler wall touches.");
+                SaveState();
+                return false;
+            }
+
+            if (reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius)
+            {
+                ClearCoolerIntent("Room reached the website target, so cooler intent fast lane is resting.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.CoolerIntentSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature && !ShouldBypassNaturalRecovery(reading))
+            {
+                state.CoolerIntentStatus = $"Cooler intent fast lane is active, but room is above {allowedRoomTemperature:0.0} C so normal comfort safety is leading.";
+                SaveState();
+                return false;
+            }
+
+            var analysis = BuildCoolerIntentAnalysis(now);
+            state.CoolerIntentStatus = $"Cooler intent fast lane is active until {until.ToLocalTime():HH:mm:ss}; repeated cooler touches skip quiet waits while the room is above target.";
+            state.TouchIntentStatus = analysis.Status;
             SaveState();
             return true;
         }
@@ -1698,6 +1749,7 @@ public sealed class DefenderStateStore
                 && state.SensorRhythmDueAt is null
                 && state.CoolingRunwayHoldUntil is null
                 && state.ConflictQuietUntil is null
+                && state.CoolerIntentUntil is null
                 && state.RoomTrendHoldUntil is null
                 && state.ThermalMomentumHoldUntil is null)
             {
@@ -1711,6 +1763,9 @@ public sealed class DefenderStateStore
             state.ConflictQuietStatus = state.Settings.ConflictQuietModeEnabled
                 ? "Conflict quiet is lined up; no stand-down needed."
                 : "Conflict quiet is off.";
+            ClearCoolerIntent(state.Settings.CoolerIntentFastLaneEnabled
+                ? "Cooler intent fast lane is lined up; no fast lane needed."
+                : "Cooler intent fast lane is off.");
             state.RoomTrendHoldUntil = null;
             state.RoomTrendStatus = state.Settings.RoomTrendGuardEnabled
                 ? "Room trend is lined up; no hold needed."
@@ -2092,6 +2147,7 @@ public sealed class DefenderStateStore
         }
 
         ApplyTouchIntentGrace(reading, now);
+        ApplyCoolerIntentFastLane(reading, now);
         TryUpdateComfortMemory(reading, now);
         TryStartComfortCompromise(reading, now);
 
@@ -2141,6 +2197,124 @@ public sealed class DefenderStateStore
         }
 
         state.TouchIntentStatus = $"Touch intent reads {intent.RecentTouchCount} warmer wall choices ({intent.NetChangeCelsius:+0.0;-0.0;0.0} C net); safe grace can use +{extraMinutes} min.";
+    }
+
+    private void ApplyCoolerIntentFastLane(ThermostatReading reading, DateTimeOffset now)
+    {
+        var analysis = BuildCoolerIntentAnalysis(now);
+        if (!state.Settings.CoolerIntentFastLaneEnabled)
+        {
+            ClearCoolerIntent("Cooler intent fast lane is off.");
+            return;
+        }
+
+        if (!analysis.Active)
+        {
+            if (state.CoolerIntentUntil is null || state.CoolerIntentUntil <= now)
+            {
+                state.CoolerIntentStatus = analysis.Status;
+            }
+
+            return;
+        }
+
+        if (reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius)
+        {
+            ClearCoolerIntent("Cooler wall intent is clear, but the room is already at the website target.");
+            return;
+        }
+
+        var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.CoolerIntentSafetyBandCelsius;
+        if (reading.CurrentTemperatureCelsius > allowedRoomTemperature && !ShouldBypassNaturalRecovery(reading))
+        {
+            state.CoolerIntentStatus = $"Cooler wall intent is clear, but fast lane waits inside {allowedRoomTemperature:0.0} C so normal comfort safety can lead.";
+            return;
+        }
+
+        var holdMinutes = Math.Max(0, state.Settings.CoolerIntentHoldMinutes);
+        if (holdMinutes <= 0)
+        {
+            ClearCoolerIntent("Cooler intent fast lane saw cooler touches, but hold minutes is set to 0.");
+            return;
+        }
+
+        var until = now.AddMinutes(holdMinutes);
+        var wasInactive = state.CoolerIntentUntil is null || state.CoolerIntentUntil <= now;
+        state.CoolerIntentUntil = until;
+        state.CoolerIntentStatus = $"Cooler intent fast lane accepted {analysis.RecentTouchCount} cooler wall touches ({analysis.NetChangeCelsius:+0.0;-0.0;0.0} C net) until {until.ToLocalTime():HH:mm:ss}.";
+        state.CooldownUntil = null;
+        state.NaturalHoldUntil = null;
+        state.NaturalHoldCount = 0;
+        state.ConflictQuietUntil = null;
+        state.ConflictQuietStatus = "Cooler intent fast lane is active, so conflict quiet is stepping aside.";
+        ClearManualComfortGrace();
+        ClearRoutineTiming("Cooler intent fast lane is active, so routine timing is stepping aside.");
+        ClearComfortBudget("Cooler intent fast lane is active, so comfort budget is stepping aside.");
+        ClearNaturalCadence("Cooler intent fast lane is active, so natural cadence is stepping aside.");
+        ClearVisibilityGuard("Cooler intent fast lane is active, so visibility guard is stepping aside.");
+        ClearRepeatCommand("Cooler intent fast lane is active, so repeat quiet is stepping aside.");
+        ClearCoolingRunway("Cooler intent fast lane is active, so cooling runway is stepping aside.");
+        ClearSensorRhythm("Cooler intent fast lane is active, so sensor rhythm is stepping aside.");
+        state.RoomTrendHoldUntil = null;
+        state.RoomTrendStatus = "Cooler intent fast lane is active, so room trend guard is stepping aside.";
+        state.ThermalMomentumHoldUntil = null;
+        state.ThermalMomentumStatus = "Cooler intent fast lane is active, so thermal momentum is stepping aside.";
+        state.NaturalRecoveryStatus = "Cooler intent fast lane is active, so quiet recovery is stepping aside.";
+        state.TouchIntentStatus = analysis.Status;
+
+        if (wasInactive)
+        {
+            AddEvent("info", $"Cooler intent fast lane activated from {analysis.RecentTouchCount} cooler wall touches.");
+        }
+    }
+
+    private CoolerIntentAnalysis BuildCoolerIntentAnalysis(DateTimeOffset now)
+    {
+        if (!state.Settings.CoolerIntentFastLaneEnabled)
+        {
+            return new CoolerIntentAnalysis(false, false, 0, 0.0, "Cooler intent fast lane is off.");
+        }
+
+        var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.CoolerIntentWindowMinutes));
+        var recent = state.ThermostatChanges
+            .Where(change => now - change.Timestamp <= window)
+            .Take(50)
+            .ToList();
+        var count = recent.Count;
+        if (count == 0)
+        {
+            return new CoolerIntentAnalysis(true, false, 0, 0.0, "Cooler intent fast lane is watching for wall touches.");
+        }
+
+        var netChange = Math.Round(recent.Sum(change => change.NewSetPointCelsius - change.PreviousSetPointCelsius), 1);
+        var triggerTouches = Math.Max(1, state.Settings.CoolerIntentMinimumTouches);
+        if (count < triggerTouches)
+        {
+            return new CoolerIntentAnalysis(
+                true,
+                false,
+                count,
+                netChange,
+                $"Cooler intent fast lane is learning ({count}/{triggerTouches}, {netChange:+0.0;-0.0;0.0} C net).");
+        }
+
+        var threshold = Math.Max(0.1, state.Settings.CoolerIntentNetCoolThresholdCelsius);
+        if (netChange <= -threshold)
+        {
+            return new CoolerIntentAnalysis(
+                true,
+                true,
+                count,
+                netChange,
+                $"Cooler intent fast lane sees a cooler pattern ({netChange:+0.0;-0.0;0.0} C net from {count} touches).");
+        }
+
+        return new CoolerIntentAnalysis(
+            true,
+            false,
+            count,
+            netChange,
+            $"Cooler intent fast lane sees no cooler pattern yet ({netChange:+0.0;-0.0;0.0} C net).");
     }
 
     private TouchIntentAnalysis BuildTouchIntentAnalysis(DateTimeOffset now)
@@ -3028,6 +3202,11 @@ public sealed class DefenderStateStore
         saved.Settings.TouchIntentNetWarmThresholdCelsius = Math.Round(Math.Clamp(saved.Settings.TouchIntentNetWarmThresholdCelsius, 0.1, 5.0), 1);
         saved.Settings.TouchIntentExtraGraceMinutes = Math.Clamp(saved.Settings.TouchIntentExtraGraceMinutes, 0, 240);
         saved.Settings.TouchIntentSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TouchIntentSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.CoolerIntentMinimumTouches = Math.Clamp(saved.Settings.CoolerIntentMinimumTouches, 1, 20);
+        saved.Settings.CoolerIntentWindowMinutes = Math.Clamp(saved.Settings.CoolerIntentWindowMinutes, 1, 1440);
+        saved.Settings.CoolerIntentHoldMinutes = Math.Clamp(saved.Settings.CoolerIntentHoldMinutes, 0, 240);
+        saved.Settings.CoolerIntentNetCoolThresholdCelsius = Math.Round(Math.Clamp(saved.Settings.CoolerIntentNetCoolThresholdCelsius, 0.1, 5.0), 1);
+        saved.Settings.CoolerIntentSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.CoolerIntentSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.SetpointEchoGraceSeconds = Math.Clamp(saved.Settings.SetpointEchoGraceSeconds, 5, 300);
         saved.Settings.SetpointEchoSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.SetpointEchoSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.RepeatCommandMinimumWaitSeconds = Math.Clamp(saved.Settings.RepeatCommandMinimumWaitSeconds, 0, 1800);
@@ -3104,6 +3283,19 @@ public sealed class DefenderStateStore
         saved.TouchIntentStatus = string.IsNullOrWhiteSpace(saved.TouchIntentStatus)
             ? "Touch intent is watching."
             : saved.TouchIntentStatus;
+        saved.CoolerIntentStatus = string.IsNullOrWhiteSpace(saved.CoolerIntentStatus)
+            ? "Cooler intent fast lane is watching for repeated cooler wall touches."
+            : saved.CoolerIntentStatus;
+        if (!saved.Settings.CoolerIntentFastLaneEnabled)
+        {
+            saved.CoolerIntentUntil = null;
+            saved.CoolerIntentStatus = "Cooler intent fast lane is off.";
+        }
+        else if (saved.CoolerIntentUntil is { } coolerIntentUntil && coolerIntentUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.CoolerIntentUntil = null;
+            saved.CoolerIntentStatus = "Cooler intent fast lane is watching for repeated cooler wall touches.";
+        }
         saved.SetpointEchoStatus = string.IsNullOrWhiteSpace(saved.SetpointEchoStatus)
             ? "Setpoint echo is watching."
             : saved.SetpointEchoStatus;
@@ -3173,6 +3365,9 @@ public sealed class DefenderStateStore
         var manualGraceSeconds = state.ManualComfortGraceUntil is { } graceUntil && graceUntil > now
             ? (int)Math.Ceiling((graceUntil - now).TotalSeconds)
             : 0;
+        var coolerIntentSeconds = state.CoolerIntentUntil is { } coolerIntentUntil && coolerIntentUntil > now
+            ? (int)Math.Ceiling((coolerIntentUntil - now).TotalSeconds)
+            : 0;
         var roomTrendSeconds = state.RoomTrendHoldUntil is { } trendUntil && trendUntil > now
             ? (int)Math.Ceiling((trendUntil - now).TotalSeconds)
             : 0;
@@ -3235,6 +3430,7 @@ public sealed class DefenderStateStore
         var roomTrend = BuildRoomTrend(now);
         var thermalMomentum = BuildThermalMomentum(now, state.HomeAssistantThermostat?.CurrentTemperatureCelsius);
         var touchIntent = BuildTouchIntentAnalysis(now);
+        var coolerIntent = BuildCoolerIntentAnalysis(now);
         var sensorRhythm = BuildSensorRhythmAnalysis(now);
         PruneComfortMemory(now);
         var memorySlot = FindComfortMemorySlot(now);
@@ -3381,6 +3577,16 @@ public sealed class DefenderStateStore
                 string.IsNullOrWhiteSpace(state.TouchIntentStatus)
                     ? touchIntent.Status
                     : state.TouchIntentStatus),
+            new CoolerIntentSnapshot(
+                state.Settings.CoolerIntentFastLaneEnabled,
+                state.Settings.CoolerIntentFastLaneEnabled && coolerIntentSeconds > 0,
+                coolerIntentSeconds,
+                coolerIntent.RecentTouchCount,
+                coolerIntent.NetChangeCelsius,
+                string.IsNullOrWhiteSpace(state.CoolerIntentStatus)
+                    ? coolerIntent.Status
+                    : state.CoolerIntentStatus,
+                coolerIntentSeconds > 0 ? state.CoolerIntentUntil : null),
             new SetpointEchoSnapshot(
                 state.Settings.SetpointEchoGuardEnabled,
                 setpointEchoSeconds > 0,
@@ -3498,6 +3704,7 @@ public sealed class DefenderStateStore
         state.ConflictQuietStatus = "Conflict quiet is watching.";
         ClearManualComfortGrace();
         state.TouchIntentStatus = "Touch intent is watching.";
+        ClearCoolerIntent("Cooler intent fast lane is watching for repeated cooler wall touches.");
         ClearPendingSetpointEcho("Setpoint echo is watching.");
         state.RoomTrendHoldUntil = null;
         state.RoomTrendStatus = "Room trend guard is watching.";
@@ -3510,6 +3717,12 @@ public sealed class DefenderStateStore
         state.ManualComfortGraceUntil = null;
         state.ManualComfortGraceSetPointCelsius = null;
         state.ManualComfortGraceStatus = "No wall-change grace active.";
+    }
+
+    private void ClearCoolerIntent(string status)
+    {
+        state.CoolerIntentUntil = null;
+        state.CoolerIntentStatus = status;
     }
 
     private void ClearRoutineTiming(string status)
@@ -3749,6 +3962,12 @@ public sealed class DefenderStateStore
             TouchIntentNetWarmThresholdCelsius = settings.TouchIntentNetWarmThresholdCelsius,
             TouchIntentExtraGraceMinutes = settings.TouchIntentExtraGraceMinutes,
             TouchIntentSafetyBandCelsius = settings.TouchIntentSafetyBandCelsius,
+            CoolerIntentFastLaneEnabled = settings.CoolerIntentFastLaneEnabled,
+            CoolerIntentMinimumTouches = settings.CoolerIntentMinimumTouches,
+            CoolerIntentWindowMinutes = settings.CoolerIntentWindowMinutes,
+            CoolerIntentHoldMinutes = settings.CoolerIntentHoldMinutes,
+            CoolerIntentNetCoolThresholdCelsius = settings.CoolerIntentNetCoolThresholdCelsius,
+            CoolerIntentSafetyBandCelsius = settings.CoolerIntentSafetyBandCelsius,
             SetpointEchoGuardEnabled = settings.SetpointEchoGuardEnabled,
             SetpointEchoGraceSeconds = settings.SetpointEchoGraceSeconds,
             SetpointEchoSafetyBandCelsius = settings.SetpointEchoSafetyBandCelsius,
@@ -3937,6 +4156,10 @@ public sealed class DefenderStateStore
 
         public string TouchIntentStatus { get; set; } = "Touch intent is watching.";
 
+        public DateTimeOffset? CoolerIntentUntil { get; set; }
+
+        public string CoolerIntentStatus { get; set; } = "Cooler intent fast lane is watching for repeated cooler wall touches.";
+
         public string SetpointEchoStatus { get; set; } = "Setpoint echo is watching.";
 
         public DateTimeOffset? RepeatCommandHoldUntil { get; set; }
@@ -4017,6 +4240,13 @@ public sealed class DefenderStateStore
         string Direction,
         double NetChangeCelsius,
         int ExtraGraceMinutes,
+        string Status);
+
+    private sealed record CoolerIntentAnalysis(
+        bool Enabled,
+        bool Active,
+        int RecentTouchCount,
+        double NetChangeCelsius,
         string Status);
 
     private sealed record RoomTemperatureSample(

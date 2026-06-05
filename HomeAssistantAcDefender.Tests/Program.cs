@@ -13,6 +13,7 @@ tests.ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom();
 tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
+tests.CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches();
 tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 Console.WriteLine("Defender setpoint regression checks passed.");
@@ -276,6 +277,53 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.RepeatCommand.Holding)
         {
             throw new InvalidOperationException("Repeat Quiet should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        var reading = new ThermostatReading(
+            "climate.dining_room",
+            23.0,
+            25.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(reading);
+        store.RecordHomeAssistantReading(reading with { SetPointCelsius = 24.0 });
+        store.RecordHomeAssistantReading(reading with { SetPointCelsius = 23.0 });
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.CoolerIntent.Active)
+        {
+            throw new InvalidOperationException("Cooler Intent Fast Lane should activate after repeated cooler wall touches.");
+        }
+
+        if (snapshot.ManualComfortGrace.Active)
+        {
+            throw new InvalidOperationException("Cooler Intent Fast Lane should clear wall-change grace so cooling can catch up.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var bypassed = store.ShouldBypassQuietTimingForCoolerIntent(
+            reading with { SetPointCelsius = 23.0 },
+            now);
+        if (!bypassed)
+        {
+            throw new InvalidOperationException("Cooler Intent Fast Lane should bypass quiet timing while the room is above target.");
+        }
+
+        var reachedTarget = store.ShouldBypassQuietTimingForCoolerIntent(
+            reading with { CurrentTemperatureCelsius = 22.0, SetPointCelsius = 23.0 },
+            now.AddSeconds(1));
+        if (reachedTarget)
+        {
+            throw new InvalidOperationException("Cooler Intent Fast Lane should stop bypassing once the room reaches the website target.");
         }
     }
 

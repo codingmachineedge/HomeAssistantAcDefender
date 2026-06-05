@@ -66,36 +66,44 @@ public sealed class AcDefenderService
                 return;
             }
 
-            if (!comfort.BypassCooldown
-                && stateStore.TryRespectConflictQuietMode(reading, false, DateTimeOffset.UtcNow, out var conflictUntil, out var conflictMessage))
+            var quietBypassNow = DateTimeOffset.UtcNow;
+            var coolerIntentBypass = stateStore.ShouldBypassQuietTimingForCoolerIntent(reading, quietBypassNow);
+            var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass;
+
+            if (!bypassQuietTiming
+                && stateStore.TryRespectConflictQuietMode(reading, false, quietBypassNow, out var conflictUntil, out var conflictMessage))
             {
                 stateStore.SetNextAction(conflictMessage, conflictUntil);
                 return;
             }
-            else if (comfort.BypassCooldown)
+            else if (bypassQuietTiming)
             {
-                stateStore.TryRespectConflictQuietMode(reading, true, DateTimeOffset.UtcNow, out _, out _);
+                stateStore.TryRespectConflictQuietMode(reading, true, quietBypassNow, out _, out _);
             }
 
-            if (!comfort.BypassCooldown
-                && stateStore.TryRespectManualComfortGrace(reading, false, DateTimeOffset.UtcNow, out var graceUntil, out var graceMessage))
+            if (!bypassQuietTiming
+                && stateStore.TryRespectManualComfortGrace(reading, false, quietBypassNow, out var graceUntil, out var graceMessage))
             {
                 stateStore.SetNextAction(graceMessage, graceUntil);
                 return;
             }
-            else if (comfort.BypassCooldown)
+            else if (bypassQuietTiming)
             {
-                stateStore.TryRespectManualComfortGrace(reading, true, DateTimeOffset.UtcNow, out _, out _);
+                stateStore.TryRespectManualComfortGrace(reading, true, quietBypassNow, out _, out _);
             }
 
-            if (!comfort.BypassCooldown && stateStore.TryGetCooldown(DateTimeOffset.UtcNow, out var cooldownUntil))
+            if (!bypassQuietTiming && stateStore.TryGetCooldown(quietBypassNow, out var cooldownUntil))
             {
                 stateStore.SetNextAction($"Cooldown active after manual thermostat change; next correction after {cooldownUntil:yyyy-MM-dd HH:mm:ss}.", cooldownUntil);
                 return;
             }
             else if (comfort.BypassCooldown)
             {
-                stateStore.SetNextAction("Severe upstairs heat detected; bypassing cooldown for comfort.", DateTimeOffset.UtcNow);
+                stateStore.SetNextAction("Severe upstairs heat detected; bypassing cooldown for comfort.", quietBypassNow);
+            }
+            else if (coolerIntentBypass)
+            {
+                stateStore.SetNextAction("Cooler wall intent detected; bypassing quiet waits so comfort can catch up.", quietBypassNow);
             }
 
             if (stateStore.ShouldUseFanSaver(reading))
@@ -111,68 +119,68 @@ public sealed class AcDefenderService
             if (changed)
             {
                 var now = DateTimeOffset.UtcNow;
-                if (stateStore.TryRespectRoomTrendGuard(reading, expectedSetPoint, comfort.BypassCooldown, now, out var trendUntil, out var trendMessage))
+                if (stateStore.TryRespectRoomTrendGuard(reading, expectedSetPoint, bypassQuietTiming, now, out var trendUntil, out var trendMessage))
                 {
                     stateStore.SetNextAction(trendMessage, trendUntil);
                     return;
                 }
 
-                if (stateStore.TryRespectThermalMomentumGuard(reading, expectedSetPoint, comfort.BypassCooldown, now, out var momentumUntil, out var momentumMessage))
+                if (stateStore.TryRespectThermalMomentumGuard(reading, expectedSetPoint, bypassQuietTiming, now, out var momentumUntil, out var momentumMessage))
                 {
                     stateStore.SetNextAction(momentumMessage, momentumUntil);
                     return;
                 }
 
-                if (stateStore.TryRespectSetpointEcho(reading, comfort.BypassCooldown, now, out var echoUntil, out var echoMessage))
+                if (stateStore.TryRespectSetpointEcho(reading, bypassQuietTiming, now, out var echoUntil, out var echoMessage))
                 {
                     stateStore.SetNextAction(echoMessage, echoUntil);
                     return;
                 }
 
-                if (stateStore.TryRespectCoolingRunway(reading, expectedSetPoint, comfort.BypassCooldown, now, out var runwayUntil, out var runwayMessage))
+                if (stateStore.TryRespectCoolingRunway(reading, expectedSetPoint, bypassQuietTiming, now, out var runwayUntil, out var runwayMessage))
                 {
                     stateStore.SetNextAction(runwayMessage, runwayUntil);
                     return;
                 }
 
-                if (stateStore.TryRespectSensorRhythm(reading, expectedSetPoint, comfort.BypassCooldown, now, out var rhythmUntil, out var rhythmMessage))
+                if (stateStore.TryRespectSensorRhythm(reading, expectedSetPoint, bypassQuietTiming, now, out var rhythmUntil, out var rhythmMessage))
                 {
                     stateStore.SetNextAction(rhythmMessage, rhythmUntil);
                     return;
                 }
 
-                if (stateStore.TryDelayNaturalCorrection(reading, expectedSetPoint, comfort.BypassCooldown, now, out var waitUntil, out var waitMessage))
+                if (stateStore.TryDelayNaturalCorrection(reading, expectedSetPoint, bypassQuietTiming, now, out var waitUntil, out var waitMessage))
                 {
                     stateStore.SetNextAction(waitMessage, waitUntil);
                     return;
                 }
 
-                if (stateStore.TryRespectRoutineTiming(reading, expectedSetPoint, comfort.BypassCooldown, now, out var routineUntil, out var routineMessage))
+                if (stateStore.TryRespectRoutineTiming(reading, expectedSetPoint, bypassQuietTiming, now, out var routineUntil, out var routineMessage))
                 {
                     stateStore.SetNextAction(routineMessage, routineUntil);
                     return;
                 }
 
-                if (stateStore.TryRespectComfortBudget(reading, comfort.BypassCooldown, now, out var budgetUntil, out var budgetMessage))
+                if (stateStore.TryRespectComfortBudget(reading, bypassQuietTiming, now, out var budgetUntil, out var budgetMessage))
                 {
                     stateStore.SetNextAction(budgetMessage, budgetUntil);
                     return;
                 }
 
-                if (stateStore.TryRespectVisibilityGuard(reading, expectedSetPoint, comfort.BypassCooldown, now, out var visibilityUntil, out var visibilityMessage))
+                if (stateStore.TryRespectVisibilityGuard(reading, expectedSetPoint, bypassQuietTiming, now, out var visibilityUntil, out var visibilityMessage))
                 {
                     stateStore.SetNextAction(visibilityMessage, visibilityUntil);
                     return;
                 }
 
-                if (stateStore.TryRespectNaturalCadence(reading, expectedSetPoint, comfort.BypassCooldown, now, out var cadenceUntil, out var cadenceMessage))
+                if (stateStore.TryRespectNaturalCadence(reading, expectedSetPoint, bypassQuietTiming, now, out var cadenceUntil, out var cadenceMessage))
                 {
                     stateStore.SetNextAction(cadenceMessage, cadenceUntil);
                     return;
                 }
 
-                var commandSetPoint = stateStore.CalculateNaturalCommandSetPoint(reading, expectedSetPoint, comfort.BypassCooldown);
-                if (stateStore.TryRespectRepeatCommandGuard(reading, commandSetPoint, comfort.BypassCooldown, now, out var repeatUntil, out var repeatMessage))
+                var commandSetPoint = stateStore.CalculateNaturalCommandSetPoint(reading, expectedSetPoint, bypassQuietTiming);
+                if (stateStore.TryRespectRepeatCommandGuard(reading, commandSetPoint, bypassQuietTiming, now, out var repeatUntil, out var repeatMessage))
                 {
                     stateStore.SetNextAction(repeatMessage, repeatUntil);
                     return;

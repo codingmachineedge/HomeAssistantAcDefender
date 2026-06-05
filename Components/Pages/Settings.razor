@@ -864,6 +864,69 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_coolerIntentFastLaneEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _coolerIntentFastLaneEnabled = v))"
+                           Label="Cooler intent fast lane"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">When people keep turning the wall thermostat cooler, quiet waits step aside so the room can cool sooner.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_coolerIntentMinimumTouches"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _coolerIntentMinimumTouches = value))"
+                                         Label="Cooler touches"
+                                         HelperText="How many cooler wall changes it needs before helping faster."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="20" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_coolerIntentWindowMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _coolerIntentWindowMinutes = value))"
+                                         Label="Cooler window minutes"
+                                         HelperText="How long cooler wall choices count."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="1440" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_coolerIntentHoldMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _coolerIntentHoldMinutes = value))"
+                                         Label="Fast-lane minutes"
+                                         HelperText="How long quiet waits stay out of the way."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="240" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_coolerIntentNetCoolThresholdCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _coolerIntentNetCoolThresholdCelsius = value))"
+                                         Label="Cooler pattern C"
+                                         HelperText="Net cooler movement needed before the fast lane starts."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudNumericField T="double"
+                                         Value="_coolerIntentSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _coolerIntentSafetyBandCelsius = value))"
+                                         Label="Fast-lane safe band C"
+                                         HelperText="Only skip quiet waits while the room is this close to target, unless comfort safety already takes over."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_setpointEchoGuardEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _setpointEchoGuardEnabled = v))"
                            Label="Setpoint echo"
@@ -1459,6 +1522,12 @@
     private double _touchIntentNetWarmThresholdCelsius = 0.8;
     private int _touchIntentExtraGraceMinutes = 25;
     private double _touchIntentSafetyBandCelsius = 1.0;
+    private bool _coolerIntentFastLaneEnabled = true;
+    private int _coolerIntentMinimumTouches = 2;
+    private int _coolerIntentWindowMinutes = 90;
+    private int _coolerIntentHoldMinutes = 20;
+    private double _coolerIntentNetCoolThresholdCelsius = 0.8;
+    private double _coolerIntentSafetyBandCelsius = 2.0;
     private bool _setpointEchoGuardEnabled = true;
     private int _setpointEchoGraceSeconds = 30;
     private double _setpointEchoSafetyBandCelsius = 1.0;
@@ -1590,6 +1659,12 @@
         _touchIntentNetWarmThresholdCelsius = settings.TouchIntentNetWarmThresholdCelsius;
         _touchIntentExtraGraceMinutes = settings.TouchIntentExtraGraceMinutes;
         _touchIntentSafetyBandCelsius = settings.TouchIntentSafetyBandCelsius;
+        _coolerIntentFastLaneEnabled = settings.CoolerIntentFastLaneEnabled;
+        _coolerIntentMinimumTouches = settings.CoolerIntentMinimumTouches;
+        _coolerIntentWindowMinutes = settings.CoolerIntentWindowMinutes;
+        _coolerIntentHoldMinutes = settings.CoolerIntentHoldMinutes;
+        _coolerIntentNetCoolThresholdCelsius = settings.CoolerIntentNetCoolThresholdCelsius;
+        _coolerIntentSafetyBandCelsius = settings.CoolerIntentSafetyBandCelsius;
         _setpointEchoGuardEnabled = settings.SetpointEchoGuardEnabled;
         _setpointEchoGraceSeconds = settings.SetpointEchoGraceSeconds;
         _setpointEchoSafetyBandCelsius = settings.SetpointEchoSafetyBandCelsius;
@@ -1768,6 +1843,12 @@
             _touchIntentNetWarmThresholdCelsius,
             _touchIntentExtraGraceMinutes,
             _touchIntentSafetyBandCelsius,
+            _coolerIntentFastLaneEnabled,
+            _coolerIntentMinimumTouches,
+            _coolerIntentWindowMinutes,
+            _coolerIntentHoldMinutes,
+            _coolerIntentNetCoolThresholdCelsius,
+            _coolerIntentSafetyBandCelsius,
             _setpointEchoGuardEnabled,
             _setpointEchoGraceSeconds,
             _setpointEchoSafetyBandCelsius,

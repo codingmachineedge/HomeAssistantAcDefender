@@ -10,28 +10,29 @@ Every cycle performs these steps:
 6. Apply the active schedule target when scheduling is enabled.
 7. Evaluate the weather activation rule.
 8. Apply upstairs comfort rules.
-9. Respect Conflict Quiet when repeated wall touches suggest someone is fighting the thermostat.
-10. Respect dynamic cooldown after external changes unless severe upstairs heat bypasses it.
-11. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
-12. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
-13. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
-14. Respect Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
-15. Respect Sensor Rhythm so safe corrections can land just after a normal Home Assistant reading beat.
+9. Activate Cooler Intent Fast Lane when repeated cooler wall touches ask for faster cooling.
+10. Respect Conflict Quiet when repeated wall touches suggest someone is fighting the thermostat.
+11. Respect dynamic cooldown after external changes unless severe upstairs heat or cooler intent bypasses it.
+12. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
+13. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
+14. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
+15. Respect Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
 16. Respect Cooling Runway when Home Assistant has just reported that cooling started.
-17. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
-18. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
-19. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
-20. Respect Visibility Guard when a wall touch happens soon after a defender command.
-21. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
-22. Respect Comfort Budget when too many safe adjustments happened recently.
-23. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-24. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-25. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-26. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-27. Apply fan energy saver when enabled and near target.
-28. Respect Repeat Quiet if the exact command about to be sent matches the last defender setpoint.
-29. Correct the real thermostat setpoint when needed.
-30. Update the next-action status label.
+17. Respect Sensor Rhythm so safe corrections can land just after a normal Home Assistant reading beat.
+18. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
+19. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
+20. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
+21. Respect Visibility Guard when a wall touch happens soon after a defender command.
+22. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
+23. Respect Comfort Budget when too many safe adjustments happened recently.
+24. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
+25. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+26. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+27. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+28. Apply fan energy saver when enabled and near target.
+29. Respect Repeat Quiet if the exact command about to be sent matches the last defender setpoint.
+30. Correct the real thermostat setpoint when needed.
+31. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -95,6 +96,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Uses Comfort Memory to remember a tiny expiring time-of-day preference after repeated safe wall choices.
 - Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
 - Uses Touch Intent to classify recent wall choices and extend safe grace only when warmer intent is clear.
+- Uses Cooler Intent Fast Lane to skip quiet waits briefly when repeated cooler wall touches show the person wants faster cooling.
 - Uses Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
 - Uses Repeat Quiet so identical follow-up commands wait longer when recent wall-touch or command pressure is high.
 - Uses Sensor Rhythm so safe corrections can wait until just after the learned Home Assistant reading beat.
@@ -234,6 +236,26 @@ targetTemperature + touchIntentSafetyBandCelsius
 ```
 
 Manual Comfort Grace can extend by `touchIntentExtraGraceMinutes`. Cooler and mixed patterns do not add warmer grace. If the room crosses the safety band, the normal safety override is reached, or upstairs heat bypasses quiet timing, Touch Intent steps aside and the direct correction path continues.
+
+## Cooler Intent Fast Lane
+
+Cooler Intent Fast Lane watches the same real external wall-touch audit log, but only reacts to a clear cooler pattern. It starts when enough recent wall changes move the setpoint cooler by at least the configured cooler-pattern threshold.
+
+While active, it clears safe quiet waits such as cooldown, Conflict Quiet, Manual Comfort Grace, Visibility Guard, Routine Timing, Comfort Budget, Natural Cadence, Repeat Quiet, Sensor Rhythm, Cooling Runway, Room Trend Guard, and Thermal Momentum. That lets the normal real correction path move sooner when someone is probably hot.
+
+It only bypasses quiet timing while:
+
+```text
+currentRoomTemperature > targetTemperature
+```
+
+and, for the fast-lane safe band:
+
+```text
+currentRoomTemperature <= targetTemperature + coolerIntentSafetyBandCelsius
+```
+
+If the room reaches the website target, the fast lane clears. It does not lower the website target and does not change the rule that warm-room defense starts one degree below current room temperature and walks only toward the website target.
 
 ## Setpoint Echo
 

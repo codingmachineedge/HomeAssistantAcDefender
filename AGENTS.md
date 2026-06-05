@@ -18,6 +18,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Comfort Compromise may adjust only the temporary effective target while room comfort is inside the configured safety band. Website target changes, schedule target changes, and upstairs comfort changes must clear it.
 - Comfort Memory may apply only small, expiring time-of-day offsets learned from real wall touches while room comfort is inside the configured safety band. It must skip warmer offsets when upstairs is hot.
 - Touch Intent may extend only safe wall-change grace after a clear warmer wall-touch pattern. It must clear or step aside immediately when room comfort needs direct cooling.
+- Cooler Intent Fast Lane may bypass quiet waits only after repeated real cooler wall touches while the room is above target. It must not lower the website target or change the warm-room current-minus-1 C command rule.
 - Setpoint Echo may delay only safe follow-up setpoint commands while Home Assistant has not reported back the last defender setpoint. It must clear or step aside immediately when room comfort needs direct cooling.
 - Repeat Quiet may delay only safe identical follow-up setpoint commands. It must not block a different one-degree step-down command, and it must clear or step aside immediately when room comfort needs direct cooling.
 - Sensor Rhythm may delay only safe corrections so commands land near real Home Assistant reading cadence. It must clear immediately when room comfort needs direct cooling.
@@ -51,7 +52,8 @@ Deployment command:
 
 ```bash
 cd /home/docker/homeassistant-ac-defender
-docker compose up -d --build
+docker compose build --no-cache
+docker compose up -d
 ```
 
 The remote `.env` file is created directly on the host and must not be copied into Git.

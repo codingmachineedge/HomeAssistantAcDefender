@@ -88,6 +88,12 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Warmer pattern C: net warmer change needed before extra grace is allowed.
 - Intent extra grace: extra safe minutes added when warmer intent is clear.
 - Intent safe band C: extra warmth allowed before touch intent stops extending grace.
+- Cooler intent fast lane: skips quiet waits when repeated wall touches ask for cooler air.
+- Cooler touches: how many cooler wall changes it needs before helping faster.
+- Cooler window minutes: how long cooler wall choices count.
+- Fast-lane minutes: how long quiet waits stay out of the way.
+- Cooler pattern C: net cooler movement needed before the fast lane starts.
+- Fast-lane safe band C: extra warmth allowed before normal safety rules lead.
 - Setpoint echo: waits for Home Assistant to report the last helper setpoint before another safe command.
 - Echo wait seconds: how long to wait for that Home Assistant confirmation.
 - Echo safe band C: extra warmth allowed before setpoint echo stops waiting.
