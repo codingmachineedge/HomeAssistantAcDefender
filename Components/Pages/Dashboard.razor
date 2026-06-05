@@ -517,7 +517,7 @@
     private static readonly string[] WallTouchDefenseMetricLabels =
     [
         "Touch count", "Touch pressure", "Walk step", "Touch step", "Touch samples", "Visibility wait", "Visibility pressure",
-        "Routine wait", "Routine rhythm", "Budget wait", "Budget used", "Cadence wait", "Cadence pressure", "Blend target",
+        "Routine wait", "Routine rhythm", "Budget wait", "Budget used", "Cadence wait", "Cadence pressure", "Pace wait", "Pace pressure", "Pace reason", "Blend target",
         "Blend wait", "Memory bias", "Memory target", "Stand-down", "Wall settle", "Settle touches", "Wall grace",
         "Touch intent", "Intent grace", "Cooler fast lane", "Cooler net"
     ];
@@ -535,7 +535,7 @@
 
     private static readonly string[] WallTouchDefenseStatusNames =
     [
-        "Natural walkback", "Touch signature", "Visibility guard", "Routine timing", "Comfort budget", "Natural cadence",
+        "Natural walkback", "Touch signature", "Visibility guard", "Routine timing", "Comfort budget", "Natural cadence", "Comfort Pace",
         "Comfort compromise", "Comfort memory", "Conflict quiet", "Wall settling", "Manual grace", "Touch intent", "Cooler intent"
     ];
 
@@ -574,6 +574,10 @@
     private string NaturalCadenceText => Snapshot?.NaturalCadence.Status ?? "Natural cadence is watching.";
     private string NaturalCadenceWaitText => Snapshot?.NaturalCadence.Waiting == true ? $"{Snapshot.NaturalCadence.SecondsRemaining}s" : "Ready";
     private string NaturalCadencePressureText => Snapshot?.NaturalCadence.Enabled == true ? $"{Snapshot.NaturalCadence.TouchPressure}/100" : "Off";
+    private string NaturalChangePlannerText => Snapshot?.NaturalChangePlanner.Status ?? "Comfort Pace is watching.";
+    private string NaturalChangePlannerWaitText => Snapshot?.NaturalChangePlanner.Waiting == true ? $"{Snapshot.NaturalChangePlanner.SecondsRemaining}s" : Snapshot?.NaturalChangePlanner.Enabled == true ? "Ready" : "Off";
+    private string NaturalChangePlannerPressureText => Snapshot?.NaturalChangePlanner.Enabled == true ? $"{Snapshot.NaturalChangePlanner.TouchPressure}/100" : "Off";
+    private string NaturalChangePlannerReasonText => Snapshot?.NaturalChangePlanner.Enabled == true ? Snapshot.NaturalChangePlanner.PlannedReason : "Off";
     private string ComfortCompromiseText => Snapshot?.ComfortCompromise.Status ?? "Comfort compromise is watching.";
     private string ComfortCompromiseTargetText => Snapshot?.ComfortCompromise.EffectiveTargetCelsius is { } target ? $"{target:0.0} C" : "Ready";
     private string ComfortCompromiseWaitText => Snapshot?.ComfortCompromise.Active == true ? $"{Snapshot.ComfortCompromise.SecondsRemaining}s" : "Ready";
@@ -666,6 +670,9 @@
     private Severity NaturalCadenceSeverity => Snapshot?.NaturalCadence.Waiting == true
         ? Severity.Warning
         : Snapshot?.NaturalCadence.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity NaturalChangePlannerSeverity => Snapshot?.NaturalChangePlanner.Waiting == true
+        ? Severity.Warning
+        : Snapshot?.NaturalChangePlanner.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity ComfortCompromiseSeverity => Snapshot?.ComfortCompromise.Active == true
         ? Severity.Warning
         : Snapshot?.ComfortCompromise.Enabled == true ? Severity.Info : Severity.Normal;
@@ -788,6 +795,9 @@
         new("Budget used", ComfortBudgetUsedText, "Safe adjustments used in the budget window."),
         new("Cadence wait", NaturalCadenceWaitText, "Quiet future slot for safe nudges."),
         new("Cadence pressure", NaturalCadencePressureText, "How much repeated wall touching is affecting timing."),
+        new("Pace wait", NaturalChangePlannerWaitText, "Calm climate slot after frequent wall changes."),
+        new("Pace pressure", NaturalChangePlannerPressureText, "How strongly wall changes affect Comfort Pace."),
+        new("Pace reason", NaturalChangePlannerReasonText, "Why the next calm slot was picked."),
         new("Blend target", ComfortCompromiseTargetText, "Temporary target while a wall choice fades back."),
         new("Blend wait", ComfortCompromiseWaitText, "How long the temporary blend remains."),
         new("Memory bias", ComfortMemoryOffsetText, "Small learned time-of-day adjustment."),
@@ -858,6 +868,7 @@
         new("Mega alert", CoolingFailureText, "This warns if cool mode is demanded but cooling does not look real.", CoolingFailureSeverity),
         new("Emergency", EmergencyText, "This says if an emergency quiet protocol is standing down corrections.", EmergencySeverity),
         new("Natural recovery", NaturalRecoveryText, "This says if comfort sync is waiting, nudging, or skipping quiet waits because it is too warm.", NaturalSeverity),
+        new("Comfort Pace", NaturalChangePlannerText, "This says if frequent wall changes are being paced into a calmer climate slot.", NaturalChangePlannerSeverity),
         new("Cool mode restore", CoolModeRestoreText, "This says if cool mode is waiting before it comes back.", CoolModeRestoreSeverity),
         new("Upstairs comfort", Snapshot?.Comfort.Status ?? "Waiting for upstairs readings", "This says if upstairs is making the defender help sooner.", Snapshot?.Comfort.UpstairsTooHot == true ? Severity.Error : Severity.Info),
         new("Last command", LastCommandText, "This shows the last command the website sent to Home Assistant.", Severity.Info)
@@ -872,6 +883,7 @@
         new("Routine timing", RoutineTimingText, "This says if a safe adjustment is waiting for a normal comfort-check rhythm.", RoutineTimingSeverity),
         new("Comfort budget", ComfortBudgetText, "This says if repeated safe adjustments are resting for a while.", ComfortBudgetSeverity),
         new("Natural cadence", NaturalCadenceText, "This says if safe nudges are waiting for a quieter natural time slot.", NaturalCadenceSeverity),
+        new("Comfort Pace", NaturalChangePlannerText, "This says if frequent wall changes are waiting for a calmer weather, sensor, or routine slot.", NaturalChangePlannerSeverity),
         new("Comfort compromise", ComfortCompromiseText, "This says if a wall choice is being blended back gently while the room is safe.", ComfortCompromiseSeverity),
         new("Comfort memory", ComfortMemoryText, "This says if this time of day has a small learned comfort preference.", ComfortMemorySeverity),
         new("Cool mode restore", CoolModeRestoreText, "This says if cool mode is waiting before it comes back.", CoolModeRestoreSeverity),

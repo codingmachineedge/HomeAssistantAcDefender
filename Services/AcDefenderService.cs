@@ -179,6 +179,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectNaturalChangePlanner(reading, expectedSetPoint, bypassQuietTiming, now, out var naturalChangeUntil, out var naturalChangeMessage))
+                {
+                    stateStore.SetNextAction(naturalChangeMessage, naturalChangeUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectRoutineTiming(reading, expectedSetPoint, bypassQuietTiming, now, out var routineUntil, out var routineMessage))
                 {
                     stateStore.SetNextAction(routineMessage, routineUntil);

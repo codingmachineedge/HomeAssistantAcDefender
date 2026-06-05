@@ -188,6 +188,21 @@ public sealed class DefenderStateStore
                 240);
             state.Settings.NaturalCadenceJitterMinutes = Math.Clamp(request.NaturalCadenceJitterMinutes, 0, 60);
             state.Settings.NaturalCadenceSafetyBandCelsius = Math.Round(Math.Clamp(request.NaturalCadenceSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.NaturalChangePlannerEnabled = request.NaturalChangePlannerEnabled;
+            state.Settings.NaturalChangePlannerTriggerTouches = Math.Clamp(request.NaturalChangePlannerTriggerTouches, 1, 20);
+            state.Settings.NaturalChangePlannerMinimumMinutes = Math.Clamp(request.NaturalChangePlannerMinimumMinutes, 1, 240);
+            state.Settings.NaturalChangePlannerMaximumMinutes = Math.Clamp(
+                request.NaturalChangePlannerMaximumMinutes,
+                state.Settings.NaturalChangePlannerMinimumMinutes,
+                480);
+            state.Settings.NaturalChangePlannerJitterMinutes = Math.Clamp(request.NaturalChangePlannerJitterMinutes, 0, 120);
+            state.Settings.NaturalChangePlannerSafetyBandCelsius = Math.Round(Math.Clamp(request.NaturalChangePlannerSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.NaturalChangePlannerPreferWeatherSlots = request.NaturalChangePlannerPreferWeatherSlots;
+            state.Settings.NaturalChangePlannerPreferSensorBeat = request.NaturalChangePlannerPreferSensorBeat;
+            if (!state.Settings.NaturalChangePlannerEnabled)
+            {
+                ClearNaturalChangePlanner("Comfort Pace is off.");
+            }
             state.Settings.ComfortCompromiseEnabled = request.ComfortCompromiseEnabled;
             state.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(request.ComfortCompromiseTriggerTouches, 1, 20);
             state.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(request.ComfortCompromiseHoldMinutes, 0, 240);
@@ -398,6 +413,7 @@ public sealed class DefenderStateStore
                 state.ComfortBudgetStatus = $"Comfort budget counted {state.DefenderCommandTimes.Count}/{state.Settings.ComfortBudgetMaxCommands} recent comfort adjustments.";
                 state.NaturalCadenceDueAt = null;
                 state.NaturalCadenceStatus = "Natural cadence used its quiet slot; watching for the next safe rhythm.";
+                ClearNaturalChangePlanner("Comfort Pace used its climate slot; watching for the next calm opening.");
                 ClearRepeatCommand("Repeat quiet used its slot; watching for identical follow-up commands.");
             }
 
@@ -1721,6 +1737,87 @@ public sealed class DefenderStateStore
         }
     }
 
+    public bool TryRespectNaturalChangePlanner(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassNaturalChange,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.NaturalChangePlannerEnabled)
+            {
+                ClearNaturalChangePlanner("Comfort Pace is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            PruneDefenderCommandTimes(now);
+            var triggerTouches = Math.Max(1, state.Settings.NaturalChangePlannerTriggerTouches);
+            var recentTouches = state.ExternalTouchTimes.Count;
+            if (recentTouches < triggerTouches)
+            {
+                ClearNaturalChangePlanner($"Comfort Pace is watching for frequent wall changes ({recentTouches}/{triggerTouches}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassNaturalChange || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearNaturalChangePlanner("Room comfort needs help now, so Comfort Pace is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.NaturalChangePlannerSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearNaturalChangePlanner($"Room is above {allowedRoomTemperature:0.0} C, so Comfort Pace lets the correction continue.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearNaturalChangePlanner("Comfort Pace is lined up; no natural slot needed.");
+                SaveState();
+                return false;
+            }
+
+            if (state.NaturalChangePlannerDueAt is { } dueAt)
+            {
+                if (dueAt > now)
+                {
+                    waitUntil = dueAt;
+                    var pressure = CalculateTouchSuspicionScore(now);
+                    message = $"Comfort Pace is waiting until {dueAt.ToLocalTime():HH:mm:ss} for a {state.NaturalChangePlannerReason} climate slot after {recentTouches} wall changes.";
+                    state.NaturalChangePlannerStatus = $"{message} Touch pressure is {pressure}/100.";
+                    SaveState();
+                    return true;
+                }
+
+                ClearNaturalChangePlanner("Comfort Pace slot arrived; the next safe comfort nudge can continue.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = CalculateNaturalChangePlannerDueAt(reading, now, out var reason);
+            state.NaturalChangePlannerDueAt = waitUntil;
+            state.NaturalChangePlannerReason = reason;
+            var touchPressure = CalculateTouchSuspicionScore(now);
+            message = $"Comfort Pace picked {waitUntil.ToLocalTime():HH:mm:ss} for a {reason} climate slot after {recentTouches} wall changes.";
+            state.NaturalChangePlannerStatus = $"{message} Touch pressure is {touchPressure}/100.";
+            SaveState();
+            return waitUntil > now;
+        }
+    }
+
     public bool TryRespectVisibilityGuard(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -2033,6 +2130,7 @@ public sealed class DefenderStateStore
                 && state.RoutineTimingDueAt is null
                 && state.ComfortBudgetHoldUntil is null
                 && state.NaturalCadenceDueAt is null
+                && state.NaturalChangePlannerDueAt is null
                 && state.RepeatCommandHoldUntil is null
                 && state.VisibilityGuardUntil is null
                 && state.SensorRhythmDueAt is null
@@ -2089,6 +2187,9 @@ public sealed class DefenderStateStore
             ClearNaturalCadence(state.Settings.NaturalCadenceEnabled
                 ? "Natural cadence is lined up; no quiet slot needed."
                 : "Natural cadence is off.");
+            ClearNaturalChangePlanner(state.Settings.NaturalChangePlannerEnabled
+                ? "Comfort Pace is lined up; no natural slot needed."
+                : "Comfort Pace is off.");
             ClearRepeatCommand(state.Settings.RepeatCommandGuardEnabled
                 ? "Repeat quiet is lined up; no identical command hold needed."
                 : "Repeat quiet is off.");
@@ -2121,6 +2222,7 @@ public sealed class DefenderStateStore
                     state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
                     ResetCoolingDefenderStep();
                     ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
+                    ClearNaturalChangePlanner($"Schedule {activeSchedule.Name} changed the target, so Comfort Pace reset.");
                     ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
                     ClearCoolingRunway($"Schedule {activeSchedule.Name} changed the target, so cooling runway reset.");
                     ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
@@ -2163,6 +2265,7 @@ public sealed class DefenderStateStore
                 state.TargetTemperatureCelsius = Math.Round(comfortTarget, 1);
                 state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
                 ClearNaturalCadence("Upstairs comfort changed the target, so natural cadence reset.");
+                ClearNaturalChangePlanner("Upstairs comfort changed the target, so Comfort Pace reset.");
                 ClearRepeatCommand("Upstairs comfort changed the target, so repeat quiet reset.");
                 ClearCoolingRunway("Upstairs comfort changed the target, so cooling runway reset.");
                 ClearComfortCompromise("Upstairs comfort changed the target, so comfort compromise reset.");
@@ -2421,6 +2524,11 @@ public sealed class DefenderStateStore
         state.NaturalCadenceStatus = state.Settings.NaturalCadenceEnabled
             ? $"Manual touch pressure is {touchScore}/100; natural cadence will pick a quiet slot if a safe correction is needed."
             : "Natural cadence is off.";
+        state.NaturalChangePlannerDueAt = null;
+        state.NaturalChangePlannerReason = "watching";
+        state.NaturalChangePlannerStatus = state.Settings.NaturalChangePlannerEnabled
+            ? $"Comfort Pace saw touch pressure {touchScore}/100; frequent wall changes will use a calmer climate slot if the room stays safe."
+            : "Comfort Pace is off.";
         state.TouchSignatureStatus = state.Settings.TouchSignatureEnabled
             ? "Manual wall step logged; touch signature will shape safe nudges after enough samples."
             : "Touch signature is off.";
@@ -2553,6 +2661,7 @@ public sealed class DefenderStateStore
         ClearRoutineTiming("Cooler intent fast lane is active, so routine timing is stepping aside.");
         ClearComfortBudget("Cooler intent fast lane is active, so comfort budget is stepping aside.");
         ClearNaturalCadence("Cooler intent fast lane is active, so natural cadence is stepping aside.");
+        ClearNaturalChangePlanner("Cooler intent fast lane is active, so Comfort Pace is stepping aside.");
         ClearVisibilityGuard("Cooler intent fast lane is active, so visibility guard is stepping aside.");
         ClearRepeatCommand("Cooler intent fast lane is active, so repeat quiet is stepping aside.");
         ClearCoolingRunway("Cooler intent fast lane is active, so cooling runway is stepping aside.");
@@ -3172,6 +3281,97 @@ public sealed class DefenderStateStore
         return now.AddSeconds(delaySeconds);
     }
 
+    private DateTimeOffset CalculateNaturalChangePlannerDueAt(ThermostatReading reading, DateTimeOffset now, out string reason)
+    {
+        var minMinutes = Math.Clamp(state.Settings.NaturalChangePlannerMinimumMinutes, 1, 240);
+        var maxMinutes = Math.Clamp(state.Settings.NaturalChangePlannerMaximumMinutes, minMinutes, 480);
+        var jitterMinutes = Math.Clamp(state.Settings.NaturalChangePlannerJitterMinutes, 0, 120);
+        var touchPressure = CalculateTouchSuspicionScore(now) / 100.0;
+        var commandPressure = Math.Clamp(
+            state.DefenderCommandTimes.Count / Math.Max(1.0, state.Settings.ComfortBudgetMaxCommands),
+            0.0,
+            1.0);
+        var intensity = Math.Clamp(Math.Max(touchPressure, commandPressure), 0.0, 1.0);
+        var baseDelayMinutes = Lerp(minMinutes, maxMinutes, intensity);
+        var candidate = now.AddMinutes(baseDelayMinutes);
+        reason = "routine comfort-check";
+
+        if (state.Settings.NaturalChangePlannerPreferWeatherSlots)
+        {
+            var drift = BuildWeatherDrift(now);
+            if (drift.SampleCount >= 2 && (drift.Direction == "warming" || drift.ConditionChanged))
+            {
+                var weatherDelayMinutes = Math.Min(maxMinutes, minMinutes + Math.Max(1, state.Settings.WeatherDriftHoldMinutes / 2));
+                candidate = now.AddMinutes(weatherDelayMinutes);
+                reason = drift.ConditionChanged ? "weather update" : "outdoor warming";
+            }
+        }
+
+        if (state.Settings.NaturalChangePlannerPreferSensorBeat)
+        {
+            var sensor = BuildSensorRhythmAnalysis(now);
+            if (sensor.SampleCount >= Math.Max(2, state.Settings.SensorRhythmMinimumSamples)
+                && sensor.MedianIntervalSeconds > 0)
+            {
+                var sensorCandidate = CalculateSensorRhythmDueAt(candidate, sensor);
+                var maxSensorCandidate = now.AddMinutes(maxMinutes + jitterMinutes);
+                if (sensorCandidate <= maxSensorCandidate)
+                {
+                    candidate = sensorCandidate;
+                    reason = reason == "routine comfort-check"
+                        ? "Home Assistant sensor beat"
+                        : $"{reason} plus sensor beat";
+                }
+            }
+        }
+
+        if (reason == "routine comfort-check")
+        {
+            var boundaryMinutes = intensity >= 0.65 ? 10 : 5;
+            candidate = AlignNaturalChangeToLocalBoundary(candidate, boundaryMinutes);
+        }
+
+        if (jitterMinutes > 0)
+        {
+            candidate = candidate.AddSeconds(random.Next(-jitterMinutes * 60, jitterMinutes * 60 + 1));
+        }
+
+        var earliest = now.AddMinutes(minMinutes);
+        var latest = now.AddMinutes(maxMinutes + jitterMinutes);
+        if (candidate < earliest)
+        {
+            candidate = earliest;
+        }
+
+        if (candidate > latest)
+        {
+            candidate = latest;
+        }
+
+        var absoluteMinimum = now.AddSeconds(30);
+        return candidate < absoluteMinimum ? absoluteMinimum : candidate;
+    }
+
+    private static DateTimeOffset AlignNaturalChangeToLocalBoundary(DateTimeOffset candidate, int intervalMinutes)
+    {
+        intervalMinutes = Math.Clamp(intervalMinutes, 1, 60);
+        var local = candidate.ToLocalTime();
+        var localMinute = new DateTimeOffset(
+            local.Year,
+            local.Month,
+            local.Day,
+            local.Hour,
+            local.Minute,
+            0,
+            local.Offset);
+        var remainder = localMinute.Minute % intervalMinutes;
+        var minutesUntilBoundary = remainder == 0
+            ? intervalMinutes
+            : intervalMinutes - remainder;
+
+        return localMinute.AddMinutes(minutesUntilBoundary).ToUniversalTime();
+    }
+
     private DateTimeOffset CalculateRepeatCommandHoldUntil(DateTimeOffset lastCommandAt, DateTimeOffset now)
     {
         var baseSeconds = Math.Clamp(state.Settings.RepeatCommandMinimumWaitSeconds, 0, 1800);
@@ -3600,6 +3800,14 @@ public sealed class DefenderStateStore
             240);
         saved.Settings.NaturalCadenceJitterMinutes = Math.Clamp(saved.Settings.NaturalCadenceJitterMinutes, 0, 60);
         saved.Settings.NaturalCadenceSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalCadenceSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.NaturalChangePlannerTriggerTouches = Math.Clamp(saved.Settings.NaturalChangePlannerTriggerTouches, 1, 20);
+        saved.Settings.NaturalChangePlannerMinimumMinutes = Math.Clamp(saved.Settings.NaturalChangePlannerMinimumMinutes, 1, 240);
+        saved.Settings.NaturalChangePlannerMaximumMinutes = Math.Clamp(
+            saved.Settings.NaturalChangePlannerMaximumMinutes,
+            saved.Settings.NaturalChangePlannerMinimumMinutes,
+            480);
+        saved.Settings.NaturalChangePlannerJitterMinutes = Math.Clamp(saved.Settings.NaturalChangePlannerJitterMinutes, 0, 120);
+        saved.Settings.NaturalChangePlannerSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalChangePlannerSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ComfortCompromiseTriggerTouches = Math.Clamp(saved.Settings.ComfortCompromiseTriggerTouches, 1, 20);
         saved.Settings.ComfortCompromiseHoldMinutes = Math.Clamp(saved.Settings.ComfortCompromiseHoldMinutes, 0, 240);
         saved.Settings.ComfortCompromiseDecayMinutes = Math.Clamp(saved.Settings.ComfortCompromiseDecayMinutes, 1, 240);
@@ -3697,6 +3905,24 @@ public sealed class DefenderStateStore
         if (saved.NaturalCadenceDueAt is { } cadenceDueAt && cadenceDueAt <= DateTimeOffset.UtcNow)
         {
             saved.NaturalCadenceDueAt = null;
+        }
+        saved.NaturalChangePlannerReason = string.IsNullOrWhiteSpace(saved.NaturalChangePlannerReason)
+            ? "watching"
+            : saved.NaturalChangePlannerReason;
+        saved.NaturalChangePlannerStatus = string.IsNullOrWhiteSpace(saved.NaturalChangePlannerStatus)
+            ? "Comfort Pace is watching."
+            : saved.NaturalChangePlannerStatus;
+        if (!saved.Settings.NaturalChangePlannerEnabled)
+        {
+            saved.NaturalChangePlannerDueAt = null;
+            saved.NaturalChangePlannerReason = "watching";
+            saved.NaturalChangePlannerStatus = "Comfort Pace is off.";
+        }
+        else if (saved.NaturalChangePlannerDueAt is { } naturalChangeDueAt && naturalChangeDueAt <= DateTimeOffset.UtcNow)
+        {
+            saved.NaturalChangePlannerDueAt = null;
+            saved.NaturalChangePlannerReason = "watching";
+            saved.NaturalChangePlannerStatus = "Comfort Pace is watching.";
         }
         saved.ComfortCompromiseStatus = string.IsNullOrWhiteSpace(saved.ComfortCompromiseStatus)
             ? "Comfort compromise is watching for repeated wall changes."
@@ -3906,6 +4132,13 @@ public sealed class DefenderStateStore
         var naturalCadenceSeconds = state.NaturalCadenceDueAt is { } cadenceDueAt && cadenceDueAt > now
             ? (int)Math.Ceiling((cadenceDueAt - now).TotalSeconds)
             : 0;
+        var naturalChangePlannerSeconds = state.NaturalChangePlannerDueAt is { } naturalChangeDueAt && naturalChangeDueAt > now
+            ? (int)Math.Ceiling((naturalChangeDueAt - now).TotalSeconds)
+            : 0;
+        if (naturalChangePlannerSeconds == 0 && state.NaturalChangePlannerDueAt is not null)
+        {
+            ClearNaturalChangePlanner("Comfort Pace slot arrived; watching for the next calm opening.");
+        }
         PruneVisibilityNoticeTimes(now);
         var visibilityGuardSeconds = state.VisibilityGuardUntil is { } visibilityUntil && visibilityUntil > now
             ? (int)Math.Ceiling((visibilityUntil - now).TotalSeconds)
@@ -4056,6 +4289,20 @@ public sealed class DefenderStateStore
                     ? "Natural cadence is watching."
                     : state.NaturalCadenceStatus,
                 naturalCadenceSeconds > 0 ? state.NaturalCadenceDueAt : null),
+            new NaturalChangePlannerSnapshot(
+                state.Settings.NaturalChangePlannerEnabled,
+                naturalChangePlannerSeconds > 0,
+                naturalChangePlannerSeconds,
+                naturalWalkbackScore,
+                state.ExternalTouchTimes.Count,
+                state.DefenderCommandTimes.Count,
+                string.IsNullOrWhiteSpace(state.NaturalChangePlannerReason)
+                    ? "watching"
+                    : state.NaturalChangePlannerReason,
+                string.IsNullOrWhiteSpace(state.NaturalChangePlannerStatus)
+                    ? "Comfort Pace is watching."
+                    : state.NaturalChangePlannerStatus,
+                naturalChangePlannerSeconds > 0 ? state.NaturalChangePlannerDueAt : null),
             new ComfortCompromiseSnapshot(
                 state.Settings.ComfortCompromiseEnabled,
                 comfortCompromiseSeconds > 0,
@@ -4249,6 +4496,7 @@ public sealed class DefenderStateStore
         ClearRoutineTiming("Routine timing is watching.");
         ClearComfortBudget("Comfort budget is watching.");
         ClearNaturalCadence("Natural cadence is watching.");
+        ClearNaturalChangePlanner("Comfort Pace is watching.");
         ClearRepeatCommand("Repeat quiet is watching.");
         ClearCoolingRunway("Cooling runway is watching.");
         ClearSensorRhythm("Sensor rhythm is watching.");
@@ -4307,6 +4555,13 @@ public sealed class DefenderStateStore
     {
         state.NaturalCadenceDueAt = null;
         state.NaturalCadenceStatus = status;
+    }
+
+    private void ClearNaturalChangePlanner(string status)
+    {
+        state.NaturalChangePlannerDueAt = null;
+        state.NaturalChangePlannerReason = "watching";
+        state.NaturalChangePlannerStatus = status;
     }
 
     private void ClearRepeatCommand(string status)
@@ -4555,6 +4810,14 @@ public sealed class DefenderStateStore
             NaturalCadenceMaximumMinutes = settings.NaturalCadenceMaximumMinutes,
             NaturalCadenceJitterMinutes = settings.NaturalCadenceJitterMinutes,
             NaturalCadenceSafetyBandCelsius = settings.NaturalCadenceSafetyBandCelsius,
+            NaturalChangePlannerEnabled = settings.NaturalChangePlannerEnabled,
+            NaturalChangePlannerTriggerTouches = settings.NaturalChangePlannerTriggerTouches,
+            NaturalChangePlannerMinimumMinutes = settings.NaturalChangePlannerMinimumMinutes,
+            NaturalChangePlannerMaximumMinutes = settings.NaturalChangePlannerMaximumMinutes,
+            NaturalChangePlannerJitterMinutes = settings.NaturalChangePlannerJitterMinutes,
+            NaturalChangePlannerSafetyBandCelsius = settings.NaturalChangePlannerSafetyBandCelsius,
+            NaturalChangePlannerPreferWeatherSlots = settings.NaturalChangePlannerPreferWeatherSlots,
+            NaturalChangePlannerPreferSensorBeat = settings.NaturalChangePlannerPreferSensorBeat,
             ComfortCompromiseEnabled = settings.ComfortCompromiseEnabled,
             ComfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches,
             ComfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes,
@@ -4753,6 +5016,12 @@ public sealed class DefenderStateStore
         public DateTimeOffset? NaturalCadenceDueAt { get; set; }
 
         public string NaturalCadenceStatus { get; set; } = "Natural cadence is watching.";
+
+        public DateTimeOffset? NaturalChangePlannerDueAt { get; set; }
+
+        public string NaturalChangePlannerReason { get; set; } = "watching";
+
+        public string NaturalChangePlannerStatus { get; set; } = "Comfort Pace is watching.";
 
         public DateTimeOffset? ComfortCompromiseStartedAt { get; set; }
 

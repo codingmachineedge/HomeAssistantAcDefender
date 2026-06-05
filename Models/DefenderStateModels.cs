@@ -25,6 +25,7 @@ public sealed record DefenderSnapshot(
     RoutineTimingSnapshot RoutineTiming,
     ComfortBudgetSnapshot ComfortBudget,
     NaturalCadenceSnapshot NaturalCadence,
+    NaturalChangePlannerSnapshot NaturalChangePlanner,
     ComfortCompromiseSnapshot ComfortCompromise,
     ComfortMemorySnapshot ComfortMemory,
     ConflictQuietSnapshot ConflictQuiet,
@@ -181,6 +182,17 @@ public sealed record NaturalCadenceSnapshot(
     int SecondsRemaining,
     int TouchPressure,
     int RecentCommandCount,
+    string Status,
+    DateTimeOffset? DueAt);
+
+public sealed record NaturalChangePlannerSnapshot(
+    bool Enabled,
+    bool Waiting,
+    int SecondsRemaining,
+    int TouchPressure,
+    int RecentTouchCount,
+    int RecentCommandCount,
+    string PlannedReason,
     string Status,
     DateTimeOffset? DueAt);
 
@@ -471,6 +483,22 @@ public sealed class DefenderSettings
     public int NaturalCadenceJitterMinutes { get; set; } = 4;
 
     public double NaturalCadenceSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool NaturalChangePlannerEnabled { get; set; } = true;
+
+    public int NaturalChangePlannerTriggerTouches { get; set; } = 3;
+
+    public int NaturalChangePlannerMinimumMinutes { get; set; } = 8;
+
+    public int NaturalChangePlannerMaximumMinutes { get; set; } = 45;
+
+    public int NaturalChangePlannerJitterMinutes { get; set; } = 6;
+
+    public double NaturalChangePlannerSafetyBandCelsius { get; set; } = 1.1;
+
+    public bool NaturalChangePlannerPreferWeatherSlots { get; set; } = true;
+
+    public bool NaturalChangePlannerPreferSensorBeat { get; set; } = true;
 
     public bool ComfortCompromiseEnabled { get; set; } = true;
 

@@ -35,6 +35,8 @@ Comfort Budget is stored in `DefenderStateStore` as recent real setpoint command
 
 Natural Cadence is a persisted timing slot in `DefenderStateStore`. `AcDefenderService` checks it after routine timing and comfort budget, then waits only for safe corrections. Its delay is based on recent wall-touch pressure and recent automatic command pressure, and it clears when direct comfort correction is needed.
 
+Comfort Pace is a higher-pressure timing slot in `DefenderStateStore` for frequent wall changes. `AcDefenderService` checks it before routine timing and other late safe-correction holds. It chooses a persisted due time from wall-touch pressure, recent command pressure, real weather movement, the learned Home Assistant sensor rhythm, and local 5/10-minute clock boundaries. It only delays safe corrections and clears immediately when direct comfort correction is needed.
+
 Comfort Compromise is evaluated inside `CalculateExpectedSetPoint`. It can temporarily adjust the effective target from repeated wall choices, but only while the real room temperature remains inside its safety band. Target changes from the website, schedule, or upstairs comfort clear the compromise.
 
 Comfort Memory is also evaluated inside `CalculateExpectedSetPoint`, before temporary compromise. It stores small local-hour offsets learned from repeated safe wall choices, prunes them by retention time, and skips warmer memory when upstairs is hot.

@@ -25,6 +25,7 @@ The status snapshot includes:
 - `routineTiming`: safe correction rhythm status, wait seconds, interval, jitter, and due time.
 - `comfortBudget`: safe correction budget status, wait seconds, recent command count, max commands, and due time.
 - `naturalCadence`: variable safe-correction slot status, wait seconds, touch pressure, recent command count, and due time.
+- `naturalChangePlanner`: Comfort Pace status, wait seconds, touch pressure, recent touches, recent command count, selected reason, and due time.
 - `comfortCompromise`: temporary blended target status, preferred wall setpoint, effective target, remaining seconds, and expiry time.
 - `comfortMemory`: learned time-window status, active flag, sample count, learned offset, and effective target.
 - `conflictQuiet`: repeated-touch stand-down status, remaining seconds, trigger touch count, comfort band, and expiry time.
@@ -61,7 +62,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Comfort Pace, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 

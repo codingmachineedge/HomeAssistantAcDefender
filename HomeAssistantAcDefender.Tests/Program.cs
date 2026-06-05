@@ -21,6 +21,7 @@ tests.CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches();
 tests.WeatherDriftWaitsOnlyForSafeStableOutdoorConditions();
 tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
+tests.ComfortPaceWaitsAfterFrequentWallTouchesButBypassesHotRoom();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
 internal sealed class DefenderSetPointRegressionTests
@@ -622,6 +623,76 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.CoolingRunway.Holding)
         {
             throw new InvalidOperationException("Cooling Runway should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void ComfortPaceWaitsAfterFrequentWallTouchesButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.NaturalChangePlannerEnabled = true;
+        settings.NaturalChangePlannerTriggerTouches = 2;
+        settings.NaturalChangePlannerMinimumMinutes = 8;
+        settings.NaturalChangePlannerMaximumMinutes = 8;
+        settings.NaturalChangePlannerJitterMinutes = 0;
+        settings.NaturalChangePlannerSafetyBandCelsius = 1.1;
+        settings.NaturalChangePlannerPreferWeatherSlots = false;
+        settings.NaturalChangePlannerPreferSensorBeat = false;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.5,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(safeReading);
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 25.0 });
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 26.0 });
+
+        var now = DateTimeOffset.UtcNow;
+        var waited = store.TryRespectNaturalChangePlanner(
+            safeReading with { SetPointCelsius = 26.0 },
+            22.0,
+            bypassNaturalChange: false,
+            now,
+            out var waitUntil,
+            out var message);
+
+        if (!waited || waitUntil <= now || !message.Contains("Comfort Pace", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Comfort Pace should wait for a calm climate slot after frequent wall touches.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.NaturalChangePlanner.Waiting
+            || snapshot.NaturalChangePlanner.RecentTouchCount < 2
+            || snapshot.NaturalChangePlanner.PlannedReason != "routine comfort-check")
+        {
+            throw new InvalidOperationException("Comfort Pace snapshot should show the active wait, touch count, and planned reason.");
+        }
+
+        var hotRoom = store.TryRespectNaturalChangePlanner(
+            safeReading with { CurrentTemperatureCelsius = 24.2, SetPointCelsius = 26.0 },
+            22.0,
+            bypassNaturalChange: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Comfort Pace must step aside when the room is too warm.");
+        }
+
+        snapshot = store.GetSnapshot();
+        if (snapshot.NaturalChangePlanner.Waiting)
+        {
+            throw new InvalidOperationException("Comfort Pace should clear its wait after comfort safety takes over.");
         }
     }
 

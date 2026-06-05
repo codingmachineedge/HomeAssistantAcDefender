@@ -25,6 +25,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Routine Timing so safe corrections after repeated touches wait for normal-looking comfort-check intervals.
 - Adds Comfort Budget so repeated safe corrections can rest before another adjustment.
 - Adds Natural Cadence so repeated safe corrections wait for a variable future slot based on wall-touch pressure.
+- Adds Comfort Pace so frequent wall changes can wait for a calmer weather, Home Assistant sensor, or clock-aligned climate slot before a safe correction.
 - Adds Comfort Compromise so repeated wall choices can influence a temporary safe target that fades back naturally.
 - Adds Comfort Memory so repeated safe wall choices can teach a small time-of-day bias that expires automatically.
 - Adds Touch Intent so clear warmer wall-choice patterns can get extra safe grace instead of an obvious immediate fight-back.
@@ -102,14 +103,15 @@ Every cycle:
 17. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
 18. Respect Comfort Budget when too many safe adjustments happened recently.
 19. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-20. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-21. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-22. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-23. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
-24. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-25. Optionally set fan saver mode when near target.
-26. Correct the thermostat setpoint when it does not match the defender decision.
-27. Update the real-time dashboard status.
+20. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
+21. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+22. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+23. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+24. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
+25. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+26. Optionally set fan saver mode when near target.
+27. Correct the thermostat setpoint when it does not match the defender decision.
+28. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -203,6 +205,14 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `NaturalCadenceMaximumMinutes`: longest safe cadence wait.
 - `NaturalCadenceJitterMinutes`: small time wobble added around cadence waits.
 - `NaturalCadenceSafetyBandCelsius`: extra room warmth allowed before cadence stops waiting.
+- `NaturalChangePlannerEnabled`: enables Comfort Pace after frequent wall changes.
+- `NaturalChangePlannerTriggerTouches`: recent wall touches needed before Comfort Pace starts.
+- `NaturalChangePlannerMinimumMinutes`: shortest calm climate-slot wait.
+- `NaturalChangePlannerMaximumMinutes`: longest calm climate-slot wait as touch pressure rises.
+- `NaturalChangePlannerJitterMinutes`: small random wiggle around the selected climate slot.
+- `NaturalChangePlannerSafetyBandCelsius`: extra room warmth allowed before Comfort Pace stops waiting.
+- `NaturalChangePlannerPreferWeatherSlots`: lets real weather updates or outdoor warming shorten the selected wait.
+- `NaturalChangePlannerPreferSensorBeat`: lines the selected wait up with the learned Home Assistant climate reading rhythm.
 - `ComfortCompromiseEnabled`: lets repeated wall choices temporarily influence the effective target while safe.
 - `ComfortCompromiseTriggerTouches`: recent wall touches needed before a compromise starts.
 - `ComfortCompromiseHoldMinutes`: how long the wall preference can rest before fading back.
@@ -280,6 +290,8 @@ Routine Timing is a timing layer for safe corrections. When repeated wall change
 Comfort Budget is a rolling command limiter for safe corrections. If too many automatic setpoint adjustments happened inside the configured window, the defender rests until the oldest one leaves the window. If the room gets too warm or upstairs comfort needs direct cooling, the budget clears and the real correction path continues.
 
 Natural Cadence picks a variable future slot for safe corrections after repeated wall touches. The slot gets later as touch pressure or recent command pressure rises, and it has a small jitter so safe nudges do not land at identical times. If the room gets too warm or upstairs comfort needs direct cooling, cadence clears and the real correction path continues.
+
+Comfort Pace is the high-frequency wall-change planner. When enough wall touches happen and the room is still inside its safety band, it chooses a calmer slot from touch pressure, recent command pressure, real outdoor weather movement, the learned Home Assistant sensor beat, and 5/10-minute local clock boundaries. It waits only for safe corrections; if the room gets too warm or direct cooling is needed, it clears immediately and the real correction path continues.
 
 Comfort Compromise is a temporary effective target. If wall changes repeat and the room is still inside the compromise safe band, the latest wall setpoint can influence the defender target up to the configured maximum offset. After the hold time, that influence fades back to the website target over the decay window. If the room gets too warm, the compromise clears immediately and normal warm-room defense resumes.
 
