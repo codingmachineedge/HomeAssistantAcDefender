@@ -41,6 +41,8 @@ Comfort Memory is also evaluated inside `CalculateExpectedSetPoint`, before temp
 
 Touch Intent is evaluated in `DefenderStateStore` after a real external wall change is logged. It classifies recent wall choices as warmer, cooler, mixed, or learning, then can extend Manual Comfort Grace only while room temperature is inside its safe band. It does not issue commands and clears before direct cooling decisions.
 
+Setpoint Echo is evaluated in `DefenderStateStore` using the same pending setpoint command record that attributes Home Assistant updates to the app. `AcDefenderService` can wait for that real echo before sending another safe command, and bypasses the wait when direct comfort correction is needed.
+
 Sensor Rhythm is a persisted timing guard in `DefenderStateStore`. It stores real Home Assistant climate reading timestamps, learns the median reading interval, and lets `AcDefenderService` delay only safe corrections until just after that cadence. It clears before direct comfort correction.
 
 Adaptive quietness is also calculated in `DefenderStateStore`. It turns recent external thermostat touches into a quiet level and effective delay, hold chance, command gap, and nudge size. The dashboard displays those effective values so the UI matches the worker decision.

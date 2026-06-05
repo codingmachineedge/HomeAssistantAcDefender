@@ -111,6 +111,9 @@
                 <MudAlert Class="mt-2" Severity="@TouchIntentSeverity" Variant="Variant.Outlined">@TouchIntentText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if recent wall changes look warmer, cooler, or mixed.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@SetpointEchoSeverity" Variant="Variant.Outlined">@SetpointEchoText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if the helper is waiting for Home Assistant to repeat back the last setpoint.</MudText>
+
                 <MudAlert Class="mt-2" Severity="@SensorRhythmSeverity" Variant="Variant.Outlined">@SensorRhythmText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if a safe correction is waiting for a normal Home Assistant sensor beat.</MudText>
 
@@ -204,6 +207,8 @@
                     <MetricCard Label="Wall grace" Value="@ManualGraceWaitText" Help="How long a wall change can rest." />
                     <MetricCard Label="Touch intent" Value="@TouchIntentDirectionText" Help="Recent wall choices: warmer, cooler, mixed, or learning." />
                     <MetricCard Label="Intent grace" Value="@TouchIntentGraceText" Help="Extra safe grace available for clear warmer intent." />
+                    <MetricCard Label="Echo wait" Value="@SetpointEchoWaitText" Help="Wait for Home Assistant to confirm the last setpoint." />
+                    <MetricCard Label="Echo target" Value="@SetpointEchoTargetText" Help="The last setpoint Home Assistant has not reported back yet." />
                     <MetricCard Label="Sensor rhythm" Value="@SensorRhythmWaitText" Help="Wait for a normal Home Assistant sensor beat." />
                     <MetricCard Label="Sensor beat" Value="@SensorRhythmBeatText" Help="Learned reading interval from real Home Assistant updates." />
                     <MetricCard Label="Room trend" Value="@RoomTrendDirectionText" Help="Whether the room is warming or cooling." />
@@ -358,6 +363,9 @@
     private string TouchIntentText => Snapshot?.TouchIntent.Status ?? "Touch intent is watching.";
     private string TouchIntentDirectionText => Snapshot?.TouchIntent.Enabled == true ? Snapshot.TouchIntent.Direction : "Off";
     private string TouchIntentGraceText => Snapshot?.TouchIntent.Enabled == true ? $"+{Snapshot.TouchIntent.ExtraGraceMinutes} min" : "Off";
+    private string SetpointEchoText => Snapshot?.SetpointEcho.Status ?? "Setpoint echo is watching.";
+    private string SetpointEchoWaitText => Snapshot?.SetpointEcho.Waiting == true ? $"{Snapshot.SetpointEcho.SecondsRemaining}s" : "Ready";
+    private string SetpointEchoTargetText => Snapshot?.SetpointEcho.PendingSetPointCelsius is { } target ? $"{target:0.0} C" : "Ready";
     private string SensorRhythmText => Snapshot?.SensorRhythm.Status ?? "Sensor rhythm is watching.";
     private string SensorRhythmWaitText => Snapshot?.SensorRhythm.Waiting == true ? $"{Snapshot.SensorRhythm.SecondsRemaining}s" : "Ready";
     private string SensorRhythmBeatText => Snapshot?.SensorRhythm.Enabled == true && Snapshot.SensorRhythm.MedianIntervalSeconds > 0
@@ -422,6 +430,9 @@
     private Severity TouchIntentSeverity => Snapshot?.TouchIntent.Active == true
         ? Snapshot.TouchIntent.Direction == "cooler" ? Severity.Info : Severity.Warning
         : Snapshot?.TouchIntent.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity SetpointEchoSeverity => Snapshot?.SetpointEcho.Waiting == true
+        ? Severity.Warning
+        : Snapshot?.SetpointEcho.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity SensorRhythmSeverity => Snapshot?.SensorRhythm.Waiting == true
         ? Severity.Warning
         : Snapshot?.SensorRhythm.Enabled == true ? Severity.Info : Severity.Normal;

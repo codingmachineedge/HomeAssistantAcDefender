@@ -191,6 +191,9 @@ public sealed class DefenderStateStore
             state.Settings.TouchIntentNetWarmThresholdCelsius = Math.Round(Math.Clamp(request.TouchIntentNetWarmThresholdCelsius, 0.1, 5.0), 1);
             state.Settings.TouchIntentExtraGraceMinutes = Math.Clamp(request.TouchIntentExtraGraceMinutes, 0, 240);
             state.Settings.TouchIntentSafetyBandCelsius = Math.Round(Math.Clamp(request.TouchIntentSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.SetpointEchoGuardEnabled = request.SetpointEchoGuardEnabled;
+            state.Settings.SetpointEchoGraceSeconds = Math.Clamp(request.SetpointEchoGraceSeconds, 5, 300);
+            state.Settings.SetpointEchoSafetyBandCelsius = Math.Round(Math.Clamp(request.SetpointEchoSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.SensorRhythmGuardEnabled = request.SensorRhythmGuardEnabled;
             state.Settings.SensorRhythmMinimumSamples = Math.Clamp(request.SensorRhythmMinimumSamples, 2, 60);
             state.Settings.SensorRhythmWindowMinutes = Math.Clamp(request.SensorRhythmWindowMinutes, 5, 1440);
@@ -339,6 +342,9 @@ public sealed class DefenderStateStore
             {
                 state.PendingCommandSetPointCelsius = setPoint;
                 state.PendingCommandAt = state.UpdatedAt;
+                state.SetpointEchoStatus = state.Settings.SetpointEchoGuardEnabled
+                    ? $"Setpoint echo is waiting for Home Assistant to report {setPoint:0.0} C."
+                    : "Setpoint echo guard is off.";
                 state.LastDefenderCommandAt = state.UpdatedAt;
                 state.DefenderCommandTimes.Add(state.UpdatedAt);
                 PruneDefenderCommandTimes(state.UpdatedAt);
@@ -825,6 +831,76 @@ public sealed class DefenderStateStore
             state.SensorRhythmStatus = message;
             SaveState();
             return waitUntil > now;
+        }
+    }
+
+    public bool TryRespectSetpointEcho(
+        ThermostatReading reading,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.SetpointEchoGuardEnabled)
+            {
+                state.SetpointEchoStatus = "Setpoint echo guard is off.";
+                SaveState();
+                return false;
+            }
+
+            if (state.PendingCommandSetPointCelsius is not { } pendingSetPoint
+                || state.PendingCommandAt is not { } pendingAt)
+            {
+                state.SetpointEchoStatus = "Setpoint echo is watching.";
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - pendingSetPoint) <= 0.15)
+            {
+                ClearPendingSetpointEcho($"Home Assistant echoed {pendingSetPoint:0.0} C; another correction can wait for normal rules.");
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                state.SetpointEchoStatus = "Room comfort needs help now, so setpoint echo is stepping aside.";
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.SetpointEchoSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                state.SetpointEchoStatus = $"Room is above {allowedRoomTemperature:0.0} C, so setpoint echo is stepping aside.";
+                SaveState();
+                return false;
+            }
+
+            waitUntil = pendingAt.AddSeconds(Math.Max(5, state.Settings.SetpointEchoGraceSeconds));
+            if (waitUntil <= now)
+            {
+                if (now - pendingAt > TimeSpan.FromSeconds(Math.Max(options.CommandGraceSeconds, state.Settings.SetpointEchoGraceSeconds)))
+                {
+                    state.PendingCommandSetPointCelsius = null;
+                    state.PendingCommandAt = null;
+                }
+
+                state.SetpointEchoStatus = $"Setpoint echo window ended for {pendingSetPoint:0.0} C; safe correction can continue.";
+                SaveState();
+                return false;
+            }
+
+            message = $"Setpoint echo is waiting until {waitUntil.ToLocalTime():HH:mm:ss} for Home Assistant to report {pendingSetPoint:0.0} C before another safe command.";
+            state.SetpointEchoStatus = message;
+            SaveState();
+            return true;
         }
     }
 
@@ -1752,8 +1828,7 @@ public sealed class DefenderStateStore
 
         if (matchesPendingCommand)
         {
-            state.PendingCommandSetPointCelsius = null;
-            state.PendingCommandAt = null;
+            ClearPendingSetpointEcho($"Home Assistant echoed {reading.SetPointCelsius:0.0} C from the defender command.");
             return;
         }
 
@@ -2683,6 +2758,8 @@ public sealed class DefenderStateStore
         saved.Settings.TouchIntentNetWarmThresholdCelsius = Math.Round(Math.Clamp(saved.Settings.TouchIntentNetWarmThresholdCelsius, 0.1, 5.0), 1);
         saved.Settings.TouchIntentExtraGraceMinutes = Math.Clamp(saved.Settings.TouchIntentExtraGraceMinutes, 0, 240);
         saved.Settings.TouchIntentSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TouchIntentSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.SetpointEchoGraceSeconds = Math.Clamp(saved.Settings.SetpointEchoGraceSeconds, 5, 300);
+        saved.Settings.SetpointEchoSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.SetpointEchoSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.SensorRhythmMinimumSamples = Math.Clamp(saved.Settings.SensorRhythmMinimumSamples, 2, 60);
         saved.Settings.SensorRhythmWindowMinutes = Math.Clamp(saved.Settings.SensorRhythmWindowMinutes, 5, 1440);
         saved.Settings.SensorRhythmJitterSeconds = Math.Clamp(saved.Settings.SensorRhythmJitterSeconds, 0, 300);
@@ -2751,6 +2828,16 @@ public sealed class DefenderStateStore
         saved.TouchIntentStatus = string.IsNullOrWhiteSpace(saved.TouchIntentStatus)
             ? "Touch intent is watching."
             : saved.TouchIntentStatus;
+        saved.SetpointEchoStatus = string.IsNullOrWhiteSpace(saved.SetpointEchoStatus)
+            ? "Setpoint echo is watching."
+            : saved.SetpointEchoStatus;
+        if (saved.PendingCommandAt is { } pendingAt
+            && DateTimeOffset.UtcNow - pendingAt > TimeSpan.FromSeconds(Math.Max(saved.Settings.SetpointEchoGraceSeconds, 300)))
+        {
+            saved.PendingCommandSetPointCelsius = null;
+            saved.PendingCommandAt = null;
+            saved.SetpointEchoStatus = "Setpoint echo is watching.";
+        }
         saved.SensorRhythmStatus = string.IsNullOrWhiteSpace(saved.SensorRhythmStatus)
             ? "Sensor rhythm is watching."
             : saved.SensorRhythmStatus;
@@ -2802,6 +2889,12 @@ public sealed class DefenderStateStore
             : 0;
         var sensorRhythmSeconds = state.SensorRhythmDueAt is { } sensorRhythmDueAt && sensorRhythmDueAt > now
             ? (int)Math.Ceiling((sensorRhythmDueAt - now).TotalSeconds)
+            : 0;
+        var setpointEchoUntil = state.PendingCommandAt?.AddSeconds(Math.Max(5, state.Settings.SetpointEchoGraceSeconds));
+        var setpointEchoSeconds = setpointEchoUntil is { } echoUntil
+            && echoUntil > now
+            && state.PendingCommandSetPointCelsius is not null
+            ? (int)Math.Ceiling((echoUntil - now).TotalSeconds)
             : 0;
         var routineTimingSeconds = state.RoutineTimingDueAt is { } routineDueAt && routineDueAt > now
             ? (int)Math.Ceiling((routineDueAt - now).TotalSeconds)
@@ -2988,6 +3081,15 @@ public sealed class DefenderStateStore
                 string.IsNullOrWhiteSpace(state.TouchIntentStatus)
                     ? touchIntent.Status
                     : state.TouchIntentStatus),
+            new SetpointEchoSnapshot(
+                state.Settings.SetpointEchoGuardEnabled,
+                setpointEchoSeconds > 0,
+                setpointEchoSeconds,
+                state.PendingCommandSetPointCelsius,
+                string.IsNullOrWhiteSpace(state.SetpointEchoStatus)
+                    ? "Setpoint echo is watching."
+                    : state.SetpointEchoStatus,
+                setpointEchoSeconds > 0 ? setpointEchoUntil : null),
             new SensorRhythmSnapshot(
                 state.Settings.SensorRhythmGuardEnabled,
                 sensorRhythmSeconds > 0,
@@ -3074,6 +3176,7 @@ public sealed class DefenderStateStore
         state.ConflictQuietStatus = "Conflict quiet is watching.";
         ClearManualComfortGrace();
         state.TouchIntentStatus = "Touch intent is watching.";
+        ClearPendingSetpointEcho("Setpoint echo is watching.");
         state.RoomTrendHoldUntil = null;
         state.RoomTrendStatus = "Room trend guard is watching.";
         state.ThermalMomentumHoldUntil = null;
@@ -3109,6 +3212,13 @@ public sealed class DefenderStateStore
     {
         state.VisibilityGuardUntil = null;
         state.VisibilityGuardStatus = status;
+    }
+
+    private void ClearPendingSetpointEcho(string status)
+    {
+        state.PendingCommandSetPointCelsius = null;
+        state.PendingCommandAt = null;
+        state.SetpointEchoStatus = status;
     }
 
     private void ClearSensorRhythm(string status)
@@ -3305,6 +3415,9 @@ public sealed class DefenderStateStore
             TouchIntentNetWarmThresholdCelsius = settings.TouchIntentNetWarmThresholdCelsius,
             TouchIntentExtraGraceMinutes = settings.TouchIntentExtraGraceMinutes,
             TouchIntentSafetyBandCelsius = settings.TouchIntentSafetyBandCelsius,
+            SetpointEchoGuardEnabled = settings.SetpointEchoGuardEnabled,
+            SetpointEchoGraceSeconds = settings.SetpointEchoGraceSeconds,
+            SetpointEchoSafetyBandCelsius = settings.SetpointEchoSafetyBandCelsius,
             SensorRhythmGuardEnabled = settings.SensorRhythmGuardEnabled,
             SensorRhythmMinimumSamples = settings.SensorRhythmMinimumSamples,
             SensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes,
@@ -3479,6 +3592,8 @@ public sealed class DefenderStateStore
         public string ManualComfortGraceStatus { get; set; } = "No wall-change grace active.";
 
         public string TouchIntentStatus { get; set; } = "Touch intent is watching.";
+
+        public string SetpointEchoStatus { get; set; } = "Setpoint echo is watching.";
 
         public DateTimeOffset? SensorRhythmDueAt { get; set; }
 

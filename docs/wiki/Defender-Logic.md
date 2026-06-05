@@ -15,20 +15,21 @@ Every cycle performs these steps:
 11. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
 12. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
 13. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
-14. Respect Sensor Rhythm so safe corrections can land just after a normal Home Assistant reading beat.
-15. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
-16. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
-17. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
-18. Respect Visibility Guard when a wall touch happens soon after a defender command.
-19. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
-20. Respect Comfort Budget when too many safe adjustments happened recently.
-21. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-22. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-23. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-24. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-25. Apply fan energy saver when enabled and near target.
-26. Correct the real thermostat setpoint when needed.
-27. Update the next-action status label.
+14. Respect Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
+15. Respect Sensor Rhythm so safe corrections can land just after a normal Home Assistant reading beat.
+16. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
+17. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
+18. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
+19. Respect Visibility Guard when a wall touch happens soon after a defender command.
+20. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
+21. Respect Comfort Budget when too many safe adjustments happened recently.
+22. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
+23. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+24. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+25. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+26. Apply fan energy saver when enabled and near target.
+27. Correct the real thermostat setpoint when needed.
+28. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -92,6 +93,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Uses Comfort Memory to remember a tiny expiring time-of-day preference after repeated safe wall choices.
 - Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
 - Uses Touch Intent to classify recent wall choices and extend safe grace only when warmer intent is clear.
+- Uses Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
 - Uses Sensor Rhythm so safe corrections can wait until just after the learned Home Assistant reading beat.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
@@ -228,6 +230,18 @@ targetTemperature + touchIntentSafetyBandCelsius
 ```
 
 Manual Comfort Grace can extend by `touchIntentExtraGraceMinutes`. Cooler and mixed patterns do not add warmer grace. If the room crosses the safety band, the normal safety override is reached, or upstairs heat bypasses quiet timing, Touch Intent steps aside and the direct correction path continues.
+
+## Setpoint Echo
+
+Setpoint Echo uses the real pending command record created whenever the defender sends a Home Assistant setpoint. If Home Assistant has not reported that setpoint back yet, the next safe correction can wait until `setpointEchoGraceSeconds`.
+
+It only waits while the real room temperature is inside:
+
+```text
+targetTemperature + setpointEchoSafetyBandCelsius
+```
+
+If Home Assistant reports the pending setpoint, the echo clears. If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the echo safe band, the hold steps aside immediately.
 
 ## Sensor Rhythm
 

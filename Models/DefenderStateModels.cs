@@ -28,6 +28,7 @@ public sealed record DefenderSnapshot(
     ConflictQuietSnapshot ConflictQuiet,
     ManualComfortGraceSnapshot ManualComfortGrace,
     TouchIntentSnapshot TouchIntent,
+    SetpointEchoSnapshot SetpointEcho,
     SensorRhythmSnapshot SensorRhythm,
     RoomTrendSnapshot RoomTrend,
     ThermalMomentumSnapshot ThermalMomentum,
@@ -197,6 +198,14 @@ public sealed record TouchIntentSnapshot(
     double NetChangeCelsius,
     int ExtraGraceMinutes,
     string Status);
+
+public sealed record SetpointEchoSnapshot(
+    bool Enabled,
+    bool Waiting,
+    int SecondsRemaining,
+    double? PendingSetPointCelsius,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record SensorRhythmSnapshot(
     bool Enabled,
@@ -407,6 +416,12 @@ public sealed class DefenderSettings
     public int TouchIntentExtraGraceMinutes { get; set; } = 25;
 
     public double TouchIntentSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool SetpointEchoGuardEnabled { get; set; } = true;
+
+    public int SetpointEchoGraceSeconds { get; set; } = 30;
+
+    public double SetpointEchoSafetyBandCelsius { get; set; } = 1.0;
 
     public bool SensorRhythmGuardEnabled { get; set; } = true;
 

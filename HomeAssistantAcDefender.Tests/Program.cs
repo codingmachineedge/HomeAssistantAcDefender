@@ -9,7 +9,9 @@ using Microsoft.Extensions.Options;
 
 var tests = new DefenderSetPointRegressionTests();
 tests.ManualTouchWhileWarmRestartsAtOneDegreeBelowRoom();
+tests.ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom();
 tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
+tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -44,6 +46,39 @@ internal sealed class DefenderSetPointRegressionTests
 
         var afterManualTouch = store.CalculateExpectedSetPoint(25.0, "cooling");
         AssertEqual(24.0, afterManualTouch, "Manual wall touch while warm should restart from room temperature minus 1 C, not the wall setpoint.");
+    }
+
+    public void ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should start one degree below the current room temperature.");
+        AssertEqual(23.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should keep stepping down while cooling is still off.");
+        AssertEqual(22.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should stop walking down at the website target.");
+
+        store.RecordCommand("Seed website target command.", 22.0);
+        store.RecordHomeAssistantReading(new ThermostatReading(
+            "climate.dining_room",
+            25.0,
+            22.0,
+            "cool",
+            "idle",
+            null,
+            []));
+
+        store.RecordHomeAssistantReading(new ThermostatReading(
+            "climate.dining_room",
+            25.0,
+            26.0,
+            "cool",
+            "idle",
+            null,
+            []));
+
+        var afterManualTouch = store.CalculateExpectedSetPoint(25.0, "idle");
+        AssertEqual(24.0, afterManualTouch, "A new wall touch after reaching target should restart at current room temperature minus 1 C.");
     }
 
     public void IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget()
@@ -116,6 +151,68 @@ internal sealed class DefenderSetPointRegressionTests
         }
     }
 
+    public void SetpointEchoWaitsOnlyForSafeFollowUpCommands()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        var now = DateTimeOffset.UtcNow;
+        store.RecordCommand("Seed defender setpoint.", 22.0);
+        SeedPendingCommandAt(store, now);
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.5,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+
+        var waited = store.TryRespectSetpointEcho(
+            safeReading,
+            bypassForComfort: false,
+            now.AddSeconds(1),
+            out var waitUntil,
+            out _);
+
+        if (!waited || waitUntil <= now)
+        {
+            throw new InvalidOperationException("Setpoint Echo should wait for Home Assistant confirmation before another safe command.");
+        }
+
+        var hotReading = safeReading with { CurrentTemperatureCelsius = 24.2 };
+        var bypassed = store.TryRespectSetpointEcho(
+            hotReading,
+            bypassForComfort: false,
+            now.AddSeconds(2),
+            out _,
+            out _);
+
+        if (bypassed)
+        {
+            throw new InvalidOperationException("Setpoint Echo must step aside when direct cooling is needed.");
+        }
+
+        var echoed = store.TryRespectSetpointEcho(
+            safeReading with { SetPointCelsius = 22.0 },
+            bypassForComfort: false,
+            now.AddSeconds(3),
+            out _,
+            out _);
+
+        if (echoed)
+        {
+            throw new InvalidOperationException("Setpoint Echo should clear when Home Assistant reports the pending setpoint.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (snapshot.SetpointEcho.PendingSetPointCelsius is not null || snapshot.SetpointEcho.Waiting)
+        {
+            throw new InvalidOperationException("Setpoint Echo should have no pending target after Home Assistant echoes it.");
+        }
+    }
+
     private static void AssertEqual(double expected, double actual, string message)
     {
         if (Math.Abs(expected - actual) > 0.05)
@@ -126,10 +223,7 @@ internal sealed class DefenderSetPointRegressionTests
 
     private static void SeedHomeAssistantReadingTimes(DefenderStateStore store, params DateTimeOffset[] readingTimes)
     {
-        var stateField = typeof(DefenderStateStore).GetField("state", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException("Could not find DefenderStateStore state field.");
-        var state = stateField.GetValue(store)
-            ?? throw new InvalidOperationException("Could not read DefenderStateStore state.");
+        var state = GetRuntimeState(store);
         var readingTimesProperty = state.GetType().GetProperty("HomeAssistantReadingTimes")
             ?? throw new InvalidOperationException("Could not find HomeAssistantReadingTimes state property.");
         var list = (List<DateTimeOffset>?)readingTimesProperty.GetValue(state)
@@ -137,6 +231,22 @@ internal sealed class DefenderSetPointRegressionTests
 
         list.Clear();
         list.AddRange(readingTimes);
+    }
+
+    private static void SeedPendingCommandAt(DefenderStateStore store, DateTimeOffset pendingAt)
+    {
+        var state = GetRuntimeState(store);
+        var pendingAtProperty = state.GetType().GetProperty("PendingCommandAt")
+            ?? throw new InvalidOperationException("Could not find PendingCommandAt state property.");
+        pendingAtProperty.SetValue(state, pendingAt);
+    }
+
+    private static object GetRuntimeState(DefenderStateStore store)
+    {
+        var stateField = typeof(DefenderStateStore).GetField("state", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not find DefenderStateStore state field.");
+        return stateField.GetValue(store)
+            ?? throw new InvalidOperationException("Could not read DefenderStateStore state.");
     }
 }
 

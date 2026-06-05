@@ -196,6 +196,9 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `TouchIntentNetWarmThresholdCelsius`: net warmer movement needed before extra grace is allowed.
 - `TouchIntentExtraGraceMinutes`: extra safe grace added for clear warmer intent.
 - `TouchIntentSafetyBandCelsius`: extra room warmth allowed before Touch Intent stops extending grace.
+- `SetpointEchoGuardEnabled`: waits for Home Assistant to report the last helper setpoint before another safe command.
+- `SetpointEchoGraceSeconds`: maximum safe wait for that Home Assistant setpoint echo.
+- `SetpointEchoSafetyBandCelsius`: extra room warmth allowed before Setpoint Echo stops waiting.
 - `SensorRhythmGuardEnabled`: waits for the learned Home Assistant sensor beat before safe nudges.
 - `SensorRhythmMinimumSamples`: real Home Assistant readings needed before the beat is trusted.
 - `SensorRhythmWindowMinutes`: how long real reading timestamps remain useful.
@@ -239,6 +242,8 @@ Comfort Memory is slower than Comfort Compromise. It learns a small offset for t
 Manual Comfort Grace is different from cooldown. Cooldown waits after a manual touch. Manual Comfort Grace can keep waiting after cooldown if the room is still within the comfort band. If the room rises above the band, the HVAC mode changes away from `cool`, or upstairs becomes severely hot, grace ends and the real thermostat correction path resumes.
 
 Touch Intent watches recent real wall changes and classifies the pattern as warmer, cooler, mixed, or learning. If the pattern is clearly warmer and the real room is still inside the intent safe band, it can extend Manual Comfort Grace by the configured extra minutes. If the room gets too warm or upstairs heat needs direct cooling, Touch Intent steps aside immediately.
+
+Setpoint Echo reuses the real pending setpoint that the defender already tracks for command attribution. After a defender setpoint command, it can wait for Home Assistant to report that setpoint back before sending another safe command. If the room gets too warm or upstairs heat needs direct cooling, Setpoint Echo steps aside.
 
 Sensor Rhythm watches real Home Assistant reading timestamps and learns the normal interval between poll updates. When a correction is safe, it can wait until just after the learned sensor beat plus a small wiggle, making the next command look less mechanically immediate. If the room gets too warm or upstairs heat needs direct cooling, Sensor Rhythm clears and the real correction path continues.
 

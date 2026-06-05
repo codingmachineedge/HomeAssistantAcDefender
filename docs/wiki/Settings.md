@@ -88,6 +88,9 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Warmer pattern C: net warmer change needed before extra grace is allowed.
 - Intent extra grace: extra safe minutes added when warmer intent is clear.
 - Intent safe band C: extra warmth allowed before touch intent stops extending grace.
+- Setpoint echo: waits for Home Assistant to report the last helper setpoint before another safe command.
+- Echo wait seconds: how long to wait for that Home Assistant confirmation.
+- Echo safe band C: extra warmth allowed before setpoint echo stops waiting.
 - Sensor rhythm: waits for a normal Home Assistant sensor beat before safe nudges.
 - Rhythm samples: real Home Assistant readings needed before the beat is trusted.
 - Rhythm window minutes: how long reading timestamps stay useful.

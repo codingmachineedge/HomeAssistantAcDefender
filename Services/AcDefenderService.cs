@@ -123,6 +123,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectSetpointEcho(reading, comfort.BypassCooldown, now, out var echoUntil, out var echoMessage))
+                {
+                    stateStore.SetNextAction(echoMessage, echoUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectSensorRhythm(reading, expectedSetPoint, comfort.BypassCooldown, now, out var rhythmUntil, out var rhythmMessage))
                 {
                     stateStore.SetNextAction(rhythmMessage, rhythmUntil);
@@ -160,9 +166,9 @@ public sealed class AcDefenderService
                 }
 
                 var commandSetPoint = stateStore.CalculateNaturalCommandSetPoint(reading, expectedSetPoint, comfort.BypassCooldown);
-                stateStore.SetNextAction($"Setting real thermostat to {commandSetPoint:0.0} C from the room-temperature defender target.", now);
+                stateStore.SetNextAction($"Setting real thermostat to {commandSetPoint:0.0} C from the current-room-minus-1 C defender target.", now);
                 await homeAssistantClient.SetCoolingAsync(reading.EntityId, commandSetPoint, cancellationToken);
-                stateStore.RecordCommand($"Home Assistant {reading.EntityId} set to {commandSetPoint:0.0} C from room-temperature target {expectedSetPoint:0.0} C.", commandSetPoint);
+                stateStore.RecordCommand($"Home Assistant {reading.EntityId} set to {commandSetPoint:0.0} C from current-room-minus-1 C target {expectedSetPoint:0.0} C.", commandSetPoint);
                 return;
             }
 
