@@ -494,20 +494,21 @@ public static class GuardCatalog
 
         new GuardInfo(
             "Cooling Failure Watch", GuardCategory.System,
-            "Raises a repeating mega-alert when cool mode is demanded but the AC is not really cooling.",
+            "Raises a repeating mega-alert when cool mode is demanded but the AC is not really cooling, and escalates to a full-site OMEGA alert when a rising room confirms it.",
             "Real Home Assistant data only: hvac_mode, hvac_action, the setpoint, and room-temperature history.",
-            "It alerts if the entity is in cool, the room is clearly above the setpoint, and the action stays idle for several minutes (possible breaker/equipment), or if the action says cooling but the room does not drop over the retained window (possible compressor/airflow). Alerts repeat about once a minute while the condition lasts.",
-            "Surfaces a red alert and event log entry; it never changes thermostat commands.",
+            "MEGA: it alerts if the entity is in cool, the room is clearly above the setpoint, and the action stays idle for several minutes (possible breaker/equipment), or if the action says cooling but the room does not drop over the retained window (possible compressor/airflow). OMEGA: while the idle/breaker mega alert is up, if the room has also risen at least 0.4 C over the last 5 minutes — what a dead breaker looks like — it escalates to a full-site OMEGA alert. Requiring a real, sustained rise (and only on the idle branch) keeps false positives down. Alerts repeat about once a minute.",
+            "Surfaces a red alert, an event log entry, and (on OMEGA) a site-wide overlay; it never changes thermostat commands.",
             ["(automatic monitoring)"],
             s =>
             {
                 var c = s.CoolingFailure;
                 var tone = c.Alerting ? GuardTone.Alert : GuardTone.Calm;
-                var label = c.Alerting ? "Alerting" : "Watching";
+                var label = c.OmegaAlerting ? "OMEGA" : c.Alerting ? "Alerting" : "Watching";
                 return new GuardLiveView(true, c.Alerting, label, tone, c.Status,
                 [
                     new("Active for", c.Alerting ? $"{c.SecondsActive}s" : "Ready", "How long the alert has been raised."),
                     new("Alerts", c.AlertCount.ToString(), "How many times it has fired."),
+                    new("Room rise", c.RoomRiseCelsius is { } r ? $"{r:+0.0;-0.0;0.0} C" : "--", "Room change over the OMEGA confirmation window."),
                 ]);
             }),
 

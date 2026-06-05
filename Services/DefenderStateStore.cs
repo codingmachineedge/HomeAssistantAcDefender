@@ -15,6 +15,13 @@ public sealed class DefenderStateStore
     private const double CoolingFailureDemandBandCelsius = 0.6;
     private const double CoolingFailureMinimumDropCelsius = 0.2;
 
+    // OMEGA: a confirmed cooling failure. The mega alert only proves the AC is not cooling; OMEGA adds
+    // proof that the room is actually getting WARMER over a sustained window, which is what a dead
+    // breaker (no power to the unit) looks like. A merely stuck/idle compressor that still has power
+    // tends to hold the room steady, so requiring a real rise sharply cuts false positives.
+    private const int OmegaRiseWindowSeconds = 300;
+    private const double OmegaMinimumRiseCelsius = 0.4;
+
     private readonly object gate = new();
     private readonly DefenderOptions options;
     private readonly ILogger<DefenderStateStore> logger;
@@ -3112,12 +3119,28 @@ public sealed class DefenderStateStore
             var seconds = (int)Math.Ceiling((now - state.CoolingFailureSuspectedAt.Value).TotalSeconds);
             if (seconds >= CoolingFailureIdleSeconds)
             {
+                // The mega alert is armed (cooling demanded, action idle). Check whether the room is
+                // actually rising over the confirmation window before escalating to OMEGA.
+                var rise = TryGetRoomRiseCelsius(reading.CurrentTemperatureCelsius, now);
+                state.OmegaRoomRiseCelsius = rise;
+                if (rise is { } confirmedRise && confirmedRise >= OmegaMinimumRiseCelsius)
+                {
+                    state.OmegaConfirmedAt ??= now;
+                    RaiseCoolingFailure(
+                        now,
+                        $"OMEGA ALERT: Cooling demanded but '{reading.HvacAction}' for {seconds}s AND the room has risen {confirmedRise:0.0} C in the last {OmegaRiseWindowSeconds / 60} min. The AC breaker is most likely OFF.");
+                    return;
+                }
+
+                state.OmegaConfirmedAt = null;
                 RaiseCoolingFailure(
                     now,
                     $"MEGA ALERT: Cooling is demanded but Home Assistant still reports '{reading.HvacAction}' after {seconds}s. Breaker or equipment failure may be possible.");
                 return;
             }
 
+            state.OmegaConfirmedAt = null;
+            state.OmegaRoomRiseCelsius = null;
             state.CoolingFailureStatus = $"Cooling demand is active but action is '{reading.HvacAction}'; mega alert arms in {CoolingFailureIdleSeconds - seconds}s if it stays idle.";
             return;
         }
@@ -3131,6 +3154,10 @@ public sealed class DefenderStateStore
             var drop = oldSample.TemperatureCelsius - reading.CurrentTemperatureCelsius;
             if (drop < CoolingFailureMinimumDropCelsius)
             {
+                // "Cooling but not dropping" means the unit still reports cooling, so it has power; this
+                // is a compressor/airflow problem, not a dead breaker. It never escalates to OMEGA.
+                state.OmegaConfirmedAt = null;
+                state.OmegaRoomRiseCelsius = null;
                 RaiseCoolingFailure(
                     now,
                     $"MEGA ALERT: Thermostat says cooling, but room temperature only changed {drop:0.0} C in {CoolingFailureNoDropSeconds / 60} minutes. Breaker, compressor, or airflow failure may be possible.");
@@ -3163,6 +3190,20 @@ public sealed class DefenderStateStore
     private static bool IsCoolingAction(string? hvacAction)
     {
         return (hvacAction ?? string.Empty).Trim().ToLowerInvariant() is "cooling" or "cool";
+    }
+
+    /// <summary>
+    /// Net room-temperature change (current minus the sample closest to <see cref="OmegaRiseWindowSeconds"/>
+    /// ago). Positive means the room is warming. Returns null until enough history exists, so OMEGA can
+    /// only confirm on a real, sustained rise rather than a single noisy reading.
+    /// </summary>
+    private double? TryGetRoomRiseCelsius(double currentTemperatureCelsius, DateTimeOffset now)
+    {
+        var oldSample = state.RoomTemperatureSamples
+            .Where(sample => now - sample.Timestamp >= TimeSpan.FromSeconds(OmegaRiseWindowSeconds))
+            .OrderByDescending(sample => sample.Timestamp)
+            .FirstOrDefault();
+        return oldSample is null ? null : currentTemperatureCelsius - oldSample.TemperatureCelsius;
     }
 
     private SensorRhythmAnalysis BuildSensorRhythmAnalysis(DateTimeOffset now)
@@ -4254,9 +4295,13 @@ public sealed class DefenderStateStore
             ? (int)Math.Ceiling((weatherDriftUntil - now).TotalSeconds)
             : 0;
         var coolingFailureAlerting = state.CoolingFailureSuspectedAt is not null
-            && state.CoolingFailureStatus.StartsWith("MEGA ALERT", StringComparison.OrdinalIgnoreCase);
+            && state.CoolingFailureStatus.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase);
         var coolingFailureSeconds = coolingFailureAlerting && state.CoolingFailureSuspectedAt is { } failureSince
             ? (int)Math.Ceiling((now - failureSince).TotalSeconds)
+            : 0;
+        var omegaAlerting = coolingFailureAlerting && state.OmegaConfirmedAt is not null;
+        var omegaSeconds = omegaAlerting && state.OmegaConfirmedAt is { } omegaSince
+            ? (int)Math.Ceiling((now - omegaSince).TotalSeconds)
             : 0;
         var sensorRhythmSeconds = state.SensorRhythmDueAt is { } sensorRhythmDueAt && sensorRhythmDueAt > now
             ? (int)Math.Ceiling((sensorRhythmDueAt - now).TotalSeconds)
@@ -4641,7 +4686,10 @@ public sealed class DefenderStateStore
                     ? "Cooling failure watch is ready."
                     : state.CoolingFailureStatus,
                 coolingFailureAlerting ? state.CoolingFailureSuspectedAt : null,
-                coolingFailureAlerting ? state.CoolingFailureNextAlertAt : null),
+                coolingFailureAlerting ? state.CoolingFailureNextAlertAt : null,
+                omegaAlerting,
+                omegaSeconds,
+                state.OmegaRoomRiseCelsius),
             new ComfortSnapshot(
                 state.Settings.UpstairsComfortEnabled,
                 state.Settings.HomePresenceRequired,
@@ -4791,6 +4839,8 @@ public sealed class DefenderStateStore
         state.CoolingFailureSuspectedAt = null;
         state.CoolingFailureNextAlertAt = null;
         state.CoolingFailureStatus = status;
+        state.OmegaConfirmedAt = null;
+        state.OmegaRoomRiseCelsius = null;
     }
 
     private void ClearVisibilityGuard(string status)
@@ -5309,6 +5359,10 @@ public sealed class DefenderStateStore
         public int CoolingFailureAlertCount { get; set; }
 
         public string CoolingFailureStatus { get; set; } = "Cooling failure watch is ready.";
+
+        public DateTimeOffset? OmegaConfirmedAt { get; set; }
+
+        public double? OmegaRoomRiseCelsius { get; set; }
 
         public DateTimeOffset? RoomTrendHoldUntil { get; set; }
 

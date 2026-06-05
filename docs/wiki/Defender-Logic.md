@@ -237,6 +237,7 @@ One-tap stand-down modes, run from the Controls page.
 - **Someone upset** (45 min) and **Suspicion quiet** (90 min): keep reading the thermostat 24/7 but send no corrective commands until the window ends.
 - Emergency actions bypass the website debounce.
 
-### Cooling Failure Watch
-Raises a repeating mega-alert when cool mode is demanded but the AC is not really cooling.
-- **Logic:** it alerts if the entity is in `cool`, the room is clearly above the setpoint, and `hvac_action` stays idle for several minutes (possible breaker/equipment), or if the action says cooling but the room does not drop over the retained window (possible compressor/airflow). Alerts repeat about once a minute. It never changes thermostat commands.
+### Cooling Failure Watch (MEGA → OMEGA)
+Raises a repeating **mega-alert** when cool mode is demanded but the AC is not really cooling, and escalates to a full-site **OMEGA alert** once a rising room confirms the failure.
+- **MEGA logic:** it alerts if the entity is in `cool`, the room is clearly above the setpoint, and `hvac_action` stays idle for several minutes (possible breaker/equipment), or if the action says cooling but the room does not drop over the retained window (possible compressor/airflow). Alerts repeat about once a minute. It never changes thermostat commands.
+- **OMEGA logic (confirmed breaker off):** the mega alert only proves the AC is *not cooling*; OMEGA adds proof that the room is actually *getting warmer*. While the **idle/breaker** mega branch is active, if the room has risen at least `OmegaMinimumRiseCelsius` (0.4 °C) over the last `OmegaRiseWindowSeconds` (5 min), it escalates to OMEGA and shows a site-wide overlay. False positives are kept low by three gates: only the idle branch can escalate (a unit that reports cooling still has power), the rise must be **sustained over a window** (not a single noisy reading), and the room must still be above setpoint. If the room stops rising or starts dropping, OMEGA clears immediately.

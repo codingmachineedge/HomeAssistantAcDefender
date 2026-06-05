@@ -338,7 +338,10 @@ public sealed record CoolingFailureSnapshot(
     int AlertCount,
     string Status,
     DateTimeOffset? SuspectedAt,
-    DateTimeOffset? NextAlertAt);
+    DateTimeOffset? NextAlertAt,
+    bool OmegaAlerting,
+    int OmegaSecondsActive,
+    double? RoomRiseCelsius);
 
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,

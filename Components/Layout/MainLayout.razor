@@ -2,12 +2,34 @@
 @implements IDisposable
 @inject DefenderStateProvider State
 @inject ISnackbar Snackbar
+@inject NavigationManager Nav
 @inject IJSRuntime JS
 
 <MudThemeProvider Theme="_theme" IsDarkMode="_isDarkMode" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
+
+@if (OmegaVisible)
+{
+    <div class="omega-overlay">
+        <div class="omega-overlay__box">
+            <MudIcon Icon="@Icons.Material.Filled.ReportProblem" Class="omega-overlay__icon" />
+            <div class="omega-overlay__title">OMEGA ALERT</div>
+            <div class="omega-overlay__subtitle">Cooling failure confirmed</div>
+            <p class="omega-overlay__status">@Snapshot?.CoolingFailure.Status</p>
+            @if (Snapshot?.CoolingFailure.RoomRiseCelsius is { } rise)
+            {
+                <p class="omega-overlay__rise">Room temperature is climbing: +@rise.ToString("0.0") C over the last few minutes — consistent with the AC breaker being OFF.</p>
+            }
+            <div class="omega-overlay__actions">
+                <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Large" OnClick="GoToControls" StartIcon="@Icons.Material.Filled.Power">Open controls</MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Large" OnClick="DismissOmega" Class="omega-overlay__dismiss">Dismiss for 1 min</MudButton>
+            </div>
+            <div class="omega-overlay__meta">Confirmed @(Snapshot?.CoolingFailure.OmegaSecondsActive ?? 0)s ago · mega alert #@(Snapshot?.CoolingFailure.AlertCount ?? 0)</div>
+        </div>
+    </div>
+}
 
 <MudLayout Class="@(_isDarkMode ? "app-shell app-dark" : "app-shell app-light")">
     <MudAppBar Class="top-bar" Color="Color.Default" Elevation="0" Fixed="true">
@@ -151,9 +173,27 @@
     }
 
     private DateTimeOffset? _lastCoolingFailureSnackbarAt;
+    private DateTimeOffset? _omegaDismissedUntil;
+
+    private bool OmegaVisible =>
+        Snapshot?.CoolingFailure.OmegaAlerting == true
+        && (_omegaDismissedUntil is null || DateTimeOffset.UtcNow >= _omegaDismissedUntil);
+
+    private void DismissOmega() => _omegaDismissedUntil = DateTimeOffset.UtcNow.AddSeconds(60);
+
+    private void GoToControls()
+    {
+        DismissOmega();
+        Nav.NavigateTo("/controls");
+    }
 
     private void OnStateChanged()
     {
+        if (Snapshot?.CoolingFailure.OmegaAlerting != true)
+        {
+            _omegaDismissedUntil = null;
+        }
+
         ShowCoolingFailureSnackbarIfDue();
         InvokeAsync(StateHasChanged);
     }

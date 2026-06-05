@@ -16,6 +16,7 @@ tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
 tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
 tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
+tests.OmegaAlertEscalatesOnlyWhenRoomRisesDuringIdleCoolingFailure();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
 tests.CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches();
@@ -391,6 +392,52 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.CoolingFailure.Alerting)
         {
             throw new InvalidOperationException("Cooling failure should clear after Home Assistant reports cooling and room temperature improves.");
+        }
+    }
+
+    public void OmegaAlertEscalatesOnlyWhenRoomRisesDuringIdleCoolingFailure()
+    {
+        var idleWarm = new ThermostatReading("climate.dining_room", 24.0, 22.0, "cool", "idle", null, []);
+
+        // Rising room (+0.6 C over the window) during an armed idle cooling failure -> OMEGA confirmed.
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+            SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 23.4);
+            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-7));
+
+            var snapshot = store.RecordHomeAssistantReading(idleWarm);
+            if (!snapshot.CoolingFailure.Alerting)
+            {
+                throw new InvalidOperationException("Idle cooling demand should mega-alert.");
+            }
+
+            if (!snapshot.CoolingFailure.OmegaAlerting
+                || !snapshot.CoolingFailure.Status.Contains("OMEGA ALERT", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("A sustained room rise during an idle cooling failure should escalate to OMEGA.");
+            }
+        }
+
+        // Flat room (no rise) under the identical mega-alert conditions must NOT escalate (false-positive guard).
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+            SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 24.0);
+            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-7));
+
+            var snapshot = store.RecordHomeAssistantReading(idleWarm);
+            if (!snapshot.CoolingFailure.Alerting)
+            {
+                throw new InvalidOperationException("Flat idle cooling demand should still mega-alert.");
+            }
+
+            if (snapshot.CoolingFailure.OmegaAlerting)
+            {
+                throw new InvalidOperationException("A flat room (no sustained rise) must NOT escalate to OMEGA.");
+            }
         }
     }
 
@@ -846,6 +893,18 @@ internal sealed class DefenderSetPointRegressionTests
         var property = state.GetType().GetProperty(propertyName)
             ?? throw new InvalidOperationException($"Could not find {propertyName} state property.");
         property.SetValue(state, value);
+    }
+
+    private static void SeedRoomSample(DefenderStateStore store, DateTimeOffset timestamp, double temperatureCelsius)
+    {
+        var state = GetRuntimeState(store);
+        var listProperty = state.GetType().GetProperty("RoomTemperatureSamples")
+            ?? throw new InvalidOperationException("Could not find RoomTemperatureSamples state property.");
+        var list = (System.Collections.IList?)listProperty.GetValue(state)
+            ?? throw new InvalidOperationException("Could not read RoomTemperatureSamples.");
+        var elementType = listProperty.PropertyType.GetGenericArguments()[0];
+        var sample = elementType.GetConstructors()[0].Invoke([timestamp, temperatureCelsius]);
+        list.Add(sample);
     }
 
     private static object GetRuntimeState(DefenderStateStore store)
