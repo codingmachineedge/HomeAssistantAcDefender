@@ -62,3 +62,5 @@ Conflict Quiet is stored in `DefenderStateStore` and evaluated by `AcDefenderSer
 Room Trend Guard is also stored and evaluated in `DefenderStateStore`. It keeps a small history of real dining room temperature samples and classifies the room as warming, stable, or cooling before `AcDefenderService` sends a correction. It only affects timing; all commands still go through `HomeAssistantClient`.
 
 Thermal Momentum is another `DefenderStateStore` decision that uses those same real room-temperature samples. It estimates cooling rate and minutes to target after a recent wall touch, then lets `AcDefenderService` wait when the room is already moving toward the target fast enough. It never invents thermostat state and does not issue fake commands.
+
+Weather Drift Timing is a persisted `DefenderStateStore` timing guard using real Home Assistant outdoor weather samples. `AcDefenderService` checks it after room trend and thermal momentum. It can hold only safe post-touch corrections while outdoor temperature is stable or cooling, then clears when outdoor temperature has genuinely warmed enough, the hold expires, or room comfort needs direct correction.

@@ -133,6 +133,9 @@
                 <MudAlert Class="mt-2" Severity="@ThermalMomentumSeverity" Variant="Variant.Outlined">@ThermalMomentumText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if the room is cooling fast enough to wait.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@WeatherDriftSeverity" Variant="Variant.Outlined">@WeatherDriftText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if outdoor weather movement is being used to time a safe correction.</MudText>
+
                 <MudText Typo="Typo.subtitle2" Class="mt-3">@LastCommandText</MudText>
                 <MudText Typo="Typo.caption" Class="helper-text">This shows the last command the website sent to Home Assistant.</MudText>
 
@@ -266,6 +269,8 @@
                     <MetricCard Label="Trend hold" Value="@RoomTrendHoldText" Help="How long trend guard is observing." />
                     <MetricCard Label="Cooling rate" Value="@ThermalMomentumRateText" Help="How fast the room is cooling." />
                     <MetricCard Label="Target ETA" Value="@ThermalMomentumEtaText" Help="Estimated minutes until target." />
+                    <MetricCard Label="Weather drift" Value="@WeatherDriftDirectionText" Help="Whether outdoor temperature is warming, stable, or cooling." />
+                    <MetricCard Label="Weather hold" Value="@WeatherDriftHoldText" Help="How long weather drift is waiting for a natural slot." />
                     <MetricCard Label="Updated" Value="@ShortTime(Snapshot?.HomeAssistantThermostat?.UpdatedAt)" Help="When this thermostat data was seen." />
                     <MetricCard Label="Entity" Value="@(Snapshot?.HomeAssistantEntityId ?? "--")" Help="The Home Assistant thermostat name." />
                 </MudGrid>
@@ -452,6 +457,11 @@
         : Snapshot?.ThermalMomentum.Enabled == true && Snapshot.ThermalMomentum.EstimatedMinutesToTarget is { } eta
             ? $"{eta:0} min"
             : Snapshot?.ThermalMomentum.Enabled == true ? "--" : "Off";
+    private string WeatherDriftText => Snapshot?.WeatherDrift.Status ?? "Weather drift guard is watching.";
+    private string WeatherDriftDirectionText => Snapshot?.WeatherDrift.Enabled == true
+        ? $"{Snapshot.WeatherDrift.Direction} {WeatherDriftDeltaText}"
+        : "Off";
+    private string WeatherDriftHoldText => Snapshot?.WeatherDrift.Holding == true ? $"{Snapshot.WeatherDrift.SecondsRemaining}s" : Snapshot?.WeatherDrift.Enabled == true ? "Ready" : "Off";
     private string LastCommandText => Snapshot?.LastCommand ?? "No commands yet";
     private string HomePresenceText => Snapshot?.Comfort.IsHome == true ? "Home" : "Away";
     private string GuardText => Snapshot?.Comfort.UpstairsTooHot == true ? "Active" : Snapshot?.Comfort.UpstairsComfortEnabled == true ? "Watching" : "Off";
@@ -521,12 +531,24 @@
     private Severity ThermalMomentumSeverity => Snapshot?.ThermalMomentum.Holding == true
         ? Severity.Warning
         : Snapshot?.ThermalMomentum.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity WeatherDriftSeverity => Snapshot?.WeatherDrift.Holding == true
+        ? Severity.Warning
+        : Snapshot?.WeatherDrift.Direction == "warming" ? Severity.Success : Snapshot?.WeatherDrift.Enabled == true ? Severity.Info : Severity.Normal;
 
     private string TrendDeltaText
     {
         get
         {
             var delta = Snapshot?.RoomTrend.DeltaCelsius;
+            return delta is null ? "" : $"({delta.Value:+0.0;-0.0;0.0} C)";
+        }
+    }
+
+    private string WeatherDriftDeltaText
+    {
+        get
+        {
+            var delta = Snapshot?.WeatherDrift.OutdoorDeltaCelsius;
             return delta is null ? "" : $"({delta.Value:+0.0;-0.0;0.0} C)";
         }
     }

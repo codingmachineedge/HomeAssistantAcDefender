@@ -16,23 +16,24 @@ Every cycle performs these steps:
 12. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
 13. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
 14. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
-15. Respect Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
-16. Respect Cooling Runway when Home Assistant has just reported that cooling started.
-17. Respect Sensor Rhythm so safe corrections can land just after a normal Home Assistant reading beat.
-18. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
-19. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
-20. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
-21. Respect Visibility Guard when a wall touch happens soon after a defender command.
-22. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
-23. Respect Comfort Budget when too many safe adjustments happened recently.
-24. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-25. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-26. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-27. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-28. Apply fan energy saver when enabled and near target.
-29. Respect Repeat Quiet if the exact command about to be sent matches the last defender setpoint.
-30. Correct the real thermostat setpoint when needed.
-31. Update the next-action status label.
+15. Respect Weather Drift Timing when outdoor temperature is stable or cooling after a wall change.
+16. Respect Setpoint Echo so safe follow-up commands wait for Home Assistant to report the last setpoint back.
+17. Respect Cooling Runway when Home Assistant has just reported that cooling started.
+18. Respect Sensor Rhythm so safe corrections can land just after a normal Home Assistant reading beat.
+19. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
+20. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
+21. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
+22. Respect Visibility Guard when a wall touch happens soon after a defender command.
+23. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
+24. Respect Comfort Budget when too many safe adjustments happened recently.
+25. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
+26. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+27. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+28. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+29. Apply fan energy saver when enabled and near target.
+30. Respect Repeat Quiet if the exact command about to be sent matches the last defender setpoint.
+31. Correct the real thermostat setpoint when needed.
+32. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -101,6 +102,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Uses Repeat Quiet so identical follow-up commands wait longer when recent wall-touch or command pressure is high.
 - Uses Sensor Rhythm so safe corrections can wait until just after the learned Home Assistant reading beat.
 - Uses Cooling Runway so safe corrections can pause after Home Assistant reports that cooling just started.
+- Uses Weather Drift Timing so safe post-touch corrections can wait for real outdoor temperature movement.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
 Quiet recovery does not fake thermostat state and does not run a simulator. It only changes the timing and selected command target sent to the real Home Assistant climate entity.
@@ -256,6 +258,18 @@ currentRoomTemperature <= targetTemperature + coolerIntentSafetyBandCelsius
 ```
 
 If the room reaches the website target, the fast lane clears. It does not lower the website target and does not change the rule that warm-room defense starts one degree below current room temperature and walks only toward the website target.
+
+## Weather Drift Timing
+
+Weather Drift Timing uses real outdoor temperature samples from Home Assistant. After a wall touch, it can delay only a safe correction while outdoor temperature is stable or cooling, so the next change can land closer to a normal weather-driven comfort adjustment.
+
+It only waits while the real room temperature is inside:
+
+```text
+targetTemperature + weatherDriftSafetyBandCelsius
+```
+
+If outdoor temperature warms by at least `weatherDriftMinimumChangeCelsius`, the hold clears and the correction can continue. If the configured hold expires, the correction can also continue. If the room gets too warm, upstairs heat bypasses quiet timing, or the normal safety override is reached, Weather Drift clears immediately and direct comfort correction wins.
 
 ## Setpoint Echo
 

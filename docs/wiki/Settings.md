@@ -118,6 +118,11 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Cooling rate C/hour: minimum cooling speed needed before the defender waits.
 - Look-ahead minutes: only wait if the target is estimated within this many minutes.
 - Momentum hold minutes: how long to let cooling continue before checking again.
+- Weather drift timing: uses real outdoor temperature movement to pick a less obvious safe correction time.
+- Weather window minutes: how far back outdoor temperature is compared.
+- Weather change C: outdoor warming needed before a safe correction can look weather-driven.
+- Weather hold minutes: how long to wait for a natural weather slot.
+- Weather safe band C: extra warmth allowed before weather drift stops waiting.
 
 ## Weather Rules
 

@@ -14,6 +14,7 @@ tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
 tests.CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches();
+tests.WeatherDriftWaitsOnlyForSafeStableOutdoorConditions();
 tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 Console.WriteLine("Defender setpoint regression checks passed.");
@@ -324,6 +325,68 @@ internal sealed class DefenderSetPointRegressionTests
         if (reachedTarget)
         {
             throw new InvalidOperationException("Cooler Intent Fast Lane should stop bypassing once the room reaches the website target.");
+        }
+    }
+
+    public void WeatherDriftWaitsOnlyForSafeStableOutdoorConditions()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.5,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(safeReading);
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 25.0 });
+        store.RecordWeatherReading(new WeatherReading("weather.home", 20.0, "sunny"));
+        store.RecordWeatherReading(new WeatherReading("weather.home", 20.1, "sunny"));
+
+        var now = DateTimeOffset.UtcNow;
+        var waited = store.TryRespectWeatherDriftGuard(
+            safeReading with { SetPointCelsius = 25.0 },
+            22.0,
+            bypassForComfort: false,
+            now,
+            out var waitUntil,
+            out _);
+
+        if (!waited || waitUntil <= now)
+        {
+            throw new InvalidOperationException("Weather Drift should hold safe corrections while outdoor weather is stable.");
+        }
+
+        store.RecordWeatherReading(new WeatherReading("weather.home", 20.6, "sunny"));
+        var warming = store.TryRespectWeatherDriftGuard(
+            safeReading with { SetPointCelsius = 25.0 },
+            22.0,
+            bypassForComfort: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (warming)
+        {
+            throw new InvalidOperationException("Weather Drift should let a safe correction continue after real outdoor warming.");
+        }
+
+        store.RecordWeatherReading(new WeatherReading("weather.home", 20.7, "sunny"));
+        var hotRoom = store.TryRespectWeatherDriftGuard(
+            safeReading with { CurrentTemperatureCelsius = 24.2, SetPointCelsius = 25.0 },
+            22.0,
+            bypassForComfort: false,
+            now.AddSeconds(2),
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Weather Drift must step aside when direct cooling is needed.");
         }
     }
 

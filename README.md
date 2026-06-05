@@ -18,6 +18,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Manual Comfort Grace so a wall thermostat change can be left alone while the room remains within the configured comfort band.
 - Adds Room Trend Guard so the defender keeps observing when the room is stable or cooling after a wall change, and resumes when it starts warming.
 - Adds Thermal Momentum so the defender can wait when the room is already cooling fast enough to reach target soon.
+- Adds Weather Drift Timing so safe corrections can wait for real outdoor weather movement instead of happening immediately.
 - Adds Natural Walkback so safe-band recovery moves get smaller and less predictable after repeated wall thermostat touches.
 - Adds Touch Signature so safe nudges can match the size of recent real wall thermostat steps.
 - Adds Visibility Guard so safe nudges slow down when a wall touch happens soon after a defender command.
@@ -97,9 +98,10 @@ Every cycle:
 21. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
 22. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
 23. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
-24. Optionally set fan saver mode when near target.
-25. Correct the thermostat setpoint when it does not match the defender decision.
-26. Update the real-time dashboard status.
+24. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+25. Optionally set fan saver mode when near target.
+26. Correct the thermostat setpoint when it does not match the defender decision.
+27. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -237,6 +239,11 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `ThermalMomentumMinimumCoolingRateCelsiusPerHour`: minimum real cooling speed before momentum can hold.
 - `ThermalMomentumLookAheadMinutes`: only hold when target is estimated within this many minutes.
 - `ThermalMomentumHoldMinutes`: how long to let cooling continue before checking again.
+- `WeatherDriftGuardEnabled`: lets safe corrections wait for a real outdoor-weather timing slot.
+- `WeatherDriftWindowMinutes`: how far back real outdoor temperature samples are compared.
+- `WeatherDriftMinimumChangeCelsius`: outdoor warming needed before a safe correction can continue as weather-driven.
+- `WeatherDriftHoldMinutes`: how long to wait for the weather slot while room comfort is still safe.
+- `WeatherDriftSafetyBandCelsius`: extra room warmth allowed before Weather Drift stops waiting.
 
 Example: if the room is `25.0 C`, the website target is `22.0 C`, and the thermostat was manually moved to `26.0 C`, the first defender command is `24.0 C` because it starts one degree below current room temperature, not one degree below the wall setting. If Home Assistant says cooling has stopped while the room is still above target, later decisions continue down to `23.0 C`, then `22.0 C`.
 
@@ -281,6 +288,8 @@ Cooling Runway watches the real Home Assistant `hvac_action`. When it changes in
 Room Trend Guard uses real Home Assistant room-temperature readings. It compares the oldest and newest room samples inside the configured trend window. If the room is stable or cooling after a wall change, it can keep observing before sending a nudge. If the room is warming, above the grace band, or beyond the safety override, it lets the real correction continue.
 
 Thermal Momentum also uses real Home Assistant room-temperature readings. After a recent wall touch, it estimates cooling speed and minutes to target. If the room is already cooling fast enough and the target looks close, it holds briefly so the room can keep cooling without another obvious thermostat command.
+
+Weather Drift Timing uses real Home Assistant outdoor temperature readings. After a recent wall touch, if the room is still inside the weather safe band and outdoor temperature is stable or cooling, it can hold a safe correction for a short configured window. If the outdoor temperature has genuinely warmed enough, the hold clears so the next correction can line up with real weather movement. If the room gets too warm, it clears immediately.
 
 ## Schedule And Weather Rules
 

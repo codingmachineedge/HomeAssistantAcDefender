@@ -35,6 +35,7 @@ public sealed record DefenderSnapshot(
     CoolingRunwaySnapshot CoolingRunway,
     RoomTrendSnapshot RoomTrend,
     ThermalMomentumSnapshot ThermalMomentum,
+    WeatherDriftSnapshot WeatherDrift,
     ComfortSnapshot Comfort,
     DefenderSettings Settings,
     IReadOnlyList<ScheduleEntry> Schedule,
@@ -262,6 +263,16 @@ public sealed record ThermalMomentumSnapshot(
     double? CoolingRateCelsiusPerHour,
     double? EstimatedMinutesToTarget,
     string Status);
+
+public sealed record WeatherDriftSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    string Direction,
+    double? OutdoorDeltaCelsius,
+    int SampleCount,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,
@@ -506,6 +517,16 @@ public sealed class DefenderSettings
     public int ThermalMomentumLookAheadMinutes { get; set; } = 45;
 
     public int ThermalMomentumHoldMinutes { get; set; } = 6;
+
+    public bool WeatherDriftGuardEnabled { get; set; } = true;
+
+    public int WeatherDriftWindowMinutes { get; set; } = 45;
+
+    public double WeatherDriftMinimumChangeCelsius { get; set; } = 0.3;
+
+    public int WeatherDriftHoldMinutes { get; set; } = 7;
+
+    public double WeatherDriftSafetyBandCelsius { get; set; } = 1.0;
 
     public bool FanEnergySaverEnabled { get; set; }
 

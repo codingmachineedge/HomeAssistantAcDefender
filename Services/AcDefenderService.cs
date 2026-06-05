@@ -131,6 +131,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectWeatherDriftGuard(reading, expectedSetPoint, bypassQuietTiming, now, out var weatherDriftUntil, out var weatherDriftMessage))
+                {
+                    stateStore.SetNextAction(weatherDriftMessage, weatherDriftUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectSetpointEcho(reading, bypassQuietTiming, now, out var echoUntil, out var echoMessage))
                 {
                     stateStore.SetNextAction(echoMessage, echoUntil);

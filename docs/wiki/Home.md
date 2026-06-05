@@ -13,6 +13,7 @@ Key capabilities:
 - Helper descriptions under controls and action labels.
 - Upstairs comfort guard with optional home-presence awareness.
 - Cooler Intent Fast Lane that skips quiet waits briefly when repeated real wall touches ask for cooler air.
+- Weather Drift Timing that uses real outdoor temperature movement to time safe corrections.
 - Optional fan energy saver near target temperature.
 
 No simulator or dummy thermostat is used. Every control acts on the configured Home Assistant climate entity or returns a real error.

@@ -225,6 +225,11 @@ public sealed class DefenderStateStore
             state.Settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour = Math.Round(Math.Clamp(request.ThermalMomentumMinimumCoolingRateCelsiusPerHour, 0.1, 5.0), 2);
             state.Settings.ThermalMomentumLookAheadMinutes = Math.Clamp(request.ThermalMomentumLookAheadMinutes, 5, 240);
             state.Settings.ThermalMomentumHoldMinutes = Math.Clamp(request.ThermalMomentumHoldMinutes, 1, 120);
+            state.Settings.WeatherDriftGuardEnabled = request.WeatherDriftGuardEnabled;
+            state.Settings.WeatherDriftWindowMinutes = Math.Clamp(request.WeatherDriftWindowMinutes, 5, 1440);
+            state.Settings.WeatherDriftMinimumChangeCelsius = Math.Round(Math.Clamp(request.WeatherDriftMinimumChangeCelsius, 0.1, 5.0), 1);
+            state.Settings.WeatherDriftHoldMinutes = Math.Clamp(request.WeatherDriftHoldMinutes, 1, 120);
+            state.Settings.WeatherDriftSafetyBandCelsius = Math.Round(Math.Clamp(request.WeatherDriftSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.FanEnergySaverEnabled = request.FanEnergySaverEnabled;
             state.Settings.FanEnergySaverThresholdCelsius = Math.Clamp(request.FanEnergySaverThresholdCelsius, 0.1, 5.0);
             state.Settings.FanEnergySaverMode = string.IsNullOrWhiteSpace(request.FanEnergySaverMode)
@@ -262,6 +267,7 @@ public sealed class DefenderStateStore
                     EntityId = reading.EntityId,
                     UpdatedAt = DateTimeOffset.UtcNow
                 };
+                RecordWeatherSample(reading, state.Weather.UpdatedAt);
             }
 
             state.UpdatedAt = DateTimeOffset.UtcNow;
@@ -816,6 +822,112 @@ public sealed class DefenderStateStore
             waitUntil = holdUntil;
             message = $"Room is already cooling at {rate.Value:0.0} C/hour; holding until {holdUntil.ToLocalTime():HH:mm:ss} because target is estimated in {eta.Value:0} min.";
             state.ThermalMomentumStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
+    public bool TryRespectWeatherDriftGuard(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.WeatherDriftGuardEnabled)
+            {
+                ClearWeatherDrift("Weather drift guard is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            if (state.ExternalTouchTimes.Count == 0)
+            {
+                ClearWeatherDrift("No recent wall touch, so weather drift is only watching.");
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearWeatherDrift("Room comfort needs help now, so weather drift is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            if (reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius)
+            {
+                ClearWeatherDrift("Room is already near target, so weather drift does not need to hold.");
+                SaveState();
+                return false;
+            }
+
+            if (reading.SetPointCelsius < expectedSetPointCelsius - 0.05)
+            {
+                ClearWeatherDrift("Thermostat is already colder than the defender target, so weather drift lets it line up.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.WeatherDriftSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearWeatherDrift($"Room is above {allowedRoomTemperature:0.0} C, so weather drift lets correction continue.");
+                SaveState();
+                return false;
+            }
+
+            var drift = BuildWeatherDrift(now);
+            if (drift.SampleCount < 2)
+            {
+                state.WeatherDriftStatus = "Weather drift is collecting more real outdoor readings.";
+                SaveState();
+                return false;
+            }
+
+            var minimumChange = Math.Max(0.1, state.Settings.WeatherDriftMinimumChangeCelsius);
+            if (drift.Direction == "warming" && drift.OutdoorDeltaCelsius is { } warmingDelta && warmingDelta >= minimumChange)
+            {
+                ClearWeatherDrift($"Outdoor temperature warmed by {warmingDelta:0.0} C, so the next correction can ride real weather drift.");
+                SaveState();
+                return false;
+            }
+
+            if (drift.ConditionChanged)
+            {
+                ClearWeatherDrift("Weather condition changed, so the next safe correction can ride a real weather update.");
+                SaveState();
+                return false;
+            }
+
+            if (state.WeatherDriftHoldUntil is { } activeUntil)
+            {
+                if (activeUntil > now)
+                {
+                    waitUntil = activeUntil;
+                    message = $"Outdoor weather is {drift.Direction}; holding safe correction until {activeUntil.ToLocalTime():HH:mm:ss} for a more natural weather-drift slot.";
+                    state.WeatherDriftStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearWeatherDrift("Weather drift hold ended; the safe correction can continue.");
+                SaveState();
+                return false;
+            }
+
+            var holdMinutes = Math.Max(1, state.Settings.WeatherDriftHoldMinutes);
+            waitUntil = now.AddMinutes(holdMinutes);
+            state.WeatherDriftHoldUntil = waitUntil;
+            message = $"Outdoor weather is {drift.Direction} ({drift.OutdoorDeltaCelsius:+0.0;-0.0;0.0} C); holding safe correction until {waitUntil.ToLocalTime():HH:mm:ss} unless the room warms.";
+            state.WeatherDriftStatus = message;
             SaveState();
             return true;
         }
@@ -1751,7 +1863,8 @@ public sealed class DefenderStateStore
                 && state.ConflictQuietUntil is null
                 && state.CoolerIntentUntil is null
                 && state.RoomTrendHoldUntil is null
-                && state.ThermalMomentumHoldUntil is null)
+                && state.ThermalMomentumHoldUntil is null
+                && state.WeatherDriftHoldUntil is null)
             {
                 return;
             }
@@ -1774,6 +1887,9 @@ public sealed class DefenderStateStore
             state.ThermalMomentumStatus = state.Settings.ThermalMomentumGuardEnabled
                 ? "Thermal momentum is lined up; no hold needed."
                 : "Thermal momentum guard is off.";
+            ClearWeatherDrift(state.Settings.WeatherDriftGuardEnabled
+                ? "Weather drift is lined up; no weather slot needed."
+                : "Weather drift guard is off.");
             state.NaturalWalkbackStatus = state.Settings.NaturalWalkbackEnabled
                 ? "Natural walkback is lined up; no setpoint walk needed."
                 : "Natural walkback is off.";
@@ -2259,6 +2375,7 @@ public sealed class DefenderStateStore
         state.RoomTrendStatus = "Cooler intent fast lane is active, so room trend guard is stepping aside.";
         state.ThermalMomentumHoldUntil = null;
         state.ThermalMomentumStatus = "Cooler intent fast lane is active, so thermal momentum is stepping aside.";
+        ClearWeatherDrift("Cooler intent fast lane is active, so weather drift is stepping aside.");
         state.NaturalRecoveryStatus = "Cooler intent fast lane is active, so quiet recovery is stepping aside.";
         state.TouchIntentStatus = analysis.Status;
 
@@ -2504,6 +2621,20 @@ public sealed class DefenderStateStore
         PruneRoomTemperatureSamples(now);
     }
 
+    private void RecordWeatherSample(WeatherReading reading, DateTimeOffset now)
+    {
+        if (reading.OutdoorTemperatureCelsius is not { } outdoorTemperature)
+        {
+            return;
+        }
+
+        state.WeatherSamples.Add(new WeatherSample(
+            now,
+            Math.Round(outdoorTemperature, 2),
+            reading.Condition));
+        PruneWeatherSamples(now);
+    }
+
     private void RecordHomeAssistantReadingTime(DateTimeOffset now)
     {
         if (state.HomeAssistantReadingTimes.LastOrDefault() is { } latest
@@ -2658,6 +2789,37 @@ public sealed class DefenderStateStore
         return new ThermalMomentumAnalysis(rate, eta, state.RoomTemperatureSamples.Count);
     }
 
+    private WeatherDriftAnalysis BuildWeatherDrift(DateTimeOffset now)
+    {
+        PruneWeatherSamples(now);
+        if (state.WeatherSamples.Count < 2)
+        {
+            return new WeatherDriftAnalysis(
+                state.WeatherSamples.Count,
+                "collecting",
+                null,
+                false);
+        }
+
+        var oldest = state.WeatherSamples.First();
+        var newest = state.WeatherSamples.Last();
+        var delta = Math.Round(newest.OutdoorTemperatureCelsius - oldest.OutdoorTemperatureCelsius, 2);
+        var minimumChange = Math.Max(0.1, state.Settings.WeatherDriftMinimumChangeCelsius);
+        var direction = delta >= minimumChange
+            ? "warming"
+            : delta <= -minimumChange ? "cooling" : "stable";
+        var conditionChanged = !string.Equals(
+            oldest.Condition,
+            newest.Condition,
+            StringComparison.OrdinalIgnoreCase);
+
+        return new WeatherDriftAnalysis(
+            state.WeatherSamples.Count,
+            direction,
+            delta,
+            conditionChanged);
+    }
+
     private void PruneRoomTemperatureSamples(DateTimeOffset now)
     {
         var window = TimeSpan.FromMinutes(Math.Max(2, state.Settings.RoomTrendWindowMinutes));
@@ -2665,6 +2827,16 @@ public sealed class DefenderStateStore
         if (state.RoomTemperatureSamples.Count > 300)
         {
             state.RoomTemperatureSamples.RemoveRange(0, state.RoomTemperatureSamples.Count - 300);
+        }
+    }
+
+    private void PruneWeatherSamples(DateTimeOffset now)
+    {
+        var window = TimeSpan.FromMinutes(Math.Max(5, state.Settings.WeatherDriftWindowMinutes));
+        state.WeatherSamples.RemoveAll(item => now - item.Timestamp > window);
+        if (state.WeatherSamples.Count > 300)
+        {
+            state.WeatherSamples.RemoveRange(0, state.WeatherSamples.Count - 300);
         }
     }
 
@@ -3225,6 +3397,10 @@ public sealed class DefenderStateStore
         saved.Settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour = Math.Round(Math.Clamp(saved.Settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour, 0.1, 5.0), 2);
         saved.Settings.ThermalMomentumLookAheadMinutes = Math.Clamp(saved.Settings.ThermalMomentumLookAheadMinutes, 5, 240);
         saved.Settings.ThermalMomentumHoldMinutes = Math.Clamp(saved.Settings.ThermalMomentumHoldMinutes, 1, 120);
+        saved.Settings.WeatherDriftWindowMinutes = Math.Clamp(saved.Settings.WeatherDriftWindowMinutes, 5, 1440);
+        saved.Settings.WeatherDriftMinimumChangeCelsius = Math.Round(Math.Clamp(saved.Settings.WeatherDriftMinimumChangeCelsius, 0.1, 5.0), 1);
+        saved.Settings.WeatherDriftHoldMinutes = Math.Clamp(saved.Settings.WeatherDriftHoldMinutes, 1, 120);
+        saved.Settings.WeatherDriftSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.WeatherDriftSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.DefenderRunsContinuously = true;
         saved.Schedule ??= [];
         saved.Events ??= [];
@@ -3233,6 +3409,7 @@ public sealed class DefenderStateStore
         saved.UpstairsSensors ??= [];
         saved.Presence ??= [];
         saved.RoomTemperatureSamples ??= [];
+        saved.WeatherSamples ??= [];
         saved.HomeAssistantReadingTimes ??= [];
         saved.ComfortMemorySlots ??= [];
         saved.DefenderCommandTimes ??= [];
@@ -3335,6 +3512,14 @@ public sealed class DefenderStateStore
         saved.ThermalMomentumStatus = string.IsNullOrWhiteSpace(saved.ThermalMomentumStatus)
             ? "Thermal momentum guard is watching."
             : saved.ThermalMomentumStatus;
+        saved.WeatherDriftStatus = string.IsNullOrWhiteSpace(saved.WeatherDriftStatus)
+            ? "Weather drift guard is watching."
+            : saved.WeatherDriftStatus;
+        if (saved.WeatherDriftHoldUntil is { } weatherDriftUntil && weatherDriftUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.WeatherDriftHoldUntil = null;
+            saved.WeatherDriftStatus = "Weather drift guard is watching.";
+        }
         saved.ComfortStatus = string.IsNullOrWhiteSpace(saved.ComfortStatus)
             ? "Waiting for upstairs comfort readings."
             : saved.ComfortStatus;
@@ -3373,6 +3558,9 @@ public sealed class DefenderStateStore
             : 0;
         var thermalMomentumSeconds = state.ThermalMomentumHoldUntil is { } momentumUntil && momentumUntil > now
             ? (int)Math.Ceiling((momentumUntil - now).TotalSeconds)
+            : 0;
+        var weatherDriftSeconds = state.WeatherDriftHoldUntil is { } weatherDriftUntil && weatherDriftUntil > now
+            ? (int)Math.Ceiling((weatherDriftUntil - now).TotalSeconds)
             : 0;
         var sensorRhythmSeconds = state.SensorRhythmDueAt is { } sensorRhythmDueAt && sensorRhythmDueAt > now
             ? (int)Math.Ceiling((sensorRhythmDueAt - now).TotalSeconds)
@@ -3429,6 +3617,7 @@ public sealed class DefenderStateStore
         var touchSignature = BuildTouchSignatureAnalysis(currentReading, naturalWalkbackStep, now);
         var roomTrend = BuildRoomTrend(now);
         var thermalMomentum = BuildThermalMomentum(now, state.HomeAssistantThermostat?.CurrentTemperatureCelsius);
+        var weatherDrift = BuildWeatherDrift(now);
         var touchIntent = BuildTouchIntentAnalysis(now);
         var coolerIntent = BuildCoolerIntentAnalysis(now);
         var sensorRhythm = BuildSensorRhythmAnalysis(now);
@@ -3645,6 +3834,17 @@ public sealed class DefenderStateStore
                 string.IsNullOrWhiteSpace(state.ThermalMomentumStatus)
                     ? "Thermal momentum guard is watching."
                     : state.ThermalMomentumStatus),
+            new WeatherDriftSnapshot(
+                state.Settings.WeatherDriftGuardEnabled,
+                weatherDriftSeconds > 0,
+                weatherDriftSeconds,
+                weatherDrift.Direction,
+                weatherDrift.OutdoorDeltaCelsius,
+                weatherDrift.SampleCount,
+                string.IsNullOrWhiteSpace(state.WeatherDriftStatus)
+                    ? "Weather drift guard is watching."
+                    : state.WeatherDriftStatus,
+                weatherDriftSeconds > 0 ? state.WeatherDriftHoldUntil : null),
             new ComfortSnapshot(
                 state.Settings.UpstairsComfortEnabled,
                 state.Settings.HomePresenceRequired,
@@ -3710,6 +3910,7 @@ public sealed class DefenderStateStore
         state.RoomTrendStatus = "Room trend guard is watching.";
         state.ThermalMomentumHoldUntil = null;
         state.ThermalMomentumStatus = "Thermal momentum guard is watching.";
+        ClearWeatherDrift("Weather drift guard is watching.");
     }
 
     private void ClearManualComfortGrace()
@@ -3772,6 +3973,12 @@ public sealed class DefenderStateStore
     {
         state.SensorRhythmDueAt = null;
         state.SensorRhythmStatus = status;
+    }
+
+    private void ClearWeatherDrift(string status)
+    {
+        state.WeatherDriftHoldUntil = null;
+        state.WeatherDriftStatus = status;
     }
 
     private void ResetCoolingDefenderStep()
@@ -3992,6 +4199,11 @@ public sealed class DefenderStateStore
             ThermalMomentumMinimumCoolingRateCelsiusPerHour = settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour,
             ThermalMomentumLookAheadMinutes = settings.ThermalMomentumLookAheadMinutes,
             ThermalMomentumHoldMinutes = settings.ThermalMomentumHoldMinutes,
+            WeatherDriftGuardEnabled = settings.WeatherDriftGuardEnabled,
+            WeatherDriftWindowMinutes = settings.WeatherDriftWindowMinutes,
+            WeatherDriftMinimumChangeCelsius = settings.WeatherDriftMinimumChangeCelsius,
+            WeatherDriftHoldMinutes = settings.WeatherDriftHoldMinutes,
+            WeatherDriftSafetyBandCelsius = settings.WeatherDriftSafetyBandCelsius,
             FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
             FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
             FanEnergySaverMode = settings.FanEnergySaverMode,
@@ -4186,7 +4398,13 @@ public sealed class DefenderStateStore
 
         public string ThermalMomentumStatus { get; set; } = "Thermal momentum guard is watching.";
 
+        public DateTimeOffset? WeatherDriftHoldUntil { get; set; }
+
+        public string WeatherDriftStatus { get; set; } = "Weather drift guard is watching.";
+
         public List<RoomTemperatureSample> RoomTemperatureSamples { get; set; } = [];
+
+        public List<WeatherSample> WeatherSamples { get; set; } = [];
 
         public DefenderSettings Settings { get; set; } = new();
 
@@ -4253,6 +4471,11 @@ public sealed class DefenderStateStore
         DateTimeOffset Timestamp,
         double TemperatureCelsius);
 
+    private sealed record WeatherSample(
+        DateTimeOffset Timestamp,
+        double OutdoorTemperatureCelsius,
+        string? Condition);
+
     private sealed record SensorRhythmAnalysis(
         int SampleCount,
         int MedianIntervalSeconds,
@@ -4267,6 +4490,12 @@ public sealed class DefenderStateStore
         double? CoolingRateCelsiusPerHour,
         double? EstimatedMinutesToTarget,
         int SampleCount);
+
+    private sealed record WeatherDriftAnalysis(
+        int SampleCount,
+        string Direction,
+        double? OutdoorDeltaCelsius,
+        bool ConditionChanged);
 
     private sealed class ComfortMemorySlot
     {

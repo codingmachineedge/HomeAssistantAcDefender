@@ -147,6 +147,59 @@
                                          Step="0.1" />
                     </MudItem>
                 </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
+                           Value="_weatherDriftGuardEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _weatherDriftGuardEnabled = v))"
+                           Label="Weather drift timing"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Uses real outdoor temperature movement to pick a less obvious safe correction time.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_weatherDriftWindowMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _weatherDriftWindowMinutes = value))"
+                                         Label="Weather window minutes"
+                                         HelperText="How far back outdoor temperature is compared."
+                                         Variant="Variant.Outlined"
+                                         Min="5"
+                                         Max="1440" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_weatherDriftMinimumChangeCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _weatherDriftMinimumChangeCelsius = value))"
+                                         Label="Weather change C"
+                                         HelperText="Outdoor warming needed before a safe correction can look weather-driven."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_weatherDriftHoldMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _weatherDriftHoldMinutes = value))"
+                                         Label="Weather hold minutes"
+                                         HelperText="How long to wait for a natural weather slot."
+                                         Variant="Variant.Outlined"
+                                         Min="1"
+                                         Max="120" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_weatherDriftSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _weatherDriftSafetyBandCelsius = value))"
+                                         Label="Weather safe band C"
+                                         HelperText="Stop waiting if the room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
             </MudPaper>
         </MudItem>
 
@@ -1552,6 +1605,11 @@
     private double _thermalMomentumMinimumCoolingRateCelsiusPerHour = 0.4;
     private int _thermalMomentumLookAheadMinutes = 45;
     private int _thermalMomentumHoldMinutes = 6;
+    private bool _weatherDriftGuardEnabled = true;
+    private int _weatherDriftWindowMinutes = 45;
+    private double _weatherDriftMinimumChangeCelsius = 0.3;
+    private int _weatherDriftHoldMinutes = 7;
+    private double _weatherDriftSafetyBandCelsius = 1.0;
     private bool _fanEnergySaverEnabled;
     private double _fanEnergySaverThresholdCelsius = 0.6;
     private string _fanEnergySaverMode = "auto";
@@ -1689,6 +1747,11 @@
         _thermalMomentumMinimumCoolingRateCelsiusPerHour = settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour;
         _thermalMomentumLookAheadMinutes = settings.ThermalMomentumLookAheadMinutes;
         _thermalMomentumHoldMinutes = settings.ThermalMomentumHoldMinutes;
+        _weatherDriftGuardEnabled = settings.WeatherDriftGuardEnabled;
+        _weatherDriftWindowMinutes = settings.WeatherDriftWindowMinutes;
+        _weatherDriftMinimumChangeCelsius = settings.WeatherDriftMinimumChangeCelsius;
+        _weatherDriftHoldMinutes = settings.WeatherDriftHoldMinutes;
+        _weatherDriftSafetyBandCelsius = settings.WeatherDriftSafetyBandCelsius;
         _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
         _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
         _fanEnergySaverMode = settings.FanEnergySaverMode;
@@ -1873,6 +1936,11 @@
             _thermalMomentumMinimumCoolingRateCelsiusPerHour,
             _thermalMomentumLookAheadMinutes,
             _thermalMomentumHoldMinutes,
+            _weatherDriftGuardEnabled,
+            _weatherDriftWindowMinutes,
+            _weatherDriftMinimumChangeCelsius,
+            _weatherDriftHoldMinutes,
+            _weatherDriftSafetyBandCelsius,
             _fanEnergySaverEnabled,
             _fanEnergySaverThresholdCelsius,
             _fanEnergySaverMode,
