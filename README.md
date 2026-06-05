@@ -63,7 +63,7 @@ Every cycle:
 8. Respect dynamic cooldown after manual thermostat changes.
 9. Respect Manual Comfort Grace when the room is still comfortable after a wall change.
 10. Respect Room Trend Guard when the room is stable or cooling after a wall change.
-11. Apply Comfort Sync quiet recovery timing and small nudge sizing unless the room or upstairs is too warm.
+11. Apply Comfort Sync quiet recovery timing unless the room or upstairs is too warm.
 12. Optionally set fan saver mode when near target.
 13. Correct the thermostat setpoint when it does not match the defender decision.
 14. Update the real-time dashboard status.
@@ -82,7 +82,7 @@ cooldown = min(maxCooldownSeconds, baseCooldownSeconds * recentTouchCount) + ran
 
 ## Comfort Sync Quiet Recovery
 
-Comfort Sync is the natural-change algorithm. It only affects timing and setpoint step size for real Home Assistant commands.
+Comfort Sync is the natural-change algorithm. It affects timing, command spacing, and softer non-warm corrections for real Home Assistant commands. Warm-room cooling corrections use the room-temperature defender target, not the wall thermostat setpoint.
 
 - `AdaptiveQuietnessEnabled`: lets repeated manual touches automatically increase quietness.
 - `AdaptiveQuietTouchThreshold`: number of recent wall touches needed before adaptive quietness starts.
@@ -91,7 +91,7 @@ Comfort Sync is the natural-change algorithm. It only affects timing and setpoin
 - `MaximumAdaptiveHoldChancePercent`: highest chance of waiting one more short period.
 - `MaximumAdaptiveCommandGapSeconds`: longest spacing between automatic setpoint commands.
 - `MinimumNaturalDelaySeconds` and `MaximumNaturalDelaySeconds`: random extra wait after a manual wall thermostat change.
-- `NaturalStepCelsius`: biggest setpoint move per automatic correction.
+- `NaturalStepCelsius`: biggest setpoint move for softer non-warm corrections. Warm-room cooling starts from the room-temperature target.
 - `NaturalHoldChancePercent`: chance to wait one more short period after cooldown expires.
 - `MaxNaturalHolds`: cap on those extra waits so recovery cannot stall forever.
 - `MinimumCommandGapSeconds`: minimum spacing between automatic setpoint commands.
@@ -104,7 +104,7 @@ Comfort Sync is the natural-change algorithm. It only affects timing and setpoin
 - `RoomTrendStableToleranceCelsius`: small temperature changes counted as stable.
 - `RoomTrendHoldMinutes`: how long to keep observing when room trend is stable or cooling.
 
-Example: if the room is `25.0 C`, the website target is `22.0 C`, and the thermostat was manually moved to `26.0 C`, the defender decision is `24.0 C` because it starts one degree below current room temperature. With a `1.0 C` nudge size, the first automatic command can move from `26.0 C` to `25.0 C`, then later to `24.0 C`. If Home Assistant says cooling has stopped while the room is still above target, later decisions continue down toward `22.0 C`.
+Example: if the room is `25.0 C`, the website target is `22.0 C`, and the thermostat was manually moved to `26.0 C`, the first defender command is `24.0 C` because it starts one degree below current room temperature, not one degree below the wall setting. If Home Assistant says cooling has stopped while the room is still above target, later decisions continue down to `23.0 C`, then `22.0 C`.
 
 Adaptive quiet levels are shown on the dashboard:
 

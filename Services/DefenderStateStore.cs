@@ -470,7 +470,7 @@ public sealed class DefenderStateStore
             }
 
             state.NaturalHoldUntil = null;
-            message = $"{plan.QuietLevel} recovery ready; next nudge aims for {expectedSetPointCelsius:0.0} C with {plan.StepCelsius:0.0} C steps.";
+            message = $"{plan.QuietLevel} recovery ready; next correction uses the room-temperature target {expectedSetPointCelsius:0.0} C.";
             state.NaturalRecoveryStatus = message;
             SaveState();
             return false;
@@ -493,6 +493,13 @@ public sealed class DefenderStateStore
 
             var plan = BuildNaturalRecoveryPlan(DateTimeOffset.UtcNow);
             var step = Math.Max(0.1, plan.StepCelsius);
+            if (reading.CurrentTemperatureCelsius > state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius
+                && reading.SetPointCelsius > expectedSetPointCelsius + 0.05)
+            {
+                // CalculateExpectedSetPoint anchors warm-room defense at room temp minus the active boost.
+                return Math.Round(expectedSetPointCelsius, 1);
+            }
+
             var delta = expectedSetPointCelsius - reading.SetPointCelsius;
             if (Math.Abs(delta) <= step)
             {

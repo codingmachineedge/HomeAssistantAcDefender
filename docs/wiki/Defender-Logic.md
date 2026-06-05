@@ -13,7 +13,7 @@ Every cycle performs these steps:
 9. Respect dynamic cooldown after external changes unless severe upstairs heat bypasses it.
 10. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
 11. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
-12. Apply Comfort Sync quiet recovery timing and one-step nudge sizing unless comfort is too warm.
+12. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
 13. Apply fan energy saver when enabled and near target.
 14. Correct the real thermostat setpoint when needed.
 15. Update the next-action status label.
@@ -44,11 +44,12 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Waits longer when repeated wall touches happen inside the touch window.
 - Can hold briefly one or more times based on hold chance and max holds.
 - Spaces commands by the configured minimum command gap.
-- Caps each automatic setpoint change to the configured nudge size.
+- Caps softer non-warm corrections to the configured nudge size.
+- Sends warm-room corrections to the room-temperature defender target instead of walking down from the wall setpoint.
 - Automatically changes quiet level when repeated wall touches happen, shrinking nudge size and increasing wait/hold/command spacing.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
-Quiet recovery does not fake thermostat state and does not run a simulator. It only changes the timing and size of commands sent to the real Home Assistant climate entity.
+Quiet recovery does not fake thermostat state and does not run a simulator. It only changes the timing and selected command target sent to the real Home Assistant climate entity.
 
 Adaptive quiet levels:
 

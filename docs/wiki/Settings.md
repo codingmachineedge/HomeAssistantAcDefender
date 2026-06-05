@@ -21,7 +21,7 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Max auto gap: longest spacing between automatic nudges.
 - Min quiet wait: smallest random extra wait after someone changes the wall thermostat.
 - Max quiet wait: largest random extra wait after someone changes the wall thermostat.
-- Nudge size C: biggest temperature step the defender can send in one automatic command.
+- Nudge size C: caps softer non-warm corrections. Warm-room cooling starts 1 C below current room temperature.
 - Hold chance %: chance to pause one more time before nudging.
 - Max holds: maximum number of extra pauses before a correction must continue.
 - Command gap seconds: minimum time between automatic setpoint commands.
