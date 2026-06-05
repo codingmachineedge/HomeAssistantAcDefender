@@ -191,6 +191,11 @@ public sealed class DefenderStateStore
             state.Settings.TouchIntentNetWarmThresholdCelsius = Math.Round(Math.Clamp(request.TouchIntentNetWarmThresholdCelsius, 0.1, 5.0), 1);
             state.Settings.TouchIntentExtraGraceMinutes = Math.Clamp(request.TouchIntentExtraGraceMinutes, 0, 240);
             state.Settings.TouchIntentSafetyBandCelsius = Math.Round(Math.Clamp(request.TouchIntentSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.SensorRhythmGuardEnabled = request.SensorRhythmGuardEnabled;
+            state.Settings.SensorRhythmMinimumSamples = Math.Clamp(request.SensorRhythmMinimumSamples, 2, 60);
+            state.Settings.SensorRhythmWindowMinutes = Math.Clamp(request.SensorRhythmWindowMinutes, 5, 1440);
+            state.Settings.SensorRhythmJitterSeconds = Math.Clamp(request.SensorRhythmJitterSeconds, 0, 300);
+            state.Settings.SensorRhythmSafetyBandCelsius = Math.Round(Math.Clamp(request.SensorRhythmSafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.RoomTrendGuardEnabled = request.RoomTrendGuardEnabled;
             state.Settings.RoomTrendWindowMinutes = Math.Clamp(request.RoomTrendWindowMinutes, 2, 240);
             state.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(request.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
@@ -278,6 +283,7 @@ public sealed class DefenderStateStore
             var now = DateTimeOffset.UtcNow;
             DetectExternalSetPointChange(reading, now);
             RecordRoomTemperatureSample(reading, now);
+            RecordHomeAssistantReadingTime(now);
 
             state.ConnectionState = "home-assistant";
             state.HomeAssistantEntityId = reading.EntityId;
@@ -743,6 +749,82 @@ public sealed class DefenderStateStore
             state.ThermalMomentumStatus = message;
             SaveState();
             return true;
+        }
+    }
+
+    public bool TryRespectSensorRhythm(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.SensorRhythmGuardEnabled)
+            {
+                ClearSensorRhythm("Sensor rhythm is off.");
+                SaveState();
+                return false;
+            }
+
+            var analysis = BuildSensorRhythmAnalysis(now);
+            var minimumSamples = Math.Max(2, state.Settings.SensorRhythmMinimumSamples);
+            if (analysis.SampleCount < minimumSamples || analysis.MedianIntervalSeconds <= 0)
+            {
+                ClearSensorRhythm($"Sensor rhythm is learning Home Assistant beats ({analysis.SampleCount}/{minimumSamples}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearSensorRhythm("Room comfort needs help now, so sensor rhythm is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.SensorRhythmSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearSensorRhythm($"Room is above {allowedRoomTemperature:0.0} C, so sensor rhythm is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearSensorRhythm("Sensor rhythm is lined up; no beat wait needed.");
+                SaveState();
+                return false;
+            }
+
+            if (state.SensorRhythmDueAt is { } dueAt)
+            {
+                if (dueAt > now)
+                {
+                    waitUntil = dueAt;
+                    message = $"Sensor rhythm is waiting until {dueAt.ToLocalTime():HH:mm:ss}, just after the learned {analysis.MedianIntervalSeconds}s Home Assistant beat.";
+                    state.SensorRhythmStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearSensorRhythm("Sensor rhythm beat arrived; safe correction can continue.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = CalculateSensorRhythmDueAt(now, analysis);
+            state.SensorRhythmDueAt = waitUntil;
+            message = $"Sensor rhythm picked {waitUntil.ToLocalTime():HH:mm:ss} after the learned {analysis.MedianIntervalSeconds}s Home Assistant beat before the next safe nudge.";
+            state.SensorRhythmStatus = message;
+            SaveState();
+            return waitUntil > now;
         }
     }
 
@@ -1350,6 +1432,7 @@ public sealed class DefenderStateStore
                 && state.ComfortBudgetHoldUntil is null
                 && state.NaturalCadenceDueAt is null
                 && state.VisibilityGuardUntil is null
+                && state.SensorRhythmDueAt is null
                 && state.ConflictQuietUntil is null
                 && state.RoomTrendHoldUntil is null
                 && state.ThermalMomentumHoldUntil is null)
@@ -1390,6 +1473,9 @@ public sealed class DefenderStateStore
             ClearNaturalCadence(state.Settings.NaturalCadenceEnabled
                 ? "Natural cadence is lined up; no quiet slot needed."
                 : "Natural cadence is off.");
+            ClearSensorRhythm(state.Settings.SensorRhythmGuardEnabled
+                ? "Sensor rhythm is lined up; no beat wait needed."
+                : "Sensor rhythm is off.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
         }
@@ -1971,6 +2057,77 @@ public sealed class DefenderStateStore
         PruneRoomTemperatureSamples(now);
     }
 
+    private void RecordHomeAssistantReadingTime(DateTimeOffset now)
+    {
+        if (state.HomeAssistantReadingTimes.LastOrDefault() is { } latest
+            && now - latest < TimeSpan.FromSeconds(1))
+        {
+            return;
+        }
+
+        state.HomeAssistantReadingTimes.Add(now);
+        PruneHomeAssistantReadingTimes(now);
+    }
+
+    private SensorRhythmAnalysis BuildSensorRhythmAnalysis(DateTimeOffset now)
+    {
+        PruneHomeAssistantReadingTimes(now);
+        if (state.HomeAssistantReadingTimes.Count < 2)
+        {
+            return new SensorRhythmAnalysis(state.HomeAssistantReadingTimes.Count, 0, state.HomeAssistantReadingTimes.LastOrDefault());
+        }
+
+        var intervals = state.HomeAssistantReadingTimes
+            .Zip(state.HomeAssistantReadingTimes.Skip(1), (previous, next) => (int)Math.Round((next - previous).TotalSeconds))
+            .Where(seconds => seconds is >= 2 and <= 3600)
+            .Order()
+            .ToArray();
+
+        if (intervals.Length == 0)
+        {
+            return new SensorRhythmAnalysis(state.HomeAssistantReadingTimes.Count, 0, state.HomeAssistantReadingTimes.LastOrDefault());
+        }
+
+        var middle = intervals.Length / 2;
+        var median = intervals.Length % 2 == 1
+            ? intervals[middle]
+            : (int)Math.Round((intervals[middle - 1] + intervals[middle]) / 2.0);
+
+        return new SensorRhythmAnalysis(
+            state.HomeAssistantReadingTimes.Count,
+            Math.Clamp(median, 2, 3600),
+            state.HomeAssistantReadingTimes.LastOrDefault());
+    }
+
+    private DateTimeOffset CalculateSensorRhythmDueAt(DateTimeOffset now, SensorRhythmAnalysis analysis)
+    {
+        var medianSeconds = Math.Clamp(analysis.MedianIntervalSeconds, 2, 3600);
+        var dueAt = analysis.LastReadingAt ?? now;
+        while (dueAt <= now)
+        {
+            dueAt = dueAt.AddSeconds(medianSeconds);
+        }
+
+        var jitterSeconds = Math.Clamp(state.Settings.SensorRhythmJitterSeconds, 0, 300);
+        if (jitterSeconds > 0)
+        {
+            dueAt = dueAt.AddSeconds(random.Next(0, jitterSeconds + 1));
+        }
+
+        var earliest = now.AddSeconds(Math.Min(5, medianSeconds));
+        return dueAt < earliest ? earliest : dueAt;
+    }
+
+    private void PruneHomeAssistantReadingTimes(DateTimeOffset now)
+    {
+        var window = TimeSpan.FromMinutes(Math.Max(5, state.Settings.SensorRhythmWindowMinutes));
+        state.HomeAssistantReadingTimes.RemoveAll(item => now - item > window);
+        if (state.HomeAssistantReadingTimes.Count > 500)
+        {
+            state.HomeAssistantReadingTimes.RemoveRange(0, state.HomeAssistantReadingTimes.Count - 500);
+        }
+    }
+
     private RoomTrendAnalysis BuildRoomTrend(DateTimeOffset now)
     {
         PruneRoomTemperatureSamples(now);
@@ -2396,6 +2553,17 @@ public sealed class DefenderStateStore
         }
     }
 
+    private static void PruneLoadedHomeAssistantReadingTimes(DefenderRuntimeState saved)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var window = TimeSpan.FromMinutes(Math.Max(5, saved.Settings.SensorRhythmWindowMinutes));
+        saved.HomeAssistantReadingTimes.RemoveAll(item => now - item > window);
+        if (saved.HomeAssistantReadingTimes.Count > 500)
+        {
+            saved.HomeAssistantReadingTimes.RemoveRange(0, saved.HomeAssistantReadingTimes.Count - 500);
+        }
+    }
+
     private DefenderRuntimeState LoadState()
     {
         try
@@ -2515,6 +2683,10 @@ public sealed class DefenderStateStore
         saved.Settings.TouchIntentNetWarmThresholdCelsius = Math.Round(Math.Clamp(saved.Settings.TouchIntentNetWarmThresholdCelsius, 0.1, 5.0), 1);
         saved.Settings.TouchIntentExtraGraceMinutes = Math.Clamp(saved.Settings.TouchIntentExtraGraceMinutes, 0, 240);
         saved.Settings.TouchIntentSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TouchIntentSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.SensorRhythmMinimumSamples = Math.Clamp(saved.Settings.SensorRhythmMinimumSamples, 2, 60);
+        saved.Settings.SensorRhythmWindowMinutes = Math.Clamp(saved.Settings.SensorRhythmWindowMinutes, 5, 1440);
+        saved.Settings.SensorRhythmJitterSeconds = Math.Clamp(saved.Settings.SensorRhythmJitterSeconds, 0, 300);
+        saved.Settings.SensorRhythmSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.SensorRhythmSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.RoomTrendWindowMinutes = Math.Clamp(saved.Settings.RoomTrendWindowMinutes, 2, 240);
         saved.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(saved.Settings.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
         saved.Settings.RoomTrendHoldMinutes = Math.Clamp(saved.Settings.RoomTrendHoldMinutes, 1, 120);
@@ -2529,11 +2701,13 @@ public sealed class DefenderStateStore
         saved.UpstairsSensors ??= [];
         saved.Presence ??= [];
         saved.RoomTemperatureSamples ??= [];
+        saved.HomeAssistantReadingTimes ??= [];
         saved.ComfortMemorySlots ??= [];
         saved.DefenderCommandTimes ??= [];
         saved.VisibilityNoticeTimes ??= [];
         PruneLoadedDefenderCommandTimes(saved);
         PruneLoadedVisibilityNoticeTimes(saved);
+        PruneLoadedHomeAssistantReadingTimes(saved);
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
@@ -2577,6 +2751,13 @@ public sealed class DefenderStateStore
         saved.TouchIntentStatus = string.IsNullOrWhiteSpace(saved.TouchIntentStatus)
             ? "Touch intent is watching."
             : saved.TouchIntentStatus;
+        saved.SensorRhythmStatus = string.IsNullOrWhiteSpace(saved.SensorRhythmStatus)
+            ? "Sensor rhythm is watching."
+            : saved.SensorRhythmStatus;
+        if (saved.SensorRhythmDueAt is { } rhythmDueAt && rhythmDueAt <= DateTimeOffset.UtcNow)
+        {
+            saved.SensorRhythmDueAt = null;
+        }
         saved.RoomTrendStatus = string.IsNullOrWhiteSpace(saved.RoomTrendStatus)
             ? "Room trend guard is watching."
             : saved.RoomTrendStatus;
@@ -2619,6 +2800,9 @@ public sealed class DefenderStateStore
         var thermalMomentumSeconds = state.ThermalMomentumHoldUntil is { } momentumUntil && momentumUntil > now
             ? (int)Math.Ceiling((momentumUntil - now).TotalSeconds)
             : 0;
+        var sensorRhythmSeconds = state.SensorRhythmDueAt is { } sensorRhythmDueAt && sensorRhythmDueAt > now
+            ? (int)Math.Ceiling((sensorRhythmDueAt - now).TotalSeconds)
+            : 0;
         var routineTimingSeconds = state.RoutineTimingDueAt is { } routineDueAt && routineDueAt > now
             ? (int)Math.Ceiling((routineDueAt - now).TotalSeconds)
             : 0;
@@ -2658,6 +2842,7 @@ public sealed class DefenderStateStore
         var roomTrend = BuildRoomTrend(now);
         var thermalMomentum = BuildThermalMomentum(now, state.HomeAssistantThermostat?.CurrentTemperatureCelsius);
         var touchIntent = BuildTouchIntentAnalysis(now);
+        var sensorRhythm = BuildSensorRhythmAnalysis(now);
         PruneComfortMemory(now);
         var memorySlot = FindComfortMemorySlot(now);
         var memoryActive = state.Settings.ComfortMemoryEnabled
@@ -2803,6 +2988,16 @@ public sealed class DefenderStateStore
                 string.IsNullOrWhiteSpace(state.TouchIntentStatus)
                     ? touchIntent.Status
                     : state.TouchIntentStatus),
+            new SensorRhythmSnapshot(
+                state.Settings.SensorRhythmGuardEnabled,
+                sensorRhythmSeconds > 0,
+                sensorRhythmSeconds,
+                sensorRhythm.SampleCount,
+                sensorRhythm.MedianIntervalSeconds,
+                string.IsNullOrWhiteSpace(state.SensorRhythmStatus)
+                    ? "Sensor rhythm is watching."
+                    : state.SensorRhythmStatus,
+                sensorRhythmSeconds > 0 ? state.SensorRhythmDueAt : null),
             new RoomTrendSnapshot(
                 state.Settings.RoomTrendGuardEnabled,
                 roomTrendSeconds > 0,
@@ -2868,6 +3063,7 @@ public sealed class DefenderStateStore
         ClearRoutineTiming("Routine timing is watching.");
         ClearComfortBudget("Comfort budget is watching.");
         ClearNaturalCadence("Natural cadence is watching.");
+        ClearSensorRhythm("Sensor rhythm is watching.");
         ClearComfortCompromise("Comfort compromise reset after website target change.");
         state.ComfortMemoryEffectiveTargetCelsius = null;
         state.ComfortMemoryStatus = "Comfort memory is watching wall choices.";
@@ -2913,6 +3109,12 @@ public sealed class DefenderStateStore
     {
         state.VisibilityGuardUntil = null;
         state.VisibilityGuardStatus = status;
+    }
+
+    private void ClearSensorRhythm(string status)
+    {
+        state.SensorRhythmDueAt = null;
+        state.SensorRhythmStatus = status;
     }
 
     private void ResetCoolingDefenderStep()
@@ -3103,6 +3305,11 @@ public sealed class DefenderStateStore
             TouchIntentNetWarmThresholdCelsius = settings.TouchIntentNetWarmThresholdCelsius,
             TouchIntentExtraGraceMinutes = settings.TouchIntentExtraGraceMinutes,
             TouchIntentSafetyBandCelsius = settings.TouchIntentSafetyBandCelsius,
+            SensorRhythmGuardEnabled = settings.SensorRhythmGuardEnabled,
+            SensorRhythmMinimumSamples = settings.SensorRhythmMinimumSamples,
+            SensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes,
+            SensorRhythmJitterSeconds = settings.SensorRhythmJitterSeconds,
+            SensorRhythmSafetyBandCelsius = settings.SensorRhythmSafetyBandCelsius,
             RoomTrendGuardEnabled = settings.RoomTrendGuardEnabled,
             RoomTrendWindowMinutes = settings.RoomTrendWindowMinutes,
             RoomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius,
@@ -3273,6 +3480,12 @@ public sealed class DefenderStateStore
 
         public string TouchIntentStatus { get; set; } = "Touch intent is watching.";
 
+        public DateTimeOffset? SensorRhythmDueAt { get; set; }
+
+        public string SensorRhythmStatus { get; set; } = "Sensor rhythm is watching.";
+
+        public List<DateTimeOffset> HomeAssistantReadingTimes { get; set; } = [];
+
         public DateTimeOffset? RoomTrendHoldUntil { get; set; }
 
         public string RoomTrendStatus { get; set; } = "Room trend guard is watching.";
@@ -3340,6 +3553,11 @@ public sealed class DefenderStateStore
     private sealed record RoomTemperatureSample(
         DateTimeOffset Timestamp,
         double TemperatureCelsius);
+
+    private sealed record SensorRhythmAnalysis(
+        int SampleCount,
+        int MedianIntervalSeconds,
+        DateTimeOffset? LastReadingAt);
 
     private sealed record RoomTrendAnalysis(
         string Direction,

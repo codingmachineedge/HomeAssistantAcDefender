@@ -196,6 +196,11 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `TouchIntentNetWarmThresholdCelsius`: net warmer movement needed before extra grace is allowed.
 - `TouchIntentExtraGraceMinutes`: extra safe grace added for clear warmer intent.
 - `TouchIntentSafetyBandCelsius`: extra room warmth allowed before Touch Intent stops extending grace.
+- `SensorRhythmGuardEnabled`: waits for the learned Home Assistant sensor beat before safe nudges.
+- `SensorRhythmMinimumSamples`: real Home Assistant readings needed before the beat is trusted.
+- `SensorRhythmWindowMinutes`: how long real reading timestamps remain useful.
+- `SensorRhythmJitterSeconds`: small extra wait after the learned beat.
+- `SensorRhythmSafetyBandCelsius`: extra room warmth allowed before Sensor Rhythm stops waiting.
 - `RoomTrendGuardEnabled`: lets the defender observe real room temperature trend before nudging.
 - `RoomTrendWindowMinutes`: how far back real room-temperature samples are compared.
 - `RoomTrendStableToleranceCelsius`: small temperature changes counted as stable.
@@ -234,6 +239,8 @@ Comfort Memory is slower than Comfort Compromise. It learns a small offset for t
 Manual Comfort Grace is different from cooldown. Cooldown waits after a manual touch. Manual Comfort Grace can keep waiting after cooldown if the room is still within the comfort band. If the room rises above the band, the HVAC mode changes away from `cool`, or upstairs becomes severely hot, grace ends and the real thermostat correction path resumes.
 
 Touch Intent watches recent real wall changes and classifies the pattern as warmer, cooler, mixed, or learning. If the pattern is clearly warmer and the real room is still inside the intent safe band, it can extend Manual Comfort Grace by the configured extra minutes. If the room gets too warm or upstairs heat needs direct cooling, Touch Intent steps aside immediately.
+
+Sensor Rhythm watches real Home Assistant reading timestamps and learns the normal interval between poll updates. When a correction is safe, it can wait until just after the learned sensor beat plus a small wiggle, making the next command look less mechanically immediate. If the room gets too warm or upstairs heat needs direct cooling, Sensor Rhythm clears and the real correction path continues.
 
 Room Trend Guard uses real Home Assistant room-temperature readings. It compares the oldest and newest room samples inside the configured trend window. If the room is stable or cooling after a wall change, it can keep observing before sending a nudge. If the room is warming, above the grace band, or beyond the safety override, it lets the real correction continue.
 

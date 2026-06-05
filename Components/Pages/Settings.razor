@@ -864,6 +864,58 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_sensorRhythmGuardEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _sensorRhythmGuardEnabled = v))"
+                           Label="Sensor rhythm"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Waits for a normal Home Assistant sensor beat before safe nudges.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_sensorRhythmMinimumSamples"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _sensorRhythmMinimumSamples = value))"
+                                         Label="Rhythm samples"
+                                         HelperText="Readings needed before the beat is trusted."
+                                         Variant="Variant.Outlined"
+                                         Min="2"
+                                         Max="60" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_sensorRhythmWindowMinutes"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _sensorRhythmWindowMinutes = value))"
+                                         Label="Rhythm window minutes"
+                                         HelperText="How long reading beats stay in memory."
+                                         Variant="Variant.Outlined"
+                                         Min="5"
+                                         Max="1440" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_sensorRhythmJitterSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _sensorRhythmJitterSeconds = value))"
+                                         Label="Rhythm wiggle seconds"
+                                         HelperText="Tiny extra wait after the sensor beat."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="300" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_sensorRhythmSafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _sensorRhythmSafetyBandCelsius = value))"
+                                         Label="Rhythm safe band C"
+                                         HelperText="Stop waiting if the room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_roomTrendGuardEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _roomTrendGuardEnabled = v))"
                            Label="Watch room trend"
@@ -1291,6 +1343,11 @@
     private double _touchIntentNetWarmThresholdCelsius = 0.8;
     private int _touchIntentExtraGraceMinutes = 25;
     private double _touchIntentSafetyBandCelsius = 1.0;
+    private bool _sensorRhythmGuardEnabled = true;
+    private int _sensorRhythmMinimumSamples = 3;
+    private int _sensorRhythmWindowMinutes = 120;
+    private int _sensorRhythmJitterSeconds = 25;
+    private double _sensorRhythmSafetyBandCelsius = 1.0;
     private bool _roomTrendGuardEnabled = true;
     private int _roomTrendWindowMinutes = 12;
     private double _roomTrendStableToleranceCelsius = 0.2;
@@ -1406,6 +1463,11 @@
         _touchIntentNetWarmThresholdCelsius = settings.TouchIntentNetWarmThresholdCelsius;
         _touchIntentExtraGraceMinutes = settings.TouchIntentExtraGraceMinutes;
         _touchIntentSafetyBandCelsius = settings.TouchIntentSafetyBandCelsius;
+        _sensorRhythmGuardEnabled = settings.SensorRhythmGuardEnabled;
+        _sensorRhythmMinimumSamples = settings.SensorRhythmMinimumSamples;
+        _sensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes;
+        _sensorRhythmJitterSeconds = settings.SensorRhythmJitterSeconds;
+        _sensorRhythmSafetyBandCelsius = settings.SensorRhythmSafetyBandCelsius;
         _roomTrendGuardEnabled = settings.RoomTrendGuardEnabled;
         _roomTrendWindowMinutes = settings.RoomTrendWindowMinutes;
         _roomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius;
@@ -1568,6 +1630,11 @@
             _touchIntentNetWarmThresholdCelsius,
             _touchIntentExtraGraceMinutes,
             _touchIntentSafetyBandCelsius,
+            _sensorRhythmGuardEnabled,
+            _sensorRhythmMinimumSamples,
+            _sensorRhythmWindowMinutes,
+            _sensorRhythmJitterSeconds,
+            _sensorRhythmSafetyBandCelsius,
             _roomTrendGuardEnabled,
             _roomTrendWindowMinutes,
             _roomTrendStableToleranceCelsius,

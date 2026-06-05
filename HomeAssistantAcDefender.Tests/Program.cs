@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 var tests = new DefenderSetPointRegressionTests();
 tests.ManualTouchWhileWarmRestartsAtOneDegreeBelowRoom();
 tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
+tests.SensorRhythmWaitsOnlyForSafeCorrections();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
 internal sealed class DefenderSetPointRegressionTests
@@ -64,12 +65,78 @@ internal sealed class DefenderSetPointRegressionTests
         AssertEqual(22.0, fourth, "Warm-room step-down must not go colder than the website target.");
     }
 
+    public void SensorRhythmWaitsOnlyForSafeCorrections()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        var now = DateTimeOffset.UtcNow;
+        SeedHomeAssistantReadingTimes(store, now.AddSeconds(-20), now.AddSeconds(-10), now);
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.5,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+
+        var waited = store.TryRespectSensorRhythm(
+            safeReading,
+            22.0,
+            bypassForComfort: false,
+            now,
+            out var waitUntil,
+            out _);
+
+        if (!waited || waitUntil <= now)
+        {
+            throw new InvalidOperationException("Sensor Rhythm should wait after the learned beat for safe corrections.");
+        }
+
+        var hotReading = safeReading with { CurrentTemperatureCelsius = 24.2 };
+        var bypassed = store.TryRespectSensorRhythm(
+            hotReading,
+            22.0,
+            bypassForComfort: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (bypassed)
+        {
+            throw new InvalidOperationException("Sensor Rhythm must step aside when direct cooling is needed.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (snapshot.SensorRhythm.Waiting)
+        {
+            throw new InvalidOperationException("Sensor Rhythm should clear its wait after comfort bypass.");
+        }
+    }
+
     private static void AssertEqual(double expected, double actual, string message)
     {
         if (Math.Abs(expected - actual) > 0.05)
         {
             throw new InvalidOperationException($"{message} Expected {expected:0.0} C, got {actual:0.0} C.");
         }
+    }
+
+    private static void SeedHomeAssistantReadingTimes(DefenderStateStore store, params DateTimeOffset[] readingTimes)
+    {
+        var stateField = typeof(DefenderStateStore).GetField("state", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not find DefenderStateStore state field.");
+        var state = stateField.GetValue(store)
+            ?? throw new InvalidOperationException("Could not read DefenderStateStore state.");
+        var readingTimesProperty = state.GetType().GetProperty("HomeAssistantReadingTimes")
+            ?? throw new InvalidOperationException("Could not find HomeAssistantReadingTimes state property.");
+        var list = (List<DateTimeOffset>?)readingTimesProperty.GetValue(state)
+            ?? throw new InvalidOperationException("Could not read HomeAssistantReadingTimes.");
+
+        list.Clear();
+        list.AddRange(readingTimes);
     }
 }
 

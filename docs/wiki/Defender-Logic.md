@@ -15,19 +15,20 @@ Every cycle performs these steps:
 11. Respect Manual Comfort Grace when the room is still within the configured band after a wall change.
 12. Respect Room Trend Guard when real room readings are stable or cooling after a wall change.
 13. Respect Thermal Momentum when the room is already cooling fast enough to reach target soon.
-14. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
-15. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
-16. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
-17. Respect Visibility Guard when a wall touch happens soon after a defender command.
-18. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
-19. Respect Comfort Budget when too many safe adjustments happened recently.
-20. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-21. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-22. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-23. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-24. Apply fan energy saver when enabled and near target.
-25. Correct the real thermostat setpoint when needed.
-26. Update the next-action status label.
+14. Respect Sensor Rhythm so safe corrections can land just after a normal Home Assistant reading beat.
+15. Apply Comfort Sync quiet recovery timing unless comfort is too warm.
+16. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
+17. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
+18. Respect Visibility Guard when a wall touch happens soon after a defender command.
+19. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
+20. Respect Comfort Budget when too many safe adjustments happened recently.
+21. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
+22. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+23. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+24. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+25. Apply fan energy saver when enabled and near target.
+26. Correct the real thermostat setpoint when needed.
+27. Update the next-action status label.
 
 ## Cooling Behavior
 
@@ -91,6 +92,7 @@ Quiet recovery makes automatic corrections less abrupt after someone changes the
 - Uses Comfort Memory to remember a tiny expiring time-of-day preference after repeated safe wall choices.
 - Uses Comfort Compromise to temporarily blend repeated safe wall choices into the effective target.
 - Uses Touch Intent to classify recent wall choices and extend safe grace only when warmer intent is clear.
+- Uses Sensor Rhythm so safe corrections can wait until just after the learned Home Assistant reading beat.
 - Skips quiet waits when room temperature is above the safety override or upstairs comfort is severely hot.
 
 Quiet recovery does not fake thermostat state and does not run a simulator. It only changes the timing and selected command target sent to the real Home Assistant climate entity.
@@ -226,6 +228,18 @@ targetTemperature + touchIntentSafetyBandCelsius
 ```
 
 Manual Comfort Grace can extend by `touchIntentExtraGraceMinutes`. Cooler and mixed patterns do not add warmer grace. If the room crosses the safety band, the normal safety override is reached, or upstairs heat bypasses quiet timing, Touch Intent steps aside and the direct correction path continues.
+
+## Sensor Rhythm
+
+Sensor Rhythm records real Home Assistant climate reading timestamps and learns the median interval between updates. Once enough real readings exist, a safe correction can wait until just after the next learned beat plus `sensorRhythmJitterSeconds`.
+
+It only waits while the real room temperature is inside:
+
+```text
+targetTemperature + sensorRhythmSafetyBandCelsius
+```
+
+If upstairs heat bypasses quiet timing, the room crosses the safety override, or the room rises above the rhythm safe band, the hold clears immediately and the real correction path continues.
 
 ## Room Trend Guard
 

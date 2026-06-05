@@ -88,6 +88,11 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Warmer pattern C: net warmer change needed before extra grace is allowed.
 - Intent extra grace: extra safe minutes added when warmer intent is clear.
 - Intent safe band C: extra warmth allowed before touch intent stops extending grace.
+- Sensor rhythm: waits for a normal Home Assistant sensor beat before safe nudges.
+- Rhythm samples: real Home Assistant readings needed before the beat is trusted.
+- Rhythm window minutes: how long reading timestamps stay useful.
+- Rhythm wiggle seconds: tiny extra wait after the learned sensor beat.
+- Rhythm safe band C: extra warmth allowed before sensor rhythm stops waiting.
 - Watch room trend: waits if real room readings are stable or cooling after a wall change.
 - Trend window minutes: how far back the defender compares room temperature.
 - Stable change C: small room temperature movement counted as steady.

@@ -123,6 +123,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectSensorRhythm(reading, expectedSetPoint, comfort.BypassCooldown, now, out var rhythmUntil, out var rhythmMessage))
+                {
+                    stateStore.SetNextAction(rhythmMessage, rhythmUntil);
+                    return;
+                }
+
                 if (stateStore.TryDelayNaturalCorrection(reading, expectedSetPoint, comfort.BypassCooldown, now, out var waitUntil, out var waitMessage))
                 {
                     stateStore.SetNextAction(waitMessage, waitUntil);
