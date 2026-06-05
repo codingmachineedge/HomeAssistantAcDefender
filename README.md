@@ -13,6 +13,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Detects when someone changes the thermostat outside the website.
 - Logs external thermostat touches with date, time, previous setpoint, new setpoint, room temperature, outdoor temperature, and weather condition when Home Assistant exposes those values.
 - Uses a dynamic cooldown after manual thermostat touches so corrections do not happen instantly every time.
+- Adds Comfort Sync quiet recovery: randomized extra waits, optional extra holds, command spacing, and small setpoint nudges so repeated wall changes do not create an obvious immediate tug-of-war.
 - Shows the next defender action in a live status label.
 - Supports a custom schedule for target temperatures.
 - Supports weather-based activation rules.
@@ -58,9 +59,10 @@ Every cycle:
 6. Apply active schedule target if schedule is enabled.
 7. Evaluate the weather activation rule.
 8. Respect dynamic cooldown after manual thermostat changes.
-9. Optionally set fan saver mode when near target.
-10. Correct the thermostat setpoint when it does not match the defender decision.
-11. Update the real-time dashboard status.
+9. Apply Comfort Sync quiet recovery timing and small nudge sizing unless the room or upstairs is too warm.
+10. Optionally set fan saver mode when near target.
+11. Correct the thermostat setpoint when it does not match the defender decision.
+12. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -69,10 +71,23 @@ When the room is above the target, a new defender correction starts by commandin
 Cooldown starts only after an external setpoint change. The formula is frequency-based:
 
 ```text
-cooldown = min(maxCooldownSeconds, baseCooldownSeconds * recentTouchCount)
+cooldown = min(maxCooldownSeconds, baseCooldownSeconds * recentTouchCount) + randomQuietDelay
 ```
 
 `recentTouchCount` is counted inside `TouchFrequencyWindowMinutes`. More repeated manual changes cause longer cooldowns.
+
+## Comfort Sync Quiet Recovery
+
+Comfort Sync is the natural-change algorithm. It only affects timing and setpoint step size for real Home Assistant commands.
+
+- `MinimumNaturalDelaySeconds` and `MaximumNaturalDelaySeconds`: random extra wait after a manual wall thermostat change.
+- `NaturalStepCelsius`: biggest setpoint move per automatic correction.
+- `NaturalHoldChancePercent`: chance to wait one more short period after cooldown expires.
+- `MaxNaturalHolds`: cap on those extra waits so recovery cannot stall forever.
+- `MinimumCommandGapSeconds`: minimum spacing between automatic setpoint commands.
+- `NaturalSafetyOverrideCelsius`: if room temperature is this far above target, skip quiet waits and restore comfort faster.
+
+Example: if the room is `25.0 C`, the website target is `22.0 C`, and the thermostat was manually moved to `26.0 C`, the defender decision is `24.0 C` because it starts one degree below current room temperature. With a `1.0 C` nudge size, the first automatic command can move from `26.0 C` to `25.0 C`, then later to `24.0 C`. If Home Assistant says cooling has stopped while the room is still above target, later decisions continue down toward `22.0 C`.
 
 ## Schedule And Weather Rules
 

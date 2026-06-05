@@ -10,6 +10,17 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Max cooldown seconds: cap for repeated manual changes.
 - Touch window minutes: time window used for frequency-based cooldown.
 
+## Comfort Sync
+
+- Use quiet recovery: turns natural delayed corrections on or off.
+- Min quiet wait: smallest random extra wait after someone changes the wall thermostat.
+- Max quiet wait: largest random extra wait after someone changes the wall thermostat.
+- Nudge size C: biggest temperature step the defender can send in one automatic command.
+- Hold chance %: chance to pause one more time before nudging.
+- Max holds: maximum number of extra pauses before a correction must continue.
+- Command gap seconds: minimum time between automatic setpoint commands.
+- Too-hot override C: if the room is this far above target, skip quiet waits and prioritize comfort.
+
 ## Weather Rules
 
 - `always`

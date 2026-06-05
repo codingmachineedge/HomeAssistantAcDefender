@@ -15,6 +15,7 @@ public sealed record DefenderSnapshot(
     string NextAction,
     DateTimeOffset? NextActionAt,
     int CooldownSeconds,
+    NaturalRecoverySnapshot NaturalRecovery,
     ComfortSnapshot Comfort,
     DefenderSettings Settings,
     IReadOnlyList<ScheduleEntry> Schedule,
@@ -68,6 +69,15 @@ public sealed record PresenceReading(
     string State,
     bool IsHome);
 
+public sealed record NaturalRecoverySnapshot(
+    bool Enabled,
+    bool Waiting,
+    int SecondsRemaining,
+    int RecentTouchCount,
+    string Status,
+    double StepCelsius,
+    int HoldChancePercent);
+
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,
     bool HomePresenceRequired,
@@ -99,6 +109,22 @@ public sealed class DefenderSettings
     public int MaxCooldownSeconds { get; set; } = 600;
 
     public int TouchFrequencyWindowMinutes { get; set; } = 30;
+
+    public bool NaturalRecoveryEnabled { get; set; } = true;
+
+    public int MinimumNaturalDelaySeconds { get; set; } = 20;
+
+    public int MaximumNaturalDelaySeconds { get; set; } = 180;
+
+    public double NaturalStepCelsius { get; set; } = 1.0;
+
+    public int NaturalHoldChancePercent { get; set; } = 25;
+
+    public int MaxNaturalHolds { get; set; } = 2;
+
+    public int MinimumCommandGapSeconds { get; set; } = 30;
+
+    public double NaturalSafetyOverrideCelsius { get; set; } = 2.0;
 
     public bool FanEnergySaverEnabled { get; set; }
 

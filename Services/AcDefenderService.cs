@@ -80,12 +80,21 @@ public sealed class AcDefenderService
 
             if (changed)
             {
-                stateStore.SetNextAction($"Correcting real thermostat to {expectedSetPoint:0.0} C.", DateTimeOffset.UtcNow);
-                await homeAssistantClient.SetCoolingAsync(reading.EntityId, expectedSetPoint, cancellationToken);
-                stateStore.RecordCommand($"Home Assistant {reading.EntityId} forced to {expectedSetPoint:0.0} C.", expectedSetPoint);
+                var now = DateTimeOffset.UtcNow;
+                if (stateStore.TryDelayNaturalCorrection(reading, expectedSetPoint, comfort.BypassCooldown, now, out var waitUntil, out var waitMessage))
+                {
+                    stateStore.SetNextAction(waitMessage, waitUntil);
+                    return;
+                }
+
+                var commandSetPoint = stateStore.CalculateNaturalCommandSetPoint(reading, expectedSetPoint, comfort.BypassCooldown);
+                stateStore.SetNextAction($"Nudging real thermostat to {commandSetPoint:0.0} C toward comfort target.", now);
+                await homeAssistantClient.SetCoolingAsync(reading.EntityId, commandSetPoint, cancellationToken);
+                stateStore.RecordCommand($"Home Assistant {reading.EntityId} nudged to {commandSetPoint:0.0} C toward {expectedSetPoint:0.0} C.", commandSetPoint);
                 return;
             }
 
+            stateStore.RecordNaturalRecoverySettled();
             stateStore.SetNextAction($"No correction needed; next 24/7 check at {nextCheck:HH:mm:ss}.", nextCheck);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

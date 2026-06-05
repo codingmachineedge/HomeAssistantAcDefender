@@ -68,6 +68,95 @@
 
         <MudItem xs="12" md="6">
             <MudPaper Class="panel-card">
+                <MudText Typo="Typo.overline">Comfort Sync</MudText>
+                <MudText Typo="Typo.body2" Class="helper-text">Makes fixes look like calm little adjustments.</MudText>
+
+                <MudSwitch T="bool"
+                           Value="_naturalRecoveryEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _naturalRecoveryEnabled = v))"
+                           Label="Use quiet recovery"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">On means the helper waits and nudges instead of jumping fast.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_minimumNaturalDelaySeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _minimumNaturalDelaySeconds = value))"
+                                         Label="Min quiet wait"
+                                         HelperText="Smallest wait after a wall change."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="3600" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_maximumNaturalDelaySeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _maximumNaturalDelaySeconds = value))"
+                                         Label="Max quiet wait"
+                                         HelperText="Biggest random wait."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="7200" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_naturalStepCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalStepCelsius = value))"
+                                         Label="Nudge size C"
+                                         HelperText="How far one move can go."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_naturalHoldChancePercent"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _naturalHoldChancePercent = value))"
+                                         Label="Hold chance %"
+                                         HelperText="Chance to wait one more beat."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="100" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_maxNaturalHolds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _maxNaturalHolds = value))"
+                                         Label="Max holds"
+                                         HelperText="How many extra waits are allowed."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="10" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_minimumCommandGapSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _minimumCommandGapSeconds = value))"
+                                         Label="Command gap seconds"
+                                         HelperText="Space between thermostat nudges."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="3600" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="double"
+                                         Value="_naturalSafetyOverrideCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _naturalSafetyOverrideCelsius = value))"
+                                         Label="Too-hot override C"
+                                         HelperText="Skip quiet waits if room is this high."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="10"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="panel-card">
                 <MudText Typo="Typo.overline">Fan Energy Saver</MudText>
                 <MudText Typo="Typo.body2" Class="helper-text">Uses less fan when close enough.</MudText>
 
@@ -333,6 +422,14 @@
     private int _baseCooldownSeconds = 45;
     private int _maxCooldownSeconds = 600;
     private int _touchFrequencyWindowMinutes = 30;
+    private bool _naturalRecoveryEnabled = true;
+    private int _minimumNaturalDelaySeconds = 20;
+    private int _maximumNaturalDelaySeconds = 180;
+    private double _naturalStepCelsius = 1.0;
+    private int _naturalHoldChancePercent = 25;
+    private int _maxNaturalHolds = 2;
+    private int _minimumCommandGapSeconds = 30;
+    private double _naturalSafetyOverrideCelsius = 2.0;
     private bool _fanEnergySaverEnabled;
     private double _fanEnergySaverThresholdCelsius = 0.6;
     private string _fanEnergySaverMode = "auto";
@@ -364,6 +461,14 @@
         _baseCooldownSeconds = settings.BaseCooldownSeconds;
         _maxCooldownSeconds = settings.MaxCooldownSeconds;
         _touchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes;
+        _naturalRecoveryEnabled = settings.NaturalRecoveryEnabled;
+        _minimumNaturalDelaySeconds = settings.MinimumNaturalDelaySeconds;
+        _maximumNaturalDelaySeconds = settings.MaximumNaturalDelaySeconds;
+        _naturalStepCelsius = settings.NaturalStepCelsius;
+        _naturalHoldChancePercent = settings.NaturalHoldChancePercent;
+        _maxNaturalHolds = settings.MaxNaturalHolds;
+        _minimumCommandGapSeconds = settings.MinimumCommandGapSeconds;
+        _naturalSafetyOverrideCelsius = settings.NaturalSafetyOverrideCelsius;
         _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
         _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
         _fanEnergySaverMode = settings.FanEnergySaverMode;
@@ -442,6 +547,14 @@
             _baseCooldownSeconds,
             _maxCooldownSeconds,
             _touchFrequencyWindowMinutes,
+            _naturalRecoveryEnabled,
+            _minimumNaturalDelaySeconds,
+            _maximumNaturalDelaySeconds,
+            _naturalStepCelsius,
+            _naturalHoldChancePercent,
+            _maxNaturalHolds,
+            _minimumCommandGapSeconds,
+            _naturalSafetyOverrideCelsius,
             _fanEnergySaverEnabled,
             _fanEnergySaverThresholdCelsius,
             _fanEnergySaverMode,

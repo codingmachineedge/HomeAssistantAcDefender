@@ -42,6 +42,7 @@ public sealed class DefenderStateStore
             var steps = Math.Max(0, (int)Math.Round((max - min) / step));
             state.TargetTemperatureCelsius = Math.Round(min + random.Next(steps + 1) * step, 1);
             state.BoostOffsetCelsius = 0.0;
+            ResetNaturalRecovery("Website generated a target; comfort sync is ready.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", $"Generated target {state.TargetTemperatureCelsius:0.0} C.");
             SaveState();
@@ -55,6 +56,7 @@ public sealed class DefenderStateStore
         {
             state.TargetTemperatureCelsius = Math.Round(temperatureCelsius, 1);
             state.BoostOffsetCelsius = 0.0;
+            ResetNaturalRecovery("Website target changed; comfort sync is ready.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", $"Target set to {state.TargetTemperatureCelsius:0.0} C.");
             SaveState();
@@ -83,6 +85,17 @@ public sealed class DefenderStateStore
             state.Settings.BaseCooldownSeconds = Math.Clamp(request.BaseCooldownSeconds, 0, 3600);
             state.Settings.MaxCooldownSeconds = Math.Clamp(request.MaxCooldownSeconds, 0, 7200);
             state.Settings.TouchFrequencyWindowMinutes = Math.Clamp(request.TouchFrequencyWindowMinutes, 1, 1440);
+            state.Settings.NaturalRecoveryEnabled = request.NaturalRecoveryEnabled;
+            state.Settings.MinimumNaturalDelaySeconds = Math.Clamp(request.MinimumNaturalDelaySeconds, 0, 3600);
+            state.Settings.MaximumNaturalDelaySeconds = Math.Clamp(
+                request.MaximumNaturalDelaySeconds,
+                state.Settings.MinimumNaturalDelaySeconds,
+                7200);
+            state.Settings.NaturalStepCelsius = Math.Round(Math.Clamp(request.NaturalStepCelsius, 0.1, 5.0), 1);
+            state.Settings.NaturalHoldChancePercent = Math.Clamp(request.NaturalHoldChancePercent, 0, 100);
+            state.Settings.MaxNaturalHolds = Math.Clamp(request.MaxNaturalHolds, 0, 10);
+            state.Settings.MinimumCommandGapSeconds = Math.Clamp(request.MinimumCommandGapSeconds, 0, 3600);
+            state.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(request.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
             state.Settings.FanEnergySaverEnabled = request.FanEnergySaverEnabled;
             state.Settings.FanEnergySaverThresholdCelsius = Math.Clamp(request.FanEnergySaverThresholdCelsius, 0.1, 5.0);
             state.Settings.FanEnergySaverMode = string.IsNullOrWhiteSpace(request.FanEnergySaverMode)
@@ -207,6 +220,7 @@ public sealed class DefenderStateStore
             {
                 state.PendingCommandSetPointCelsius = setPoint;
                 state.PendingCommandAt = state.UpdatedAt;
+                state.LastDefenderCommandAt = state.UpdatedAt;
             }
 
             AddEvent("info", message);
@@ -233,6 +247,128 @@ public sealed class DefenderStateStore
         {
             cooldownUntil = state.CooldownUntil ?? DateTimeOffset.MinValue;
             return state.CooldownUntil is { } until && until > now;
+        }
+    }
+
+    public bool TryDelayNaturalCorrection(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassNaturalTiming,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.NaturalRecoveryEnabled)
+            {
+                state.NaturalRecoveryStatus = "Quiet recovery is off; corrections happen as soon as rules allow.";
+                SaveState();
+                return false;
+            }
+
+            if (bypassNaturalTiming || ShouldBypassNaturalRecovery(reading))
+            {
+                state.NaturalHoldUntil = null;
+                state.NaturalRecoveryStatus = "Comfort is too warm, so quiet recovery is stepping aside.";
+                SaveState();
+                return false;
+            }
+
+            if (state.NaturalHoldUntil is { } holdUntil && holdUntil > now)
+            {
+                waitUntil = holdUntil;
+                message = $"Quiet recovery is waiting until {holdUntil.ToLocalTime():HH:mm:ss} before nudging the thermostat.";
+                state.NaturalRecoveryStatus = message;
+                SaveState();
+                return true;
+            }
+
+            if (state.LastDefenderCommandAt is { } lastCommandAt)
+            {
+                var minimumGap = TimeSpan.FromSeconds(Math.Max(0, state.Settings.MinimumCommandGapSeconds));
+                var nextAllowed = lastCommandAt.Add(minimumGap);
+                if (nextAllowed > now)
+                {
+                    waitUntil = nextAllowed;
+                    message = $"Comfort sync is spacing commands until {nextAllowed.ToLocalTime():HH:mm:ss}.";
+                    state.NaturalRecoveryStatus = message;
+                    SaveState();
+                    return true;
+                }
+            }
+
+            if (state.NaturalHoldCount < state.Settings.MaxNaturalHolds
+                && random.Next(100) < state.Settings.NaturalHoldChancePercent)
+            {
+                var holdSeconds = CalculateNaturalHoldSeconds();
+                if (holdSeconds > 0)
+                {
+                    state.NaturalHoldCount++;
+                    state.NaturalHoldUntil = now.AddSeconds(holdSeconds);
+                    waitUntil = state.NaturalHoldUntil.Value;
+                    message = $"Quiet recovery is holding briefly until {waitUntil.ToLocalTime():HH:mm:ss}.";
+                    state.NaturalRecoveryStatus = message;
+                    SaveState();
+                    return true;
+                }
+            }
+
+            state.NaturalHoldUntil = null;
+            message = $"Quiet recovery ready; next nudge aims for {expectedSetPointCelsius:0.0} C in gentle steps.";
+            state.NaturalRecoveryStatus = message;
+            SaveState();
+            return false;
+        }
+    }
+
+    public double CalculateNaturalCommandSetPoint(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassNaturalStep)
+    {
+        lock (gate)
+        {
+            if (!state.Settings.NaturalRecoveryEnabled
+                || bypassNaturalStep
+                || ShouldBypassNaturalRecovery(reading))
+            {
+                return Math.Round(expectedSetPointCelsius, 1);
+            }
+
+            var step = Math.Max(0.1, state.Settings.NaturalStepCelsius);
+            var delta = expectedSetPointCelsius - reading.SetPointCelsius;
+            if (Math.Abs(delta) <= step)
+            {
+                return Math.Round(expectedSetPointCelsius, 1);
+            }
+
+            return Math.Round(reading.SetPointCelsius + Math.Sign(delta) * step, 1);
+        }
+    }
+
+    public void RecordNaturalRecoverySettled()
+    {
+        lock (gate)
+        {
+            var status = state.Settings.NaturalRecoveryEnabled
+                ? "Comfort sync is lined up; no quiet nudge needed."
+                : "Quiet recovery is off.";
+            if (state.NaturalRecoveryStatus == status
+                && state.NaturalHoldUntil is null
+                && state.NaturalHoldCount == 0)
+            {
+                return;
+            }
+
+            state.NaturalHoldUntil = null;
+            state.NaturalHoldCount = 0;
+            state.NaturalRecoveryStatus = status;
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveState();
         }
     }
 
@@ -399,11 +535,21 @@ public sealed class DefenderStateStore
         PruneTouchTimes(now);
         state.ExternalTouchTimes.Add(now);
         state.BoostOffsetCelsius = 0.0;
-        var cooldownSeconds = CalculateDynamicCooldownSeconds(now);
+        state.NaturalHoldUntil = null;
+        state.NaturalHoldCount = 0;
+        var cooldownSeconds = CalculateDynamicCooldownSeconds(now) + CalculateNaturalDelaySeconds();
         if (cooldownSeconds > 0)
         {
             state.CooldownUntil = now.AddSeconds(cooldownSeconds);
         }
+        else
+        {
+            state.CooldownUntil = null;
+        }
+
+        state.NaturalRecoveryStatus = state.Settings.NaturalRecoveryEnabled
+            ? $"Manual thermostat touch noticed; comfort sync will wait {cooldownSeconds}s before a quiet nudge."
+            : "Manual thermostat touch noticed; quiet recovery is off.";
 
         var audit = new ThermostatChangeAudit(
             now,
@@ -431,6 +577,43 @@ public sealed class DefenderStateStore
         var baseSeconds = Math.Max(0, state.Settings.BaseCooldownSeconds);
         var maxSeconds = Math.Max(baseSeconds, state.Settings.MaxCooldownSeconds);
         return Math.Min(maxSeconds, baseSeconds * touches);
+    }
+
+    private int CalculateNaturalDelaySeconds()
+    {
+        if (!state.Settings.NaturalRecoveryEnabled)
+        {
+            return 0;
+        }
+
+        var minSeconds = Math.Max(0, state.Settings.MinimumNaturalDelaySeconds);
+        var maxSeconds = Math.Max(minSeconds, state.Settings.MaximumNaturalDelaySeconds);
+        return maxSeconds == minSeconds
+            ? minSeconds
+            : random.Next(minSeconds, maxSeconds + 1);
+    }
+
+    private int CalculateNaturalHoldSeconds()
+    {
+        if (!state.Settings.NaturalRecoveryEnabled)
+        {
+            return 0;
+        }
+
+        var minSeconds = Math.Max(5, state.Settings.MinimumNaturalDelaySeconds / 2);
+        var maxSeconds = Math.Max(minSeconds, Math.Min(
+            Math.Max(minSeconds, state.Settings.MaximumNaturalDelaySeconds),
+            Math.Max(minSeconds, state.Settings.MinimumNaturalDelaySeconds + state.Settings.BaseCooldownSeconds)));
+
+        return maxSeconds == minSeconds
+            ? minSeconds
+            : random.Next(minSeconds, maxSeconds + 1);
+    }
+
+    private bool ShouldBypassNaturalRecovery(ThermostatReading reading)
+    {
+        var overrideMargin = Math.Max(0.1, state.Settings.NaturalSafetyOverrideCelsius);
+        return reading.CurrentTemperatureCelsius >= state.TargetTemperatureCelsius + overrideMargin;
     }
 
     private void PruneTouchTimes(DateTimeOffset now)
@@ -472,14 +655,25 @@ public sealed class DefenderStateStore
             saved.ConnectionState = "unavailable";
         }
 
-            saved.Settings ??= new DefenderSettings();
-            saved.Settings.DefenderRunsContinuously = true;
+        saved.Settings ??= new DefenderSettings();
+        saved.Settings.MaximumNaturalDelaySeconds = Math.Max(
+            saved.Settings.MinimumNaturalDelaySeconds,
+            saved.Settings.MaximumNaturalDelaySeconds);
+        saved.Settings.NaturalStepCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalStepCelsius, 0.1, 5.0), 1);
+        saved.Settings.NaturalHoldChancePercent = Math.Clamp(saved.Settings.NaturalHoldChancePercent, 0, 100);
+        saved.Settings.MaxNaturalHolds = Math.Clamp(saved.Settings.MaxNaturalHolds, 0, 10);
+        saved.Settings.MinimumCommandGapSeconds = Math.Max(0, saved.Settings.MinimumCommandGapSeconds);
+        saved.Settings.NaturalSafetyOverrideCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalSafetyOverrideCelsius, 0.1, 10.0), 1);
+        saved.Settings.DefenderRunsContinuously = true;
         saved.Schedule ??= [];
         saved.Events ??= [];
         saved.ThermostatChanges ??= [];
         saved.ExternalTouchTimes ??= [];
         saved.UpstairsSensors ??= [];
         saved.Presence ??= [];
+        saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
+            ? "Comfort sync is ready."
+            : saved.NaturalRecoveryStatus;
         saved.ComfortStatus = string.IsNullOrWhiteSpace(saved.ComfortStatus)
             ? "Waiting for upstairs comfort readings."
             : saved.ComfortStatus;
@@ -489,6 +683,15 @@ public sealed class DefenderStateStore
 
     private DefenderSnapshot CreateSnapshot()
     {
+        var now = DateTimeOffset.UtcNow;
+        PruneTouchTimes(now);
+        var cooldownSeconds = state.CooldownUntil is { } cooldownUntil && cooldownUntil > now
+            ? (int)Math.Ceiling((cooldownUntil - now).TotalSeconds)
+            : 0;
+        var holdSeconds = state.NaturalHoldUntil is { } holdUntil && holdUntil > now
+            ? (int)Math.Ceiling((holdUntil - now).TotalSeconds)
+            : 0;
+        var naturalSeconds = Math.Max(cooldownSeconds, holdSeconds);
         return new DefenderSnapshot(
             state.TargetTemperatureCelsius,
             state.DefenderEnabled,
@@ -503,9 +706,17 @@ public sealed class DefenderStateStore
             state.LastError,
             state.NextAction,
             state.NextActionAt,
-            state.CooldownUntil is { } until && until > DateTimeOffset.UtcNow
-                ? (int)Math.Ceiling((until - DateTimeOffset.UtcNow).TotalSeconds)
-                : 0,
+            cooldownSeconds,
+            new NaturalRecoverySnapshot(
+                state.Settings.NaturalRecoveryEnabled,
+                naturalSeconds > 0,
+                naturalSeconds,
+                state.ExternalTouchTimes.Count,
+                string.IsNullOrWhiteSpace(state.NaturalRecoveryStatus)
+                    ? "Comfort sync is ready."
+                    : state.NaturalRecoveryStatus,
+                state.Settings.NaturalStepCelsius,
+                state.Settings.NaturalHoldChancePercent),
             new ComfortSnapshot(
                 state.Settings.UpstairsComfortEnabled,
                 state.Settings.HomePresenceRequired,
@@ -538,6 +749,14 @@ public sealed class DefenderStateStore
         {
             state.Events.RemoveRange(40, state.Events.Count - 40);
         }
+    }
+
+    private void ResetNaturalRecovery(string status)
+    {
+        state.CooldownUntil = null;
+        state.NaturalHoldUntil = null;
+        state.NaturalHoldCount = 0;
+        state.NaturalRecoveryStatus = status;
     }
 
     private void SaveState()
@@ -636,6 +855,14 @@ public sealed class DefenderStateStore
             BaseCooldownSeconds = settings.BaseCooldownSeconds,
             MaxCooldownSeconds = settings.MaxCooldownSeconds,
             TouchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes,
+            NaturalRecoveryEnabled = settings.NaturalRecoveryEnabled,
+            MinimumNaturalDelaySeconds = settings.MinimumNaturalDelaySeconds,
+            MaximumNaturalDelaySeconds = settings.MaximumNaturalDelaySeconds,
+            NaturalStepCelsius = settings.NaturalStepCelsius,
+            NaturalHoldChancePercent = settings.NaturalHoldChancePercent,
+            MaxNaturalHolds = settings.MaxNaturalHolds,
+            MinimumCommandGapSeconds = settings.MinimumCommandGapSeconds,
+            NaturalSafetyOverrideCelsius = settings.NaturalSafetyOverrideCelsius,
             FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
             FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
             FanEnergySaverMode = settings.FanEnergySaverMode,
@@ -727,6 +954,14 @@ public sealed class DefenderStateStore
         public DateTimeOffset? PendingCommandAt { get; set; }
 
         public DateTimeOffset? CooldownUntil { get; set; }
+
+        public DateTimeOffset? NaturalHoldUntil { get; set; }
+
+        public int NaturalHoldCount { get; set; }
+
+        public DateTimeOffset? LastDefenderCommandAt { get; set; }
+
+        public string NaturalRecoveryStatus { get; set; } = "Comfort sync is ready.";
 
         public DefenderSettings Settings { get; set; } = new();
 
