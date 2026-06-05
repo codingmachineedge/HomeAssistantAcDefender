@@ -47,6 +47,8 @@ Repeat Quiet is evaluated after the final command setpoint is calculated and bef
 
 Sensor Rhythm is a persisted timing guard in `DefenderStateStore`. It stores real Home Assistant climate reading timestamps, learns the median reading interval, and lets `AcDefenderService` delay only safe corrections until just after that cadence. It clears before direct comfort correction.
 
+Cooling Runway is a persisted timing guard in `DefenderStateStore` that watches the real Home Assistant `hvac_action`. When the action changes into cooling, `AcDefenderService` can delay only safe follow-up corrections so the AC gets time to work before another command. It clears when cooling stops or direct comfort correction is needed.
+
 Adaptive quietness is also calculated in `DefenderStateStore`. It turns recent external thermostat touches into a quiet level and effective delay, hold chance, command gap, and nudge size. The dashboard displays those effective values so the UI matches the worker decision.
 
 Cool Mode Restore is stored in `DefenderStateStore` and evaluated by `AcDefenderService` before pause, schedule, weather, cooldown, or setpoint logic. It can delay the real `climate.set_hvac_mode` restore command while room temperature is inside the safe band, and it skips the delay when comfort safety requires cooling now.

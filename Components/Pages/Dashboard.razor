@@ -121,6 +121,9 @@
                 <MudAlert Class="mt-2" Severity="@SensorRhythmSeverity" Variant="Variant.Outlined">@SensorRhythmText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if a safe correction is waiting for a normal Home Assistant sensor beat.</MudText>
 
+                <MudAlert Class="mt-2" Severity="@CoolingRunwaySeverity" Variant="Variant.Outlined">@CoolingRunwayText</MudAlert>
+                <MudText Typo="Typo.caption" Class="helper-text">This says if cooling just started and the helper is giving the AC time to work.</MudText>
+
                 <MudAlert Class="mt-2" Severity="@RoomTrendSeverity" Variant="Variant.Outlined">@RoomTrendText</MudAlert>
                 <MudText Typo="Typo.caption" Class="helper-text">This says if the room is warming, stable, or cooling before the helper nudges.</MudText>
 
@@ -252,6 +255,8 @@
                     <MetricCard Label="Repeat pressure" Value="@RepeatCommandPressureText" Help="How strongly repeated touches and commands are slowing repeats." />
                     <MetricCard Label="Sensor rhythm" Value="@SensorRhythmWaitText" Help="Wait for a normal Home Assistant sensor beat." />
                     <MetricCard Label="Sensor beat" Value="@SensorRhythmBeatText" Help="Learned reading interval from real Home Assistant updates." />
+                    <MetricCard Label="Runway wait" Value="@CoolingRunwayWaitText" Help="Wait after cooling starts before another safe nudge." />
+                    <MetricCard Label="Runway pressure" Value="@CoolingRunwayPressureText" Help="How strongly recent touches and commands are extending the runway." />
                     <MetricCard Label="Room trend" Value="@RoomTrendDirectionText" Help="Whether the room is warming or cooling." />
                     <MetricCard Label="Trend hold" Value="@RoomTrendHoldText" Help="How long trend guard is observing." />
                     <MetricCard Label="Cooling rate" Value="@ThermalMomentumRateText" Help="How fast the room is cooling." />
@@ -422,6 +427,9 @@
     private string SensorRhythmBeatText => Snapshot?.SensorRhythm.Enabled == true && Snapshot.SensorRhythm.MedianIntervalSeconds > 0
         ? $"{Snapshot.SensorRhythm.MedianIntervalSeconds}s"
         : Snapshot?.SensorRhythm.Enabled == true ? "--" : "Off";
+    private string CoolingRunwayText => Snapshot?.CoolingRunway.Status ?? "Cooling runway is watching for a fresh cooling start.";
+    private string CoolingRunwayWaitText => Snapshot?.CoolingRunway.Holding == true ? $"{Snapshot.CoolingRunway.SecondsRemaining}s" : "Ready";
+    private string CoolingRunwayPressureText => Snapshot?.CoolingRunway.Enabled == true ? $"{Snapshot.CoolingRunway.Pressure}/100" : "Off";
     private string RoomTrendText => Snapshot?.RoomTrend.Status ?? "Room trend guard is watching.";
     private string RoomTrendDirectionText => Snapshot?.RoomTrend.Enabled == true
         ? $"{Snapshot.RoomTrend.Direction} {TrendDeltaText}"
@@ -493,6 +501,9 @@
     private Severity SensorRhythmSeverity => Snapshot?.SensorRhythm.Waiting == true
         ? Severity.Warning
         : Snapshot?.SensorRhythm.Enabled == true ? Severity.Info : Severity.Normal;
+    private Severity CoolingRunwaySeverity => Snapshot?.CoolingRunway.Holding == true
+        ? Severity.Warning
+        : Snapshot?.CoolingRunway.Enabled == true ? Severity.Info : Severity.Normal;
     private Severity RoomTrendSeverity => Snapshot?.RoomTrend.Holding == true
         ? Severity.Warning
         : Snapshot?.RoomTrend.Direction == "warming" ? Severity.Error : Severity.Info;

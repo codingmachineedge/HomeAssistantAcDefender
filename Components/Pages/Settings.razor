@@ -990,6 +990,48 @@
 
                 <MudDivider Class="my-4" />
                 <MudSwitch T="bool"
+                           Value="_coolingRunwayGuardEnabled"
+                           ValueChanged="@((bool value) => SetDirty(value, v => _coolingRunwayGuardEnabled = v))"
+                           Label="Cooling runway"
+                           Color="Color.Success" />
+                <MudText Typo="Typo.caption" Class="helper-text">Waits after cooling starts so the AC gets a chance to work before another safe nudge.</MudText>
+
+                <MudGrid Spacing="2" Class="mt-1">
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_coolingRunwayMinimumSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _coolingRunwayMinimumSeconds = value))"
+                                         Label="Runway wait seconds"
+                                         HelperText="Smallest wait after cooling starts."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="1800" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int"
+                                         Value="_coolingRunwayPressureExtraSeconds"
+                                         ValueChanged="@((int value) => SetDirty(value, v => _coolingRunwayPressureExtraSeconds = value))"
+                                         Label="Runway pressure seconds"
+                                         HelperText="Extra wait when touches or commands pile up."
+                                         Variant="Variant.Outlined"
+                                         Min="0"
+                                         Max="3600" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="double"
+                                         Value="_coolingRunwaySafetyBandCelsius"
+                                         ValueChanged="@((double value) => SetDirty(value, v => _coolingRunwaySafetyBandCelsius = value))"
+                                         Label="Runway safe band C"
+                                         HelperText="Stop waiting if the room gets this warm."
+                                         Variant="Variant.Outlined"
+                                         Min="0.1"
+                                         Max="5"
+                                         Step="0.1" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+                <MudSwitch T="bool"
                            Value="_roomTrendGuardEnabled"
                            ValueChanged="@((bool value) => SetDirty(value, v => _roomTrendGuardEnabled = v))"
                            Label="Watch room trend"
@@ -1429,6 +1471,10 @@
     private int _sensorRhythmWindowMinutes = 120;
     private int _sensorRhythmJitterSeconds = 25;
     private double _sensorRhythmSafetyBandCelsius = 1.0;
+    private bool _coolingRunwayGuardEnabled = true;
+    private int _coolingRunwayMinimumSeconds = 120;
+    private int _coolingRunwayPressureExtraSeconds = 240;
+    private double _coolingRunwaySafetyBandCelsius = 1.0;
     private bool _roomTrendGuardEnabled = true;
     private int _roomTrendWindowMinutes = 12;
     private double _roomTrendStableToleranceCelsius = 0.2;
@@ -1556,6 +1602,10 @@
         _sensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes;
         _sensorRhythmJitterSeconds = settings.SensorRhythmJitterSeconds;
         _sensorRhythmSafetyBandCelsius = settings.SensorRhythmSafetyBandCelsius;
+        _coolingRunwayGuardEnabled = settings.CoolingRunwayGuardEnabled;
+        _coolingRunwayMinimumSeconds = settings.CoolingRunwayMinimumSeconds;
+        _coolingRunwayPressureExtraSeconds = settings.CoolingRunwayPressureExtraSeconds;
+        _coolingRunwaySafetyBandCelsius = settings.CoolingRunwaySafetyBandCelsius;
         _roomTrendGuardEnabled = settings.RoomTrendGuardEnabled;
         _roomTrendWindowMinutes = settings.RoomTrendWindowMinutes;
         _roomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius;
@@ -1730,6 +1780,10 @@
             _sensorRhythmWindowMinutes,
             _sensorRhythmJitterSeconds,
             _sensorRhythmSafetyBandCelsius,
+            _coolingRunwayGuardEnabled,
+            _coolingRunwayMinimumSeconds,
+            _coolingRunwayPressureExtraSeconds,
+            _coolingRunwaySafetyBandCelsius,
             _roomTrendGuardEnabled,
             _roomTrendWindowMinutes,
             _roomTrendStableToleranceCelsius,

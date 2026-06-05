@@ -21,6 +21,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Setpoint Echo may delay only safe follow-up setpoint commands while Home Assistant has not reported back the last defender setpoint. It must clear or step aside immediately when room comfort needs direct cooling.
 - Repeat Quiet may delay only safe identical follow-up setpoint commands. It must not block a different one-degree step-down command, and it must clear or step aside immediately when room comfort needs direct cooling.
 - Sensor Rhythm may delay only safe corrections so commands land near real Home Assistant reading cadence. It must clear immediately when room comfort needs direct cooling.
+- Cooling Runway may delay only safe corrections after real Home Assistant `hvac_action` changes into cooling. It must clear immediately when cooling stops or room comfort needs direct cooling.
 - Comfort Sync / quiet recovery may delay or step real commands, but it must not create fake thermostat state or simulator-only behavior.
 - Conflict Quiet may stand down after repeated wall touches only while real room temperature remains inside the configured safety band.
 - Thermal momentum and room-trend decisions must use real Home Assistant room-temperature samples, not fake timing or simulated cooling.

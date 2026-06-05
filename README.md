@@ -217,6 +217,10 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `SensorRhythmWindowMinutes`: how long real reading timestamps remain useful.
 - `SensorRhythmJitterSeconds`: small extra wait after the learned beat.
 - `SensorRhythmSafetyBandCelsius`: extra room warmth allowed before Sensor Rhythm stops waiting.
+- `CoolingRunwayGuardEnabled`: waits after Home Assistant reports a fresh cooling start before another safe nudge.
+- `CoolingRunwayMinimumSeconds`: smallest wait after cooling starts.
+- `CoolingRunwayPressureExtraSeconds`: extra wait added as recent wall touches and helper commands rise.
+- `CoolingRunwaySafetyBandCelsius`: extra room warmth allowed before Cooling Runway stops waiting.
 - `RoomTrendGuardEnabled`: lets the defender observe real room temperature trend before nudging.
 - `RoomTrendWindowMinutes`: how far back real room-temperature samples are compared.
 - `RoomTrendStableToleranceCelsius`: small temperature changes counted as stable.
@@ -261,6 +265,8 @@ Setpoint Echo reuses the real pending setpoint that the defender already tracks 
 Repeat Quiet watches the actual setpoint that is about to be sent. If the next safe command would repeat the same number as the last defender command, it waits longer based on recent wall-touch pressure and recent helper command pressure. Different one-degree step-down commands are allowed through, and if the room gets too warm, Repeat Quiet steps aside.
 
 Sensor Rhythm watches real Home Assistant reading timestamps and learns the normal interval between poll updates. When a correction is safe, it can wait until just after the learned sensor beat plus a small wiggle, making the next command look less mechanically immediate. If the room gets too warm or upstairs heat needs direct cooling, Sensor Rhythm clears and the real correction path continues.
+
+Cooling Runway watches the real Home Assistant `hvac_action`. When it changes into cooling, the defender can wait before another safe nudge so it looks like the AC is being given time to work. The wait grows with recent wall-touch and helper-command pressure. If cooling stops or the room gets too warm, Cooling Runway clears immediately.
 
 Room Trend Guard uses real Home Assistant room-temperature readings. It compares the oldest and newest room samples inside the configured trend window. If the room is stable or cooling after a wall change, it can keep observing before sending a nudge. If the room is warming, above the grace band, or beyond the safety override, it lets the real correction continue.
 

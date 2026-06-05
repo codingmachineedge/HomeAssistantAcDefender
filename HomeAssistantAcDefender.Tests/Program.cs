@@ -13,6 +13,7 @@ tests.ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom();
 tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
+tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -275,6 +276,75 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.RepeatCommand.Holding)
         {
             throw new InvalidOperationException("Repeat Quiet should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void CoolingRunwayWaitsOnlyAfterSafeCoolingStarts()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        var idleReading = new ThermostatReading(
+            "climate.dining_room",
+            22.5,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(idleReading);
+
+        var coolingReading = idleReading with { HvacAction = "cooling" };
+        store.RecordHomeAssistantReading(coolingReading);
+        var now = DateTimeOffset.UtcNow;
+        var waited = store.TryRespectCoolingRunway(
+            coolingReading,
+            22.0,
+            bypassForComfort: false,
+            now,
+            out var waitUntil,
+            out _);
+
+        if (!waited || waitUntil <= now)
+        {
+            throw new InvalidOperationException("Cooling Runway should wait after a fresh safe cooling start.");
+        }
+
+        var idleAgain = coolingReading with { HvacAction = "idle" };
+        var notCooling = store.TryRespectCoolingRunway(
+            idleAgain,
+            22.0,
+            bypassForComfort: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (notCooling)
+        {
+            throw new InvalidOperationException("Cooling Runway must not hold when Home Assistant is not cooling.");
+        }
+
+        store.RecordHomeAssistantReading(idleReading);
+        store.RecordHomeAssistantReading(coolingReading);
+        var hotReading = coolingReading with { CurrentTemperatureCelsius = 24.2 };
+        var bypassed = store.TryRespectCoolingRunway(
+            hotReading,
+            22.0,
+            bypassForComfort: false,
+            now.AddSeconds(2),
+            out _,
+            out _);
+
+        if (bypassed)
+        {
+            throw new InvalidOperationException("Cooling Runway must step aside when direct cooling is needed.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (snapshot.CoolingRunway.Holding)
+        {
+            throw new InvalidOperationException("Cooling Runway should not keep holding after a comfort bypass.");
         }
     }
 

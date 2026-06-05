@@ -31,6 +31,7 @@ public sealed record DefenderSnapshot(
     SetpointEchoSnapshot SetpointEcho,
     RepeatCommandSnapshot RepeatCommand,
     SensorRhythmSnapshot SensorRhythm,
+    CoolingRunwaySnapshot CoolingRunway,
     RoomTrendSnapshot RoomTrend,
     ThermalMomentumSnapshot ThermalMomentum,
     ComfortSnapshot Comfort,
@@ -225,6 +226,15 @@ public sealed record SensorRhythmSnapshot(
     int MedianIntervalSeconds,
     string Status,
     DateTimeOffset? DueAt);
+
+public sealed record CoolingRunwaySnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    int Pressure,
+    DateTimeOffset? StartedAt,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record RoomTrendSnapshot(
     bool Enabled,
@@ -450,6 +460,14 @@ public sealed class DefenderSettings
     public int SensorRhythmJitterSeconds { get; set; } = 25;
 
     public double SensorRhythmSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool CoolingRunwayGuardEnabled { get; set; } = true;
+
+    public int CoolingRunwayMinimumSeconds { get; set; } = 120;
+
+    public int CoolingRunwayPressureExtraSeconds { get; set; } = 240;
+
+    public double CoolingRunwaySafetyBandCelsius { get; set; } = 1.0;
 
     public bool RoomTrendGuardEnabled { get; set; } = true;
 

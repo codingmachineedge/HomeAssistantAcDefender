@@ -100,6 +100,10 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Rhythm window minutes: how long reading timestamps stay useful.
 - Rhythm wiggle seconds: tiny extra wait after the learned sensor beat.
 - Rhythm safe band C: extra warmth allowed before sensor rhythm stops waiting.
+- Cooling runway: waits after Home Assistant reports that cooling started.
+- Runway wait seconds: smallest wait after cooling starts.
+- Runway pressure seconds: extra wait added when wall touches or helper commands pile up.
+- Runway safe band C: extra warmth allowed before cooling runway stops waiting.
 - Watch room trend: waits if real room readings are stable or cooling after a wall change.
 - Trend window minutes: how far back the defender compares room temperature.
 - Stable change C: small room temperature movement counted as steady.

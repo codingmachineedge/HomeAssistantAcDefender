@@ -203,6 +203,10 @@ public sealed class DefenderStateStore
             state.Settings.SensorRhythmWindowMinutes = Math.Clamp(request.SensorRhythmWindowMinutes, 5, 1440);
             state.Settings.SensorRhythmJitterSeconds = Math.Clamp(request.SensorRhythmJitterSeconds, 0, 300);
             state.Settings.SensorRhythmSafetyBandCelsius = Math.Round(Math.Clamp(request.SensorRhythmSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.CoolingRunwayGuardEnabled = request.CoolingRunwayGuardEnabled;
+            state.Settings.CoolingRunwayMinimumSeconds = Math.Clamp(request.CoolingRunwayMinimumSeconds, 0, 1800);
+            state.Settings.CoolingRunwayPressureExtraSeconds = Math.Clamp(request.CoolingRunwayPressureExtraSeconds, 0, 3600);
+            state.Settings.CoolingRunwaySafetyBandCelsius = Math.Round(Math.Clamp(request.CoolingRunwaySafetyBandCelsius, 0.1, 5.0), 1);
             state.Settings.RoomTrendGuardEnabled = request.RoomTrendGuardEnabled;
             state.Settings.RoomTrendWindowMinutes = Math.Clamp(request.RoomTrendWindowMinutes, 2, 240);
             state.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(request.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
@@ -288,6 +292,7 @@ public sealed class DefenderStateStore
         lock (gate)
         {
             var now = DateTimeOffset.UtcNow;
+            var previousHvacAction = state.HomeAssistantThermostat?.HvacAction;
             DetectExternalSetPointChange(reading, now);
             RecordRoomTemperatureSample(reading, now);
             RecordHomeAssistantReadingTime(now);
@@ -304,6 +309,7 @@ public sealed class DefenderStateStore
                 AvailableFanModes = reading.AvailableFanModes.ToList(),
                 UpdatedAt = now
             };
+            TrackCoolingRunway(reading, previousHvacAction, now);
             state.LastObservedSetPointCelsius = reading.SetPointCelsius;
             if (string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
             {
@@ -837,6 +843,96 @@ public sealed class DefenderStateStore
             state.SensorRhythmStatus = message;
             SaveState();
             return waitUntil > now;
+        }
+    }
+
+    public bool TryRespectCoolingRunway(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.CoolingRunwayGuardEnabled)
+            {
+                ClearCoolingRunway("Cooling runway is off.");
+                SaveState();
+                return false;
+            }
+
+            if (!IsCoolingAction(reading.HvacAction))
+            {
+                state.CoolingRunwayStartedAt = null;
+                ClearCoolingRunway("Cooling runway is watching for a fresh cooling start.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearCoolingRunway("Cooling runway is lined up; no extra nudge is needed.");
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearCoolingRunway("Room comfort needs help now, so cooling runway is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.CoolingRunwaySafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearCoolingRunway($"Room is above {allowedRoomTemperature:0.0} C, so cooling runway is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            if (state.CoolingRunwayStartedAt is not { } startedAt)
+            {
+                startedAt = now;
+                state.CoolingRunwayStartedAt = startedAt;
+            }
+
+            if (state.CoolingRunwayHoldUntil is { } holdUntil)
+            {
+                if (holdUntil > now)
+                {
+                    waitUntil = holdUntil;
+                    var pressure = CalculateCoolingRunwayPressure(now);
+                    message = $"Cooling runway is letting the AC work until {holdUntil.ToLocalTime():HH:mm:ss} before another safe nudge from pressure {pressure}/100.";
+                    state.CoolingRunwayStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearCoolingRunway("Cooling runway finished; safe correction can continue if still needed.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = CalculateCoolingRunwayUntil(startedAt, now);
+            if (waitUntil <= now)
+            {
+                ClearCoolingRunway("Cooling runway already had enough time; no hold needed.");
+                SaveState();
+                return false;
+            }
+
+            state.CoolingRunwayHoldUntil = waitUntil;
+            var runwayPressure = CalculateCoolingRunwayPressure(now);
+            message = $"Cooling runway is letting the AC work until {waitUntil.ToLocalTime():HH:mm:ss} before another safe nudge from pressure {runwayPressure}/100.";
+            state.CoolingRunwayStatus = message;
+            SaveState();
+            return true;
         }
     }
 
@@ -1600,6 +1696,7 @@ public sealed class DefenderStateStore
                 && state.RepeatCommandHoldUntil is null
                 && state.VisibilityGuardUntil is null
                 && state.SensorRhythmDueAt is null
+                && state.CoolingRunwayHoldUntil is null
                 && state.ConflictQuietUntil is null
                 && state.RoomTrendHoldUntil is null
                 && state.ThermalMomentumHoldUntil is null)
@@ -1646,6 +1743,9 @@ public sealed class DefenderStateStore
             ClearSensorRhythm(state.Settings.SensorRhythmGuardEnabled
                 ? "Sensor rhythm is lined up; no beat wait needed."
                 : "Sensor rhythm is off.");
+            ClearCoolingRunway(state.Settings.CoolingRunwayGuardEnabled
+                ? "Cooling runway is lined up; no fresh cooling hold needed."
+                : "Cooling runway is off.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
         }
@@ -1670,6 +1770,7 @@ public sealed class DefenderStateStore
                     ResetCoolingDefenderStep();
                     ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
                     ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
+                    ClearCoolingRunway($"Schedule {activeSchedule.Name} changed the target, so cooling runway reset.");
                     ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
                     AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C.");
                 }
@@ -1711,6 +1812,7 @@ public sealed class DefenderStateStore
                 state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
                 ClearNaturalCadence("Upstairs comfort changed the target, so natural cadence reset.");
                 ClearRepeatCommand("Upstairs comfort changed the target, so repeat quiet reset.");
+                ClearCoolingRunway("Upstairs comfort changed the target, so cooling runway reset.");
                 ClearComfortCompromise("Upstairs comfort changed the target, so comfort compromise reset.");
                 AddEvent("warning", $"Upstairs comfort guard lowered target to {state.TargetTemperatureCelsius:0.0} C.");
             }
@@ -2240,6 +2342,38 @@ public sealed class DefenderStateStore
         PruneHomeAssistantReadingTimes(now);
     }
 
+    private void TrackCoolingRunway(ThermostatReading reading, string? previousHvacAction, DateTimeOffset now)
+    {
+        if (!state.Settings.CoolingRunwayGuardEnabled)
+        {
+            ClearCoolingRunway("Cooling runway is off.");
+            state.CoolingRunwayStartedAt = null;
+            return;
+        }
+
+        if (!IsCoolingAction(reading.HvacAction))
+        {
+            state.CoolingRunwayStartedAt = null;
+            ClearCoolingRunway("Cooling runway is watching for a fresh cooling start.");
+            return;
+        }
+
+        if (!IsCoolingAction(previousHvacAction))
+        {
+            state.CoolingRunwayStartedAt = now;
+            state.CoolingRunwayHoldUntil = null;
+            state.CoolingRunwayStatus = "Cooling just started; runway can let it work before another safe nudge.";
+            return;
+        }
+
+        state.CoolingRunwayStartedAt ??= now;
+    }
+
+    private static bool IsCoolingAction(string? hvacAction)
+    {
+        return (hvacAction ?? string.Empty).Trim().ToLowerInvariant() is "cooling" or "cool";
+    }
+
     private SensorRhythmAnalysis BuildSensorRhythmAnalysis(DateTimeOffset now)
     {
         PruneHomeAssistantReadingTimes(now);
@@ -2447,6 +2581,26 @@ public sealed class DefenderStateStore
         var pressure = CalculateRepeatCommandPressure(now) / 100.0;
         var extraSeconds = (int)Math.Round(Math.Clamp(state.Settings.RepeatCommandPressureExtraSeconds, 0, 3600) * pressure);
         return lastCommandAt.AddSeconds(baseSeconds + extraSeconds);
+    }
+
+    private DateTimeOffset CalculateCoolingRunwayUntil(DateTimeOffset startedAt, DateTimeOffset now)
+    {
+        var baseSeconds = Math.Clamp(state.Settings.CoolingRunwayMinimumSeconds, 0, 1800);
+        var pressure = CalculateCoolingRunwayPressure(now) / 100.0;
+        var extraSeconds = (int)Math.Round(Math.Clamp(state.Settings.CoolingRunwayPressureExtraSeconds, 0, 3600) * pressure);
+        return startedAt.AddSeconds(baseSeconds + extraSeconds);
+    }
+
+    private int CalculateCoolingRunwayPressure(DateTimeOffset now)
+    {
+        PruneTouchTimes(now);
+        PruneDefenderCommandTimes(now);
+        var touchPressure = CalculateTouchSuspicionScore(now) / 100.0;
+        var commandPressure = Math.Clamp(
+            state.DefenderCommandTimes.Count / Math.Max(1.0, state.Settings.ComfortBudgetMaxCommands),
+            0.0,
+            1.0);
+        return (int)Math.Round(Math.Clamp(Math.Max(touchPressure, commandPressure), 0.0, 1.0) * 100);
     }
 
     private int CalculateRepeatCommandPressure(DateTimeOffset now)
@@ -2883,6 +3037,9 @@ public sealed class DefenderStateStore
         saved.Settings.SensorRhythmWindowMinutes = Math.Clamp(saved.Settings.SensorRhythmWindowMinutes, 5, 1440);
         saved.Settings.SensorRhythmJitterSeconds = Math.Clamp(saved.Settings.SensorRhythmJitterSeconds, 0, 300);
         saved.Settings.SensorRhythmSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.SensorRhythmSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.CoolingRunwayMinimumSeconds = Math.Clamp(saved.Settings.CoolingRunwayMinimumSeconds, 0, 1800);
+        saved.Settings.CoolingRunwayPressureExtraSeconds = Math.Clamp(saved.Settings.CoolingRunwayPressureExtraSeconds, 0, 3600);
+        saved.Settings.CoolingRunwaySafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.CoolingRunwaySafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.RoomTrendWindowMinutes = Math.Clamp(saved.Settings.RoomTrendWindowMinutes, 2, 240);
         saved.Settings.RoomTrendStableToleranceCelsius = Math.Round(Math.Clamp(saved.Settings.RoomTrendStableToleranceCelsius, 0.05, 2.0), 2);
         saved.Settings.RoomTrendHoldMinutes = Math.Clamp(saved.Settings.RoomTrendHoldMinutes, 1, 120);
@@ -2972,6 +3129,14 @@ public sealed class DefenderStateStore
         {
             saved.SensorRhythmDueAt = null;
         }
+        saved.CoolingRunwayStatus = string.IsNullOrWhiteSpace(saved.CoolingRunwayStatus)
+            ? "Cooling runway is watching for a fresh cooling start."
+            : saved.CoolingRunwayStatus;
+        if (saved.CoolingRunwayHoldUntil is { } runwayUntil && runwayUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.CoolingRunwayHoldUntil = null;
+            saved.CoolingRunwayStatus = "Cooling runway is watching for a fresh cooling start.";
+        }
         saved.RoomTrendStatus = string.IsNullOrWhiteSpace(saved.RoomTrendStatus)
             ? "Room trend guard is watching."
             : saved.RoomTrendStatus;
@@ -3017,6 +3182,9 @@ public sealed class DefenderStateStore
         var sensorRhythmSeconds = state.SensorRhythmDueAt is { } sensorRhythmDueAt && sensorRhythmDueAt > now
             ? (int)Math.Ceiling((sensorRhythmDueAt - now).TotalSeconds)
             : 0;
+        var coolingRunwaySeconds = state.CoolingRunwayHoldUntil is { } runwayUntil && runwayUntil > now
+            ? (int)Math.Ceiling((runwayUntil - now).TotalSeconds)
+            : 0;
         var setpointEchoUntil = state.PendingCommandAt?.AddSeconds(Math.Max(5, state.Settings.SetpointEchoGraceSeconds));
         var setpointEchoSeconds = setpointEchoUntil is { } echoUntil
             && echoUntil > now
@@ -3044,6 +3212,7 @@ public sealed class DefenderStateStore
         var naturalPlan = BuildNaturalRecoveryPlan(now);
         var naturalWalkbackScore = CalculateTouchSuspicionScore(now);
         var repeatCommandPressure = CalculateRepeatCommandPressure(now);
+        var coolingRunwayPressure = CalculateCoolingRunwayPressure(now);
         var naturalWalkbackStep = Math.Min(
             naturalPlan.StepCelsius,
             Math.Round(Math.Max(0.1, state.Settings.NaturalWalkbackStepCelsius), 1));
@@ -3241,6 +3410,16 @@ public sealed class DefenderStateStore
                     ? "Sensor rhythm is watching."
                     : state.SensorRhythmStatus,
                 sensorRhythmSeconds > 0 ? state.SensorRhythmDueAt : null),
+            new CoolingRunwaySnapshot(
+                state.Settings.CoolingRunwayGuardEnabled,
+                coolingRunwaySeconds > 0,
+                coolingRunwaySeconds,
+                coolingRunwayPressure,
+                state.CoolingRunwayStartedAt,
+                string.IsNullOrWhiteSpace(state.CoolingRunwayStatus)
+                    ? "Cooling runway is watching for a fresh cooling start."
+                    : state.CoolingRunwayStatus,
+                coolingRunwaySeconds > 0 ? state.CoolingRunwayHoldUntil : null),
             new RoomTrendSnapshot(
                 state.Settings.RoomTrendGuardEnabled,
                 roomTrendSeconds > 0,
@@ -3307,6 +3486,7 @@ public sealed class DefenderStateStore
         ClearComfortBudget("Comfort budget is watching.");
         ClearNaturalCadence("Natural cadence is watching.");
         ClearRepeatCommand("Repeat quiet is watching.");
+        ClearCoolingRunway("Cooling runway is watching.");
         ClearSensorRhythm("Sensor rhythm is watching.");
         ClearComfortCompromise("Comfort compromise reset after website target change.");
         state.ComfortMemoryEffectiveTargetCelsius = null;
@@ -3354,6 +3534,12 @@ public sealed class DefenderStateStore
     {
         state.RepeatCommandHoldUntil = null;
         state.RepeatCommandStatus = status;
+    }
+
+    private void ClearCoolingRunway(string status)
+    {
+        state.CoolingRunwayHoldUntil = null;
+        state.CoolingRunwayStatus = status;
     }
 
     private void ClearVisibilityGuard(string status)
@@ -3575,6 +3761,10 @@ public sealed class DefenderStateStore
             SensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes,
             SensorRhythmJitterSeconds = settings.SensorRhythmJitterSeconds,
             SensorRhythmSafetyBandCelsius = settings.SensorRhythmSafetyBandCelsius,
+            CoolingRunwayGuardEnabled = settings.CoolingRunwayGuardEnabled,
+            CoolingRunwayMinimumSeconds = settings.CoolingRunwayMinimumSeconds,
+            CoolingRunwayPressureExtraSeconds = settings.CoolingRunwayPressureExtraSeconds,
+            CoolingRunwaySafetyBandCelsius = settings.CoolingRunwaySafetyBandCelsius,
             RoomTrendGuardEnabled = settings.RoomTrendGuardEnabled,
             RoomTrendWindowMinutes = settings.RoomTrendWindowMinutes,
             RoomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius,
@@ -3758,6 +3948,12 @@ public sealed class DefenderStateStore
         public string SensorRhythmStatus { get; set; } = "Sensor rhythm is watching.";
 
         public List<DateTimeOffset> HomeAssistantReadingTimes { get; set; } = [];
+
+        public DateTimeOffset? CoolingRunwayStartedAt { get; set; }
+
+        public DateTimeOffset? CoolingRunwayHoldUntil { get; set; }
+
+        public string CoolingRunwayStatus { get; set; } = "Cooling runway is watching for a fresh cooling start.";
 
         public DateTimeOffset? RoomTrendHoldUntil { get; set; }
 

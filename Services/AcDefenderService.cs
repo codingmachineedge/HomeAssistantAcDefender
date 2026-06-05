@@ -129,6 +129,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectCoolingRunway(reading, expectedSetPoint, comfort.BypassCooldown, now, out var runwayUntil, out var runwayMessage))
+                {
+                    stateStore.SetNextAction(runwayMessage, runwayUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectSensorRhythm(reading, expectedSetPoint, comfort.BypassCooldown, now, out var rhythmUntil, out var rhythmMessage))
                 {
                     stateStore.SetNextAction(rhythmMessage, rhythmUntil);
