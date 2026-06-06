@@ -354,6 +354,17 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("hvac alibi action transition idle cooling natural")) {
+                <MudExpansionPanel Text="HVAC alibi" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="HVAC alibi" Value="_hvacActionAlibiEnabled" ValueChanged="@(v => SetDirty(v, x => _hvacActionAlibiEnabled = x))" Help="Wait for a real HVAC action change before a safe correction." />
+                        <SettingInt Label="Alibi touches" Value="_hvacActionAlibiTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _hvacActionAlibiTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Transition window" Unit="s" Value="_hvacActionAlibiTransitionWindowSeconds" ValueChanged="@(v => SetDirty(v, x => _hvacActionAlibiTransitionWindowSeconds = x))" Min="5" Max="1800" />
+                        <SettingInt Label="Max hold" Unit="min" Value="_hvacActionAlibiMaxHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _hvacActionAlibiMaxHoldMinutes = x))" Min="1" Max="240" />
+                        <SettingDouble Label="Safe band" Value="_hvacActionAlibiSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _hvacActionAlibiSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("cooling runway hvac action")) {
                 <MudExpansionPanel Text="Cooling runway" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -689,6 +700,11 @@
     private int _sensorRhythmWindowMinutes = 120;
     private int _sensorRhythmJitterSeconds = 25;
     private double _sensorRhythmSafetyBandCelsius = 1.0;
+    private bool _hvacActionAlibiEnabled = true;
+    private int _hvacActionAlibiTriggerTouches = 2;
+    private int _hvacActionAlibiTransitionWindowSeconds = 90;
+    private int _hvacActionAlibiMaxHoldMinutes = 12;
+    private double _hvacActionAlibiSafetyBandCelsius = 1.0;
     private bool _coolingRunwayGuardEnabled = true;
     private int _coolingRunwayMinimumSeconds = 120;
     private int _coolingRunwayPressureExtraSeconds = 240;
@@ -902,6 +918,11 @@
         _sensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes;
         _sensorRhythmJitterSeconds = settings.SensorRhythmJitterSeconds;
         _sensorRhythmSafetyBandCelsius = settings.SensorRhythmSafetyBandCelsius;
+        _hvacActionAlibiEnabled = settings.HvacActionAlibiEnabled;
+        _hvacActionAlibiTriggerTouches = settings.HvacActionAlibiTriggerTouches;
+        _hvacActionAlibiTransitionWindowSeconds = settings.HvacActionAlibiTransitionWindowSeconds;
+        _hvacActionAlibiMaxHoldMinutes = settings.HvacActionAlibiMaxHoldMinutes;
+        _hvacActionAlibiSafetyBandCelsius = settings.HvacActionAlibiSafetyBandCelsius;
         _coolingRunwayGuardEnabled = settings.CoolingRunwayGuardEnabled;
         _coolingRunwayMinimumSeconds = settings.CoolingRunwayMinimumSeconds;
         _coolingRunwayPressureExtraSeconds = settings.CoolingRunwayPressureExtraSeconds;
@@ -1152,6 +1173,11 @@
             _sensorRhythmWindowMinutes,
             _sensorRhythmJitterSeconds,
             _sensorRhythmSafetyBandCelsius,
+            _hvacActionAlibiEnabled,
+            _hvacActionAlibiTriggerTouches,
+            _hvacActionAlibiTransitionWindowSeconds,
+            _hvacActionAlibiMaxHoldMinutes,
+            _hvacActionAlibiSafetyBandCelsius,
             _coolingRunwayGuardEnabled,
             _coolingRunwayMinimumSeconds,
             _coolingRunwayPressureExtraSeconds,

@@ -27,7 +27,7 @@ sequence. The first guard that wants to wait stops the cycle and reports its nex
 12. **Alectra Peak Power Saver** makes safe cooling more chill during On-peak, high-price, or high-power usage.
 13. **Fan Energy Saver** moves the fan to a saver mode when near target.
 14. Compute the **expected setpoint**: 1 C below room when the room is warm.
-15. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver -> Comfort Envelope -> Room Trend -> Thermal Momentum -> Weather Drift -> Setpoint Echo -> Cooling Runway -> Sensor Rhythm -> Comfort Sync -> Comfort Pace -> Routine Timing -> Comfort Budget -> Command Camouflage -> Stealth Governor -> Visibility Guard -> Natural Cadence**.
+15. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver -> Comfort Envelope -> Room Trend -> Thermal Momentum -> Weather Drift -> Setpoint Echo -> Cooling Runway -> Sensor Rhythm -> HVAC Alibi -> Comfort Sync -> Comfort Pace -> Routine Timing -> Comfort Budget -> Command Camouflage -> Stealth Governor -> Visibility Guard -> Natural Cadence**.
 16. Shape the command size with **Natural Walkback**, **Touch Signature**, and **Human Nudge**, then **Repeat Quiet**.
 17. Send the corrected setpoint to Home Assistant.
 18. **Cooling Failure Watch** runs alongside and raises a mega-alert if cooling is demanded but not real.
@@ -209,6 +209,12 @@ Waits before sending the very same thermostat number again.
 Times nudges to just after the normal Home Assistant reading beat so they look less mechanical.
 - **Logic:** with at least the minimum samples in the rhythm window, it learns the median update interval and waits until just after the next beat plus a small jitter.
 - **Settings:** `SensorRhythmGuardEnabled`, `SensorRhythmMinimumSamples`, `SensorRhythmWindowMinutes`, `SensorRhythmJitterSeconds`, `SensorRhythmSafetyBandCelsius`.
+
+### HVAC Alibi
+Waits for a real HVAC action transition so a safe correction lands near a normal thermostat event.
+- **Watches:** the current Home Assistant `hvac_action`, the last action transition, recent wall touches, and room temperature.
+- **Logic:** after repeated wall touches, while the room is inside the safety band, it can hold a safe correction until `hvac_action` changes. A recent action transition can also clear the hold. Direct comfort needs, upstairs heat, or a too-warm room bypass it immediately.
+- **Settings:** `HvacActionAlibiEnabled`, `HvacActionAlibiTriggerTouches`, `HvacActionAlibiTransitionWindowSeconds`, `HvacActionAlibiMaxHoldMinutes`, `HvacActionAlibiSafetyBandCelsius`.
 
 ### Cooling Runway
 Gives the AC time to work after cooling starts before nudging the setpoint again.

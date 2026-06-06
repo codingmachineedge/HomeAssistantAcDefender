@@ -433,6 +433,25 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "HVAC Alibi", GuardCategory.Sensor,
+            "Waits for a real HVAC action transition so a safe correction lands near a normal thermostat event.",
+            "The current Home Assistant hvac_action, the last action transition, recent wall touches, and room temperature.",
+            "After repeated wall touches, while the room is still inside the safety band, it can hold a safe correction until hvac_action changes (for example idle to cooling or cooling to idle). A recent transition can also clear the hold. Direct comfort needs, upstairs heat, or a too-warm room bypass the wait immediately.",
+            "Delays only safe corrections until a real HVAC action transition or the max hold expires.",
+            ["HvacActionAlibiEnabled", "HvacActionAlibiTriggerTouches", "HvacActionAlibiTransitionWindowSeconds", "HvacActionAlibiMaxHoldMinutes", "HvacActionAlibiSafetyBandCelsius"],
+            s =>
+            {
+                var a = s.HvacActionAlibi;
+                return GuardLiveView.Standard(a.Enabled, a.Waiting, "Waiting", a.Status,
+                [
+                    new("Alibi wait", OffWait(a.Enabled, a.Waiting, a.SecondsRemaining), "Time left waiting for a real hvac_action transition."),
+                    new("Action", a.Enabled ? a.CurrentAction : "Off", "Current Home Assistant hvac_action."),
+                    new("Touches", a.Enabled ? a.RecentTouchCount.ToString() : "Off", "Recent external thermostat changes."),
+                    new("Last transition", a.LastTransitionAt is { } at ? at.ToLocalTime().ToString("HH:mm:ss") : a.Enabled ? "--" : "Off", "Most recent real action transition time."),
+                ], busyTone: GuardTone.Holding);
+            }),
+
+        new GuardInfo(
             "Cooling Runway", GuardCategory.Sensor,
             "Gives the AC time to work after cooling starts before nudging the setpoint again.",
             "The Home Assistant hvac_action and how long ago cooling started, plus command pressure.",

@@ -20,6 +20,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Room Trend Guard so the defender keeps observing when the room is stable or cooling after a wall change, and resumes when it starts warming.
 - Adds Thermal Momentum so the defender can wait when the room is already cooling fast enough to reach target soon.
 - Adds Weather Drift Timing so safe corrections can wait for real outdoor weather movement instead of happening immediately.
+- Adds HVAC Alibi so safe corrections can wait for a real Home Assistant `hvac_action` transition before they land.
 - Adds Alectra Peak Power Saver so safe cooling corrections get more chill during On-peak, high-price, or high-power periods.
 - Adds a Front-door Guard Post kill switch that pauses the defender and can turn the thermostat off when a real front-door person detector trips.
 - Adds Natural Walkback so safe-band recovery moves get smaller and less predictable after repeated wall thermostat touches.
@@ -118,19 +119,20 @@ Every cycle:
 20. Respect Command Camouflage when a recent helper command needs a believable gap before another safe correction.
 21. Respect Stealth Governor when the overall activity pressure score is high.
 22. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-23. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
-24. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
-25. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-26. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-27. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-28. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
-29. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
-30. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-31. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
-32. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
-33. Optionally set fan saver mode when near target.
-34. Correct the thermostat setpoint when it does not match the defender decision.
-35. Update the real-time dashboard status.
+23. Respect HVAC Alibi when repeated safe wall changes can wait for a real `hvac_action` transition.
+24. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
+25. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
+26. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+27. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+28. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+29. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
+30. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
+31. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+32. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
+33. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
+34. Optionally set fan saver mode when near target.
+35. Correct the thermostat setpoint when it does not match the defender decision.
+36. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -290,6 +292,11 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `SensorRhythmWindowMinutes`: how long real reading timestamps remain useful.
 - `SensorRhythmJitterSeconds`: small extra wait after the learned beat.
 - `SensorRhythmSafetyBandCelsius`: extra room warmth allowed before Sensor Rhythm stops waiting.
+- `HvacActionAlibiEnabled`: waits for a real Home Assistant `hvac_action` transition before safe corrections.
+- `HvacActionAlibiTriggerTouches`: recent external thermostat touches needed before HVAC Alibi can wait.
+- `HvacActionAlibiTransitionWindowSeconds`: how recently a real action transition can clear the alibi wait.
+- `HvacActionAlibiMaxHoldMinutes`: longest safe wait for a real action transition.
+- `HvacActionAlibiSafetyBandCelsius`: extra room warmth allowed before HVAC Alibi stops waiting.
 - `CoolingRunwayGuardEnabled`: waits after Home Assistant reports a fresh cooling start before another safe nudge.
 - `CoolingRunwayMinimumSeconds`: smallest wait after cooling starts.
 - `CoolingRunwayPressureExtraSeconds`: extra wait added as recent wall touches and helper commands rise.
@@ -376,6 +383,8 @@ Setpoint Echo reuses the real pending setpoint that the defender already tracks 
 Repeat Quiet watches the actual setpoint that is about to be sent. If the next safe command would repeat the same number as the last defender command, it waits longer based on recent wall-touch pressure and recent helper command pressure. Different one-degree step-down commands are allowed through, and if the room gets too warm, Repeat Quiet steps aside.
 
 Sensor Rhythm watches real Home Assistant reading timestamps and learns the normal interval between poll updates. When a correction is safe, it can wait until just after the learned sensor beat plus a small wiggle, making the next command look less mechanically immediate. If the room gets too warm or upstairs heat needs direct cooling, Sensor Rhythm clears and the real correction path continues.
+
+HVAC Alibi watches real Home Assistant `hvac_action` transitions. After repeated wall touches, if the room is still inside the safe band, it can hold a safe correction until `hvac_action` changes, such as idle to cooling or cooling to idle. A recent real transition also clears the hold, and direct comfort needs bypass it immediately.
 
 Cooling Runway watches the real Home Assistant `hvac_action`. When it changes into cooling, the defender can wait before another safe nudge so it looks like the AC is being given time to work. The wait grows with recent wall-touch and helper-command pressure. If cooling stops or the room gets too warm, Cooling Runway clears immediately.
 

@@ -26,6 +26,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Setpoint Echo may delay only safe follow-up setpoint commands while Home Assistant has not reported back the last defender setpoint. It must clear or step aside immediately when room comfort needs direct cooling.
 - Repeat Quiet may delay only safe identical follow-up setpoint commands. It must not block a different one-degree step-down command, and it must clear or step aside immediately when room comfort needs direct cooling.
 - Sensor Rhythm may delay only safe corrections so commands land near real Home Assistant reading cadence. It must clear immediately when room comfort needs direct cooling.
+- HVAC Alibi may delay only safe corrections using real Home Assistant `hvac_action` transitions. It must clear on direct comfort needs and must never create fake thermostat action state.
 - Cooling Runway may delay only safe corrections after real Home Assistant `hvac_action` changes into cooling. It must clear immediately when cooling stops or room comfort needs direct cooling.
 - Weather Drift Timing may delay only safe post-touch corrections using real Home Assistant outdoor weather samples. It must clear when outdoor warming provides a natural slot, the hold expires, or direct cooling is needed.
 - Alectra Peak Power Saver may delay only safe cooling commands using real Alectra Hui Home Assistant usage sensors. It must step aside when room/upstairs comfort needs cooling or when a command would save energy by raising the setpoint.

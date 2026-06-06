@@ -125,6 +125,11 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Rhythm window minutes: how long reading timestamps stay useful.
 - Rhythm wiggle seconds: tiny extra wait after the learned sensor beat.
 - Rhythm safe band C: extra warmth allowed before sensor rhythm stops waiting.
+- HVAC alibi: waits for a real Home Assistant `hvac_action` transition before a safe correction.
+- Alibi touches: external thermostat touches needed before HVAC alibi can wait.
+- Transition window seconds: how recently a real action change can count as the alibi.
+- Max alibi minutes: longest safe wait for a real action change.
+- Alibi safe band C: extra warmth allowed before HVAC alibi stops waiting.
 - Cooling runway: waits after Home Assistant reports that cooling started.
 - Runway wait seconds: smallest wait after cooling starts.
 - Runway pressure seconds: extra wait added when wall touches or helper commands pile up.

@@ -41,6 +41,7 @@ public sealed record DefenderSnapshot(
     SetpointEchoSnapshot SetpointEcho,
     RepeatCommandSnapshot RepeatCommand,
     SensorRhythmSnapshot SensorRhythm,
+    HvacActionAlibiSnapshot HvacActionAlibi,
     CoolingRunwaySnapshot CoolingRunway,
     RoomTrendSnapshot RoomTrend,
     ThermalMomentumSnapshot ThermalMomentum,
@@ -356,6 +357,16 @@ public sealed record SensorRhythmSnapshot(
     int MedianIntervalSeconds,
     string Status,
     DateTimeOffset? DueAt);
+
+public sealed record HvacActionAlibiSnapshot(
+    bool Enabled,
+    bool Waiting,
+    int SecondsRemaining,
+    int RecentTouchCount,
+    string CurrentAction,
+    DateTimeOffset? LastTransitionAt,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record CoolingRunwaySnapshot(
     bool Enabled,
@@ -721,6 +732,16 @@ public sealed class DefenderSettings
     public int SensorRhythmJitterSeconds { get; set; } = 25;
 
     public double SensorRhythmSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool HvacActionAlibiEnabled { get; set; } = true;
+
+    public int HvacActionAlibiTriggerTouches { get; set; } = 2;
+
+    public int HvacActionAlibiTransitionWindowSeconds { get; set; } = 90;
+
+    public int HvacActionAlibiMaxHoldMinutes { get; set; } = 12;
+
+    public double HvacActionAlibiSafetyBandCelsius { get; set; } = 1.0;
 
     public bool CoolingRunwayGuardEnabled { get; set; } = true;
 

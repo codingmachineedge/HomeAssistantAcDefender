@@ -28,6 +28,7 @@ tests.CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches();
 tests.WeatherDriftWaitsOnlyForSafeStableOutdoorConditions();
 tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
+tests.HvacActionAlibiWaitsForRealActionTransitionButBypassesHotRoom();
 tests.ComfortPaceWaitsAfterFrequentWallTouchesButBypassesHotRoom();
 tests.ComfortEnvelopeObservesSmallSafeWallPreferenceButBypassesHotRoom();
 tests.PeakPowerSaverHoldsSafeCoolingDuringAlectraOnPeakButBypassesHotRoom();
@@ -928,6 +929,82 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.CoolingRunway.Holding)
         {
             throw new InvalidOperationException("Cooling Runway should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void HvacActionAlibiWaitsForRealActionTransitionButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.HvacActionAlibiEnabled = true;
+        settings.HvacActionAlibiTriggerTouches = 2;
+        settings.HvacActionAlibiTransitionWindowSeconds = 90;
+        settings.HvacActionAlibiMaxHoldMinutes = 6;
+        settings.HvacActionAlibiSafetyBandCelsius = 1.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.3,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(safeReading);
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 25.0 });
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 26.0 });
+
+        var now = DateTimeOffset.UtcNow;
+        var waited = store.TryRespectHvacActionAlibi(
+            safeReading with { SetPointCelsius = 26.0 },
+            22.0,
+            bypassForComfort: false,
+            now,
+            out var waitUntil,
+            out var message);
+
+        if (!waited || waitUntil <= now || !message.Contains("HVAC alibi", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("HVAC Alibi should wait for a real action transition after repeated safe wall touches.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.HvacActionAlibi.Waiting
+            || snapshot.HvacActionAlibi.CurrentAction != "idle"
+            || snapshot.HvacActionAlibi.RecentTouchCount < 2)
+        {
+            throw new InvalidOperationException("HVAC Alibi snapshot should show the wait, current action, and recent touch count.");
+        }
+
+        var coolingReading = safeReading with { SetPointCelsius = 26.0, HvacAction = "cooling" };
+        store.RecordHomeAssistantReading(coolingReading);
+        var afterTransition = store.TryRespectHvacActionAlibi(
+            coolingReading,
+            22.0,
+            bypassForComfort: false,
+            DateTimeOffset.UtcNow,
+            out _,
+            out _);
+
+        if (afterTransition)
+        {
+            throw new InvalidOperationException("HVAC Alibi should release when a real hvac_action transition occurs.");
+        }
+
+        var hotRoom = store.TryRespectHvacActionAlibi(
+            safeReading with { CurrentTemperatureCelsius = 24.2, SetPointCelsius = 26.0 },
+            22.0,
+            bypassForComfort: false,
+            DateTimeOffset.UtcNow,
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("HVAC Alibi must step aside when direct cooling is needed.");
         }
     }
 

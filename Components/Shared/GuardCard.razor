@@ -41,7 +41,7 @@
                    OnClick="@(() => _detailOpen = !_detailOpen)"
                    StartIcon="@Icons.Material.Filled.FactCheck"
                    EndIcon="@(_detailOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
-            Extra specific field report
+            More extra-specific info
         </MudButton>
     </div>
 
@@ -71,7 +71,7 @@
             <div class="guard-detail__row">
                 <div class="guard-detail__label">
                     <MudIcon Icon="@Icons.Material.Filled.Bolt" Size="Size.Small" />
-                    What triggered this card now
+                    Why this card did or did not trigger now
                 </div>
                 <div class="guard-detail__text">@TriggeredByText</div>
             </div>
@@ -82,6 +82,14 @@
                     What would trigger it next
                 </div>
                 <div class="guard-detail__text">@FutureTriggerText</div>
+            </div>
+
+            <div class="guard-detail__row">
+                <div class="guard-detail__label">
+                    <MudIcon Icon="@Icons.Material.Filled.GppMaybe" Size="Size.Small" />
+                    What clears or skips it
+                </div>
+                <div class="guard-detail__text">@ClearOrBypassText</div>
             </div>
 
             <div class="guard-detail__row">
@@ -164,15 +172,15 @@
         {
             if (!view.Enabled)
             {
-                return $"{Info.Name} is disabled, so step {GuardOrderText} is skipped. The defender moves to {NextGuardText} and will not use this card again until the related setting is turned on.";
+                return $"{Info.Name} is disabled, so its worker rule is skipped when reached. In this reference board, the next card is {NextGuardText}; the real worker will not use this rule again until the related setting is turned on.";
             }
 
             if (view.Busy)
             {
-                return $"{Info.Name} is {view.StateLabel.ToLowerInvariant()} at step {GuardOrderText}. Next it will keep the action described below in place, watch the live evidence values, and release the defender to {NextGuardText} when the condition clears or the timer ends.";
+                return $"{Info.Name} is {view.StateLabel.ToLowerInvariant()} on reference card {GuardOrderText}. Next it keeps the action described below in place, watches the live evidence values, and releases the worker when the condition clears or the timer ends.";
             }
 
-            return $"{Info.Name} is watching at step {GuardOrderText}. Next it lets the defender pass to {NextGuardText}; it only stops the cycle if the watched readings cross this card's trigger.";
+            return $"{Info.Name} is watching on reference card {GuardOrderText}. It is not stopping the current cycle; it only blocks the worker if the watched readings cross this card's trigger.";
         }
     }
 
@@ -194,6 +202,21 @@
 
     private string FutureTriggerText =>
         $"{Info.Name} watches {Info.Watches} It will trigger when this rule becomes true: {Info.Logic} Settings that change the trigger: {SettingsText}.";
+
+    private string ClearOrBypassText
+    {
+        get
+        {
+            if (!view.Enabled)
+            {
+                return $"Turning the related setting back on makes this step eligible again. Until then it is skipped and the defender checks {NextGuardText}.";
+            }
+
+            return view.Busy
+                ? "It will clear when its timer/condition ends, when the watched evidence no longer matches, or when a higher-priority comfort/safety guard says cooling must happen now."
+                : $"It stays quiet until the watched evidence crosses its trigger. Warm-room comfort, severe upstairs heat, or explicit quiet-bypass rules can also skip this timing card so real cooling is not delayed.";
+        }
+    }
 
     private string ActionIfTriggeredText
     {
@@ -220,14 +243,14 @@
 
     private IReadOnlyList<string> AlgorithmSteps =>
     [
-        $"Enter step {GuardOrderText} in the {CategoryName} lane. Earlier busy cards can stop the cycle before this one runs.",
+        $"Open reference card {GuardOrderText} in the {CategoryName} lane. The worker checks the real implementation in its service order, and this card explains the same rule.",
         $"Read real Home Assistant data and stored defender memory: {Info.Watches}",
         $"Check whether the card is enabled and load these tuning values: {SettingsText}.",
         $"Compare the live readings to this trigger rule: {Info.Logic}",
         $"Current live evidence: {MetricEvidenceText}",
         view.Busy
             ? $"This card is currently {view.StateLabel.ToLowerInvariant()}, so it applies this action now: {Info.Output}"
-            : $"This card is not busy, so it does not block this cycle and the defender checks {NextGuardText}.",
+            : "This card is not busy, so it does not block this cycle and the worker keeps walking the remaining rules.",
         $"If it triggers, the card's action is: {Info.Output}",
         $"The overall next action label currently says: {Snapshot.NextAction}",
         "If room comfort or a higher-priority safety guard requires direct cooling, the timing/stealth guard steps aside and the defender continues toward the real thermostat command."

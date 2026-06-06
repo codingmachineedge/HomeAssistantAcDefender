@@ -40,6 +40,7 @@ The status snapshot includes:
 - `setpointEcho`: pending setpoint confirmation status, wait seconds, pending target, and expiry time.
 - `repeatCommand`: identical-command hold status, wait seconds, pressure, last defender setpoint, and expiry time.
 - `sensorRhythm`: Home Assistant reading cadence status, wait seconds, learned median interval, sample count, and due time.
+- `hvacActionAlibi`: real HVAC action transition timing status, wait seconds, current action, recent touch count, last transition time, and expiry time.
 - `coolingRunway`: fresh-cooling hold status, wait seconds, pressure, cooling start time, and expiry time.
 - `roomTrend`: real room trend direction, delta, sample count, hold status, and remaining hold seconds.
 - `thermalMomentum`: real cooling rate, estimated minutes to target, hold status, and remaining hold seconds.
@@ -73,7 +74,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, Human Nudge, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Human Nudge, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, HVAC Alibi, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 

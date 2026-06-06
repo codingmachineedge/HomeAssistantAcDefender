@@ -227,6 +227,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectHvacActionAlibi(reading, expectedSetPoint, bypassQuietTiming, now, out var alibiUntil, out var alibiMessage))
+                {
+                    stateStore.SetNextAction(alibiMessage, alibiUntil);
+                    return;
+                }
+
                 if (stateStore.TryDelayNaturalCorrection(reading, expectedSetPoint, bypassQuietTiming, now, out var waitUntil, out var waitMessage))
                 {
                     stateStore.SetNextAction(waitMessage, waitUntil);

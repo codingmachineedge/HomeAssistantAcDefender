@@ -289,6 +289,15 @@ public sealed class DefenderStateStore
             state.Settings.SensorRhythmWindowMinutes = Math.Clamp(request.SensorRhythmWindowMinutes, 5, 1440);
             state.Settings.SensorRhythmJitterSeconds = Math.Clamp(request.SensorRhythmJitterSeconds, 0, 300);
             state.Settings.SensorRhythmSafetyBandCelsius = Math.Round(Math.Clamp(request.SensorRhythmSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.HvacActionAlibiEnabled = request.HvacActionAlibiEnabled;
+            state.Settings.HvacActionAlibiTriggerTouches = Math.Clamp(request.HvacActionAlibiTriggerTouches, 1, 20);
+            state.Settings.HvacActionAlibiTransitionWindowSeconds = Math.Clamp(request.HvacActionAlibiTransitionWindowSeconds, 5, 1800);
+            state.Settings.HvacActionAlibiMaxHoldMinutes = Math.Clamp(request.HvacActionAlibiMaxHoldMinutes, 1, 240);
+            state.Settings.HvacActionAlibiSafetyBandCelsius = Math.Round(Math.Clamp(request.HvacActionAlibiSafetyBandCelsius, 0.1, 5.0), 1);
+            if (!state.Settings.HvacActionAlibiEnabled)
+            {
+                ClearHvacActionAlibi("HVAC alibi is off.");
+            }
             state.Settings.CoolingRunwayGuardEnabled = request.CoolingRunwayGuardEnabled;
             state.Settings.CoolingRunwayMinimumSeconds = Math.Clamp(request.CoolingRunwayMinimumSeconds, 0, 1800);
             state.Settings.CoolingRunwayPressureExtraSeconds = Math.Clamp(request.CoolingRunwayPressureExtraSeconds, 0, 3600);
@@ -670,6 +679,7 @@ public sealed class DefenderStateStore
                 ContextUserId = reading.Context?.UserId,
                 UpdatedAt = now
             };
+            TrackHvacActionAlibiTransition(reading, previousHvacAction, now);
             TrackCoolingRunway(reading, previousHvacAction, now);
             UpdateCoolingFailureDetection(reading, now);
             state.LastObservedSetPointCelsius = reading.SetPointCelsius;
@@ -1583,6 +1593,106 @@ public sealed class DefenderStateStore
             state.SensorRhythmStatus = message;
             SaveState();
             return waitUntil > now;
+        }
+    }
+
+    /// <summary>HVAC Alibi: true while waiting for a real Home Assistant hvac_action transition before a safe correction.</summary>
+    public bool TryRespectHvacActionAlibi(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.HvacActionAlibiEnabled)
+            {
+                ClearHvacActionAlibi("HVAC alibi is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            var triggerTouches = Math.Max(1, state.Settings.HvacActionAlibiTriggerTouches);
+            var recentTouches = state.ExternalTouchTimes.Count;
+            if (recentTouches < triggerTouches)
+            {
+                ClearHvacActionAlibi($"HVAC alibi is watching for repeated wall touches ({recentTouches}/{triggerTouches}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearHvacActionAlibi("Room comfort needs help now, so HVAC alibi is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.HvacActionAlibiSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearHvacActionAlibi($"Room is above {allowedRoomTemperature:0.0} C, so HVAC alibi lets direct comfort continue.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearHvacActionAlibi("HVAC alibi is lined up; no action transition wait is needed.");
+                SaveState();
+                return false;
+            }
+
+            var currentAction = NormalizeHvacAction(reading.HvacAction);
+            var transitionWindow = TimeSpan.FromSeconds(Math.Clamp(state.Settings.HvacActionAlibiTransitionWindowSeconds, 5, 1800));
+            if (state.HvacActionAlibiStartedAt is { } startedAt
+                && state.HvacActionAlibiLastTransitionAt is { } transitionAt
+                && transitionAt >= startedAt
+                && now - transitionAt <= transitionWindow)
+            {
+                ClearHvacActionAlibi($"Real HVAC action changed to {currentAction}; safe correction can ride that normal transition.");
+                SaveState();
+                return false;
+            }
+
+            if (state.HvacActionAlibiStartedAt is null
+                && state.HvacActionAlibiLastTransitionAt is { } recentTransitionAt
+                && now - recentTransitionAt <= transitionWindow)
+            {
+                ClearHvacActionAlibi($"Recent real HVAC action transition gives this safe correction an alibi.");
+                SaveState();
+                return false;
+            }
+
+            if (state.HvacActionAlibiUntil is { } holdUntil)
+            {
+                if (holdUntil > now)
+                {
+                    waitUntil = holdUntil;
+                    message = $"HVAC alibi is waiting until {holdUntil.ToLocalTime():HH:mm:ss} for the real action to move from '{currentAction}' before the next safe correction.";
+                    state.HvacActionAlibiStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearHvacActionAlibi("HVAC alibi max wait ended; safe correction can continue if still needed.");
+                SaveState();
+                return false;
+            }
+
+            state.HvacActionAlibiStartedAt = now;
+            waitUntil = now.AddMinutes(Math.Clamp(state.Settings.HvacActionAlibiMaxHoldMinutes, 1, 240));
+            state.HvacActionAlibiUntil = waitUntil;
+            message = $"HVAC alibi is waiting until {waitUntil.ToLocalTime():HH:mm:ss} for a real hvac_action change from '{currentAction}' before the next safe correction.";
+            state.HvacActionAlibiStatus = message;
+            SaveState();
+            return true;
         }
     }
 
@@ -3983,6 +4093,26 @@ public sealed class DefenderStateStore
         state.CoolingRunwayStartedAt ??= now;
     }
 
+    private void TrackHvacActionAlibiTransition(ThermostatReading reading, string? previousHvacAction, DateTimeOffset now)
+    {
+        var currentAction = NormalizeHvacAction(reading.HvacAction);
+        state.HvacActionAlibiCurrentAction = currentAction;
+
+        var previousAction = NormalizeHvacAction(previousHvacAction);
+        if (string.IsNullOrWhiteSpace(previousHvacAction) || previousAction == currentAction)
+        {
+            state.HvacActionAlibiStatus = string.IsNullOrWhiteSpace(state.HvacActionAlibiStatus)
+                ? $"HVAC alibi is watching real action '{currentAction}'."
+                : state.HvacActionAlibiStatus;
+            return;
+        }
+
+        state.HvacActionAlibiLastTransitionAt = now;
+        state.HvacActionAlibiLastTransitionFrom = previousAction;
+        state.HvacActionAlibiLastTransitionTo = currentAction;
+        state.HvacActionAlibiStatus = $"Real HVAC action changed from '{previousAction}' to '{currentAction}'; safe corrections can use that natural timing cue.";
+    }
+
     private void UpdateCoolingFailureDetection(ThermostatReading reading, DateTimeOffset now)
     {
         if (!CoolingIsDemanded(reading))
@@ -4069,6 +4199,12 @@ public sealed class DefenderStateStore
     private static bool IsCoolingAction(string? hvacAction)
     {
         return (hvacAction ?? string.Empty).Trim().ToLowerInvariant() is "cooling" or "cool";
+    }
+
+    private static string NormalizeHvacAction(string? hvacAction)
+    {
+        var normalized = (hvacAction ?? string.Empty).Trim().ToLowerInvariant();
+        return string.IsNullOrWhiteSpace(normalized) ? "unknown" : normalized;
     }
 
     /// <summary>
@@ -4999,6 +5135,10 @@ public sealed class DefenderStateStore
         saved.Settings.SensorRhythmWindowMinutes = Math.Clamp(saved.Settings.SensorRhythmWindowMinutes, 5, 1440);
         saved.Settings.SensorRhythmJitterSeconds = Math.Clamp(saved.Settings.SensorRhythmJitterSeconds, 0, 300);
         saved.Settings.SensorRhythmSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.SensorRhythmSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.HvacActionAlibiTriggerTouches = Math.Clamp(saved.Settings.HvacActionAlibiTriggerTouches <= 0 ? 2 : saved.Settings.HvacActionAlibiTriggerTouches, 1, 20);
+        saved.Settings.HvacActionAlibiTransitionWindowSeconds = Math.Clamp(saved.Settings.HvacActionAlibiTransitionWindowSeconds <= 0 ? 90 : saved.Settings.HvacActionAlibiTransitionWindowSeconds, 5, 1800);
+        saved.Settings.HvacActionAlibiMaxHoldMinutes = Math.Clamp(saved.Settings.HvacActionAlibiMaxHoldMinutes <= 0 ? 12 : saved.Settings.HvacActionAlibiMaxHoldMinutes, 1, 240);
+        saved.Settings.HvacActionAlibiSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.HvacActionAlibiSafetyBandCelsius <= 0 ? 1.0 : saved.Settings.HvacActionAlibiSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.CoolingRunwayMinimumSeconds = Math.Clamp(saved.Settings.CoolingRunwayMinimumSeconds, 0, 1800);
         saved.Settings.CoolingRunwayPressureExtraSeconds = Math.Clamp(saved.Settings.CoolingRunwayPressureExtraSeconds, 0, 3600);
         saved.Settings.CoolingRunwaySafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.CoolingRunwaySafetyBandCelsius, 0.1, 5.0), 1);
@@ -5217,6 +5357,24 @@ public sealed class DefenderStateStore
         {
             saved.SensorRhythmDueAt = null;
         }
+        saved.HvacActionAlibiCurrentAction = string.IsNullOrWhiteSpace(saved.HvacActionAlibiCurrentAction)
+            ? "unknown"
+            : saved.HvacActionAlibiCurrentAction;
+        saved.HvacActionAlibiStatus = string.IsNullOrWhiteSpace(saved.HvacActionAlibiStatus)
+            ? "HVAC alibi is watching for a real action transition."
+            : saved.HvacActionAlibiStatus;
+        if (!saved.Settings.HvacActionAlibiEnabled)
+        {
+            saved.HvacActionAlibiStartedAt = null;
+            saved.HvacActionAlibiUntil = null;
+            saved.HvacActionAlibiStatus = "HVAC alibi is off.";
+        }
+        else if (saved.HvacActionAlibiUntil is { } alibiUntil && alibiUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.HvacActionAlibiStartedAt = null;
+            saved.HvacActionAlibiUntil = null;
+            saved.HvacActionAlibiStatus = "HVAC alibi is watching for a real action transition.";
+        }
         saved.CoolingRunwayStatus = string.IsNullOrWhiteSpace(saved.CoolingRunwayStatus)
             ? "Cooling runway is watching for a fresh cooling start."
             : saved.CoolingRunwayStatus;
@@ -5413,6 +5571,13 @@ public sealed class DefenderStateStore
         var sensorRhythmSeconds = state.SensorRhythmDueAt is { } sensorRhythmDueAt && sensorRhythmDueAt > now
             ? (int)Math.Ceiling((sensorRhythmDueAt - now).TotalSeconds)
             : 0;
+        var hvacActionAlibiSeconds = state.HvacActionAlibiUntil is { } alibiUntil && alibiUntil > now
+            ? (int)Math.Ceiling((alibiUntil - now).TotalSeconds)
+            : 0;
+        if (hvacActionAlibiSeconds == 0 && state.HvacActionAlibiUntil is not null)
+        {
+            ClearHvacActionAlibi("HVAC alibi max wait ended; watching for the next real action transition.");
+        }
         var coolingRunwaySeconds = state.CoolingRunwayHoldUntil is { } runwayUntil && runwayUntil > now
             ? (int)Math.Ceiling((runwayUntil - now).TotalSeconds)
             : 0;
@@ -5811,6 +5976,19 @@ public sealed class DefenderStateStore
                     ? "Sensor rhythm is watching."
                     : state.SensorRhythmStatus,
                 sensorRhythmSeconds > 0 ? state.SensorRhythmDueAt : null),
+            new HvacActionAlibiSnapshot(
+                state.Settings.HvacActionAlibiEnabled,
+                hvacActionAlibiSeconds > 0,
+                hvacActionAlibiSeconds,
+                state.ExternalTouchTimes.Count,
+                string.IsNullOrWhiteSpace(state.HvacActionAlibiCurrentAction)
+                    ? "unknown"
+                    : state.HvacActionAlibiCurrentAction,
+                state.HvacActionAlibiLastTransitionAt,
+                string.IsNullOrWhiteSpace(state.HvacActionAlibiStatus)
+                    ? "HVAC alibi is watching for a real action transition."
+                    : state.HvacActionAlibiStatus,
+                hvacActionAlibiSeconds > 0 ? state.HvacActionAlibiUntil : null),
             new CoolingRunwaySnapshot(
                 state.Settings.CoolingRunwayGuardEnabled,
                 coolingRunwaySeconds > 0,
@@ -5950,6 +6128,7 @@ public sealed class DefenderStateStore
         ClearRepeatCommand("Repeat quiet is watching.");
         ClearCoolingRunway("Cooling runway is watching.");
         ClearSensorRhythm("Sensor rhythm is watching.");
+        ClearHvacActionAlibi("HVAC alibi is watching for a real action transition.");
         ClearComfortCompromise("Comfort compromise reset after website target change.");
         state.ComfortMemoryEffectiveTargetCelsius = null;
         state.ComfortMemoryStatus = "Comfort memory is watching wall choices.";
@@ -6142,6 +6321,7 @@ public sealed class DefenderStateStore
             ClearNaturalChangePlanner("Comfort Pace used its climate slot; watching for the next calm opening.");
             ClearComfortEnvelope("Real comfort command sent; comfort envelope is watching again.");
             ClearRepeatCommand("Repeat quiet used its slot; watching for identical follow-up commands.");
+            ClearHvacActionAlibi("HVAC alibi used its timing cue; watching for the next safe transition.");
         }
         else
         {
@@ -6160,6 +6340,13 @@ public sealed class DefenderStateStore
     {
         state.SensorRhythmDueAt = null;
         state.SensorRhythmStatus = status;
+    }
+
+    private void ClearHvacActionAlibi(string status)
+    {
+        state.HvacActionAlibiStartedAt = null;
+        state.HvacActionAlibiUntil = null;
+        state.HvacActionAlibiStatus = status;
     }
 
     private void ClearWeatherDrift(string status)
@@ -6545,6 +6732,11 @@ public sealed class DefenderStateStore
             SensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes,
             SensorRhythmJitterSeconds = settings.SensorRhythmJitterSeconds,
             SensorRhythmSafetyBandCelsius = settings.SensorRhythmSafetyBandCelsius,
+            HvacActionAlibiEnabled = settings.HvacActionAlibiEnabled,
+            HvacActionAlibiTriggerTouches = settings.HvacActionAlibiTriggerTouches,
+            HvacActionAlibiTransitionWindowSeconds = settings.HvacActionAlibiTransitionWindowSeconds,
+            HvacActionAlibiMaxHoldMinutes = settings.HvacActionAlibiMaxHoldMinutes,
+            HvacActionAlibiSafetyBandCelsius = settings.HvacActionAlibiSafetyBandCelsius,
             CoolingRunwayGuardEnabled = settings.CoolingRunwayGuardEnabled,
             CoolingRunwayMinimumSeconds = settings.CoolingRunwayMinimumSeconds,
             CoolingRunwayPressureExtraSeconds = settings.CoolingRunwayPressureExtraSeconds,
@@ -6820,6 +7012,20 @@ public sealed class DefenderStateStore
         public string SensorRhythmStatus { get; set; } = "Sensor rhythm is watching.";
 
         public List<DateTimeOffset> HomeAssistantReadingTimes { get; set; } = [];
+
+        public DateTimeOffset? HvacActionAlibiStartedAt { get; set; }
+
+        public DateTimeOffset? HvacActionAlibiUntil { get; set; }
+
+        public string HvacActionAlibiCurrentAction { get; set; } = "unknown";
+
+        public DateTimeOffset? HvacActionAlibiLastTransitionAt { get; set; }
+
+        public string? HvacActionAlibiLastTransitionFrom { get; set; }
+
+        public string? HvacActionAlibiLastTransitionTo { get; set; }
+
+        public string HvacActionAlibiStatus { get; set; } = "HVAC alibi is watching for a real action transition.";
 
         public DateTimeOffset? CoolingRunwayStartedAt { get; set; }
 
