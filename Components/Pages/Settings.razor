@@ -343,6 +343,18 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("setpoint stillness stable samples wall setpoint settle pause")) {
+                <MudExpansionPanel Text="Setpoint stillness" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Setpoint stillness" Value="_setpointStillnessGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _setpointStillnessGuardEnabled = x))" Help="Wait until Home Assistant reports the same wall setpoint a few times." />
+                        <SettingInt Label="Stillness touches" Value="_setpointStillnessTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _setpointStillnessTriggerTouches = x))" Min="1" Max="20" Help="Repeated external changes needed before this guard holds." />
+                        <SettingInt Label="Stable samples" Value="_setpointStillnessRequiredSamples" ValueChanged="@(v => SetDirty(v, x => _setpointStillnessRequiredSamples = x))" Min="2" Max="20" Help="Matching real readings needed before a safe correction continues." />
+                        <SettingInt Label="Max hold" Unit="s" Value="_setpointStillnessMaxHoldSeconds" ValueChanged="@(v => SetDirty(v, x => _setpointStillnessMaxHoldSeconds = x))" Min="5" Max="3600" Help="Longest time to wait for the wall setpoint to stop moving." />
+                        <SettingDouble Label="Tolerance" Value="_setpointStillnessToleranceCelsius" ValueChanged="@(v => SetDirty(v, x => _setpointStillnessToleranceCelsius = x))" Min="0.01" Max="0.5" Step="0.01" Help="How close readings must be to count as the same setpoint." />
+                        <SettingDouble Label="Safe band" Value="_setpointStillnessSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _setpointStillnessSafetyBandCelsius = x))" Min="0.1" Max="5" Help="Warmth allowed before this guard stops waiting." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("sensor rhythm beat interval")) {
                 <MudExpansionPanel Text="Sensor rhythm" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -695,6 +707,12 @@
     private int _repeatCommandMinimumWaitSeconds = 90;
     private int _repeatCommandPressureExtraSeconds = 240;
     private double _repeatCommandSafetyBandCelsius = 1.0;
+    private bool _setpointStillnessGuardEnabled = true;
+    private int _setpointStillnessTriggerTouches = 2;
+    private int _setpointStillnessRequiredSamples = 3;
+    private int _setpointStillnessMaxHoldSeconds = 180;
+    private double _setpointStillnessToleranceCelsius = 0.05;
+    private double _setpointStillnessSafetyBandCelsius = 1.0;
     private bool _sensorRhythmGuardEnabled = true;
     private int _sensorRhythmMinimumSamples = 3;
     private int _sensorRhythmWindowMinutes = 120;
@@ -913,6 +931,12 @@
         _repeatCommandMinimumWaitSeconds = settings.RepeatCommandMinimumWaitSeconds;
         _repeatCommandPressureExtraSeconds = settings.RepeatCommandPressureExtraSeconds;
         _repeatCommandSafetyBandCelsius = settings.RepeatCommandSafetyBandCelsius;
+        _setpointStillnessGuardEnabled = settings.SetpointStillnessGuardEnabled;
+        _setpointStillnessTriggerTouches = settings.SetpointStillnessTriggerTouches;
+        _setpointStillnessRequiredSamples = settings.SetpointStillnessRequiredSamples;
+        _setpointStillnessMaxHoldSeconds = settings.SetpointStillnessMaxHoldSeconds;
+        _setpointStillnessToleranceCelsius = settings.SetpointStillnessToleranceCelsius;
+        _setpointStillnessSafetyBandCelsius = settings.SetpointStillnessSafetyBandCelsius;
         _sensorRhythmGuardEnabled = settings.SensorRhythmGuardEnabled;
         _sensorRhythmMinimumSamples = settings.SensorRhythmMinimumSamples;
         _sensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes;
@@ -1168,6 +1192,12 @@
             _repeatCommandMinimumWaitSeconds,
             _repeatCommandPressureExtraSeconds,
             _repeatCommandSafetyBandCelsius,
+            _setpointStillnessGuardEnabled,
+            _setpointStillnessTriggerTouches,
+            _setpointStillnessRequiredSamples,
+            _setpointStillnessMaxHoldSeconds,
+            _setpointStillnessToleranceCelsius,
+            _setpointStillnessSafetyBandCelsius,
             _sensorRhythmGuardEnabled,
             _sensorRhythmMinimumSamples,
             _sensorRhythmWindowMinutes,

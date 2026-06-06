@@ -14,6 +14,7 @@ tests.ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom();
 tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
+tests.SetpointStillnessWaitsForStableReadingsButBypassesHotRoom();
 tests.CommandCamouflageSpacesSafeFollowUpButBypassesHotRoom();
 tests.StealthGovernorHoldsSafeHighPressureButBypassesHotRoom();
 tests.HumanNudgeShapesOnlySafeCommandsAndBypassesHotRoom();
@@ -44,9 +45,9 @@ internal sealed class DefenderSetPointRegressionTests
         var snapshot = fixture.Store.GetSnapshot();
 
         var live = GuardCatalog.Live.ToList();
-        if (live.Count < 29)
+        if (live.Count < 30)
         {
-            throw new InvalidOperationException($"Expected at least 29 live guard cards in the catalog, found {live.Count}.");
+            throw new InvalidOperationException($"Expected at least 30 live guard cards in the catalog, found {live.Count}.");
         }
 
         foreach (var guard in live)
@@ -321,6 +322,99 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.RepeatCommand.Holding)
         {
             throw new InvalidOperationException("Repeat Quiet should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void SetpointStillnessWaitsForStableReadingsButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.SetpointStillnessGuardEnabled = true;
+        settings.SetpointStillnessTriggerTouches = 2;
+        settings.SetpointStillnessRequiredSamples = 3;
+        settings.SetpointStillnessMaxHoldSeconds = 120;
+        settings.SetpointStillnessToleranceCelsius = 0.05;
+        settings.SetpointStillnessSafetyBandCelsius = 1.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.4,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(safeReading);
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 25.0 });
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 26.0 });
+
+        var now = DateTimeOffset.UtcNow;
+        SeedSetpointStillnessSamples(
+            store,
+            (now.AddSeconds(-8), 24.0),
+            (now.AddSeconds(-4), 25.0),
+            (now, 26.0));
+
+        var waited = store.TryRespectSetpointStillness(
+            safeReading with { SetPointCelsius = 26.0 },
+            22.0,
+            bypassForComfort: false,
+            now,
+            out var waitUntil,
+            out var message);
+
+        if (!waited || waitUntil <= now || !message.Contains("stillness", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Setpoint Stillness should wait until repeated real readings show the wall setpoint settled.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.SetpointStillness.Holding
+            || snapshot.SetpointStillness.StableSampleCount >= snapshot.SetpointStillness.RequiredStableSamples
+            || snapshot.SetpointStillness.CurrentSetPointCelsius is not 26.0)
+        {
+            throw new InvalidOperationException("Setpoint Stillness snapshot should show the active hold and incomplete stable-read count.");
+        }
+
+        var settledAt = DateTimeOffset.UtcNow;
+        SeedSetpointStillnessSamples(
+            store,
+            (settledAt.AddSeconds(-8), 26.0),
+            (settledAt.AddSeconds(-4), 26.0),
+            (settledAt, 26.0));
+        var released = store.TryRespectSetpointStillness(
+            safeReading with { SetPointCelsius = 26.0 },
+            22.0,
+            bypassForComfort: false,
+            settledAt,
+            out _,
+            out _);
+
+        if (released)
+        {
+            throw new InvalidOperationException("Setpoint Stillness should release once enough real readings match the same wall setpoint.");
+        }
+
+        var hotRoom = store.TryRespectSetpointStillness(
+            safeReading with { CurrentTemperatureCelsius = 24.2, SetPointCelsius = 26.0 },
+            22.0,
+            bypassForComfort: false,
+            DateTimeOffset.UtcNow,
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Setpoint Stillness must step aside when direct cooling is needed.");
+        }
+
+        snapshot = store.GetSnapshot();
+        if (snapshot.SetpointStillness.Holding)
+        {
+            throw new InvalidOperationException("Setpoint Stillness should clear its hold after stable reads or comfort bypass.");
         }
     }
 
@@ -1393,6 +1487,23 @@ internal sealed class DefenderSetPointRegressionTests
 
         list.Clear();
         list.AddRange(readingTimes);
+    }
+
+    private static void SeedSetpointStillnessSamples(DefenderStateStore store, params (DateTimeOffset Timestamp, double SetPointCelsius)[] samples)
+    {
+        var state = GetRuntimeState(store);
+        var listProperty = state.GetType().GetProperty("SetpointStillnessSamples")
+            ?? throw new InvalidOperationException("Could not find SetpointStillnessSamples state property.");
+        var list = (System.Collections.IList?)listProperty.GetValue(state)
+            ?? throw new InvalidOperationException("Could not read SetpointStillnessSamples.");
+        var elementType = listProperty.PropertyType.GetGenericArguments()[0];
+        var constructor = elementType.GetConstructors()[0];
+
+        list.Clear();
+        foreach (var sample in samples)
+        {
+            list.Add(constructor.Invoke([sample.Timestamp, sample.SetPointCelsius]));
+        }
     }
 
     private static void SeedPendingCommandAt(DefenderStateStore store, DateTimeOffset pendingAt)

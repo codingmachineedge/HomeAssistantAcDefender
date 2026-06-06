@@ -416,6 +416,24 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Setpoint Stillness", GuardCategory.Sensor,
+            "Waits until the wall setpoint stops moving before a safe correction answers back.",
+            "Real Home Assistant climate readings, the current reported setpoint, recent wall touches, and room temperature.",
+            "After repeated external touches, while the room is still inside the safe band, it requires a few consecutive real Home Assistant readings at the same wall setpoint before allowing a safe correction. If the room gets too warm, a cooler-intent fast lane is active, the expected setpoint is already reached, or the max hold expires, it steps aside.",
+            "Delays only safe corrections until the wall setpoint looks settled.",
+            ["SetpointStillnessGuardEnabled", "SetpointStillnessTriggerTouches", "SetpointStillnessRequiredSamples", "SetpointStillnessMaxHoldSeconds", "SetpointStillnessToleranceCelsius", "SetpointStillnessSafetyBandCelsius"],
+            s =>
+            {
+                var p = s.SetpointStillness;
+                return GuardLiveView.Standard(p.Enabled, p.Holding, "Holding", p.Status,
+                [
+                    new("Stillness wait", OffWait(p.Enabled, p.Holding, p.SecondsRemaining), "Time left waiting for matching setpoint readings."),
+                    new("Stable reads", p.Enabled ? $"{p.StableSampleCount}/{p.RequiredStableSamples}" : "Off", "Consecutive real readings at the same setpoint."),
+                    new("Wall setpoint", p.CurrentSetPointCelsius is { } sp ? $"{sp:0.0} C" : p.Enabled ? "--" : "Off", "Current reported thermostat setpoint."),
+                ], busyTone: GuardTone.Holding);
+            }),
+
+        new GuardInfo(
             "Sensor Rhythm", GuardCategory.Sensor,
             "Times nudges to just after the normal Home Assistant reading beat so they look less mechanical.",
             "Timestamps of real Home Assistant readings, used to learn the median update interval.",

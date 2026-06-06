@@ -39,6 +39,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Touch Intent so clear warmer wall-choice patterns can get extra safe grace instead of an obvious immediate fight-back.
 - Adds Cooler Intent Fast Lane so repeated cooler wall choices can skip quiet waits and cool sooner without changing the website target.
 - Adds Super Defender so repeated Home Assistant user/phone or automation changes can temporarily bypass quiet waits while the room still needs cooling.
+- Adds Setpoint Stillness so safe corrections wait until real Home Assistant readings show the wall setpoint has stopped changing.
 - Adds a two-minute website command debounce only around controls that can affect thermostat temperature or mode.
 - Adds emergency protocols for too-cold, someone-upset, and suspicion quiet situations.
 - Adds a repeated mega alert when cool mode is demanded but the thermostat stays idle or cooling does not lower room temperature.
@@ -119,20 +120,21 @@ Every cycle:
 20. Respect Command Camouflage when a recent helper command needs a believable gap before another safe correction.
 21. Respect Stealth Governor when the overall activity pressure score is high.
 22. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-23. Respect HVAC Alibi when repeated safe wall changes can wait for a real `hvac_action` transition.
-24. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
-25. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
-26. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-27. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-28. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-29. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
-30. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
-31. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-32. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
-33. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
-34. Optionally set fan saver mode when near target.
-35. Correct the thermostat setpoint when it does not match the defender decision.
-36. Update the real-time dashboard status.
+23. Respect Setpoint Echo and Setpoint Stillness so safe follow-up commands wait for real Home Assistant confirmation and a settled wall setpoint.
+24. Respect HVAC Alibi when repeated safe wall changes can wait for a real `hvac_action` transition.
+25. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
+26. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
+27. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+28. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+29. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+30. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
+31. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
+32. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+33. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
+34. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
+35. Optionally set fan saver mode when near target.
+36. Correct the thermostat setpoint when it does not match the defender decision.
+37. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -287,6 +289,12 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `RepeatCommandMinimumWaitSeconds`: smallest wait before an identical follow-up command.
 - `RepeatCommandPressureExtraSeconds`: extra wait added as recent wall touches and helper commands rise.
 - `RepeatCommandSafetyBandCelsius`: extra room warmth allowed before Repeat Quiet stops waiting.
+- `SetpointStillnessGuardEnabled`: waits until repeated real readings show the wall setpoint has stopped changing.
+- `SetpointStillnessTriggerTouches`: recent external thermostat touches needed before Stillness can hold.
+- `SetpointStillnessRequiredSamples`: matching Home Assistant setpoint readings needed before a safe correction continues.
+- `SetpointStillnessMaxHoldSeconds`: longest safe wait for the wall setpoint to settle.
+- `SetpointStillnessToleranceCelsius`: allowed difference between readings that still counts as the same wall setpoint.
+- `SetpointStillnessSafetyBandCelsius`: extra room warmth allowed before Setpoint Stillness stops waiting.
 - `SensorRhythmGuardEnabled`: waits for the learned Home Assistant sensor beat before safe nudges.
 - `SensorRhythmMinimumSamples`: real Home Assistant readings needed before the beat is trusted.
 - `SensorRhythmWindowMinutes`: how long real reading timestamps remain useful.
@@ -380,6 +388,8 @@ Cooler Intent Fast Lane uses the real wall-touch audit log too. If repeated touc
 
 Setpoint Echo reuses the real pending setpoint that the defender already tracks for command attribution. After a defender setpoint command, it can wait for Home Assistant to report that setpoint back before sending another safe command. If the room gets too warm or upstairs heat needs direct cooling, Setpoint Echo steps aside.
 
+Setpoint Stillness watches real Home Assistant climate readings after repeated external thermostat touches. If the room is still inside the safe band, it waits until the same wall setpoint appears for the configured number of readings before a safe correction answers back. This lets phone, Home Assistant, or wall-control tapping settle first. The max hold prevents it from waiting forever, and direct comfort needs clear it immediately.
+
 Repeat Quiet watches the actual setpoint that is about to be sent. If the next safe command would repeat the same number as the last defender command, it waits longer based on recent wall-touch pressure and recent helper command pressure. Different one-degree step-down commands are allowed through, and if the room gets too warm, Repeat Quiet steps aside.
 
 Sensor Rhythm watches real Home Assistant reading timestamps and learns the normal interval between poll updates. When a correction is safe, it can wait until just after the learned sensor beat plus a small wiggle, making the next command look less mechanically immediate. If the room gets too warm or upstairs heat needs direct cooling, Sensor Rhythm clears and the real correction path continues.
@@ -470,7 +480,7 @@ The front end is built with Blazor Server and MudBlazor. It uses a responsive na
 routed pages instead of a single crowded page:
 
 - **Dashboard** (`/`) — summary-first hero (target, live readings, connection, defender switch), priority alerts, a "defense at a glance" summary, and quick controls.
-- **Defense** (`/defense`) — every timing/comfort/safety guard as a live card with an inline "How this works" explainer; searchable and filterable by category.
+- **Defense** (`/defense`) — every timing/comfort/safety guard as a live card with "How this works" and "More extra-specific info" drawers for next step, trigger reason, future trigger, bypass rules, algorithm path, and live evidence; searchable and filterable by category.
 - **Comfort** (`/comfort`) — upstairs comfort guard, sensors, and presence.
 - **Energy** (`/energy`) — tabbed Alectra Hui overview, search/filter entity groups, charts, table view, live usage sensors, and 24-hour history.
 - **Logs** (`/logs`) — the wall-touch audit log and activity events with clickable JSON detail.

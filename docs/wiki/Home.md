@@ -15,6 +15,7 @@ Key capabilities:
 - Helper descriptions under controls and action labels.
 - Upstairs comfort guard with optional home-presence awareness.
 - Cooler Intent Fast Lane that skips quiet waits briefly when repeated real wall touches ask for cooler air.
+- Setpoint Stillness that waits for repeated real readings to show the wall setpoint has stopped changing.
 - Weather Drift Timing that uses real outdoor temperature movement to time safe corrections.
 - HVAC Alibi that waits for real Home Assistant `hvac_action` transitions before safe corrections.
 - Alectra Peak Power Saver that relaxes safe cooling during On-peak, high-price, or high-power usage.

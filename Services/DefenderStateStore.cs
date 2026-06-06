@@ -284,6 +284,16 @@ public sealed class DefenderStateStore
             state.Settings.RepeatCommandMinimumWaitSeconds = Math.Clamp(request.RepeatCommandMinimumWaitSeconds, 0, 1800);
             state.Settings.RepeatCommandPressureExtraSeconds = Math.Clamp(request.RepeatCommandPressureExtraSeconds, 0, 3600);
             state.Settings.RepeatCommandSafetyBandCelsius = Math.Round(Math.Clamp(request.RepeatCommandSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.SetpointStillnessGuardEnabled = request.SetpointStillnessGuardEnabled;
+            state.Settings.SetpointStillnessTriggerTouches = Math.Clamp(request.SetpointStillnessTriggerTouches, 1, 20);
+            state.Settings.SetpointStillnessRequiredSamples = Math.Clamp(request.SetpointStillnessRequiredSamples, 2, 20);
+            state.Settings.SetpointStillnessMaxHoldSeconds = Math.Clamp(request.SetpointStillnessMaxHoldSeconds, 5, 3600);
+            state.Settings.SetpointStillnessToleranceCelsius = Math.Round(Math.Clamp(request.SetpointStillnessToleranceCelsius, 0.01, 0.5), 2);
+            state.Settings.SetpointStillnessSafetyBandCelsius = Math.Round(Math.Clamp(request.SetpointStillnessSafetyBandCelsius, 0.1, 5.0), 1);
+            if (!state.Settings.SetpointStillnessGuardEnabled)
+            {
+                ClearSetpointStillness("Setpoint stillness is off.");
+            }
             state.Settings.SensorRhythmGuardEnabled = request.SensorRhythmGuardEnabled;
             state.Settings.SensorRhythmMinimumSamples = Math.Clamp(request.SensorRhythmMinimumSamples, 2, 60);
             state.Settings.SensorRhythmWindowMinutes = Math.Clamp(request.SensorRhythmWindowMinutes, 5, 1440);
@@ -663,6 +673,7 @@ public sealed class DefenderStateStore
             DetectExternalSetPointChange(reading, now);
             RecordRoomTemperatureSample(reading, now);
             RecordHomeAssistantReadingTime(now);
+            RecordSetpointStillnessSample(reading, now);
 
             state.ConnectionState = "home-assistant";
             state.HomeAssistantEntityId = reading.EntityId;
@@ -1514,6 +1525,94 @@ public sealed class DefenderStateStore
             state.WeatherDriftHoldUntil = waitUntil;
             message = $"Outdoor weather is {drift.Direction} ({drift.OutdoorDeltaCelsius:+0.0;-0.0;0.0} C); holding safe correction until {waitUntil.ToLocalTime():HH:mm:ss} unless the room warms.";
             state.WeatherDriftStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>Setpoint Stillness: true while waiting for repeated real readings with the same wall setpoint.</summary>
+    public bool TryRespectSetpointStillness(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.SetpointStillnessGuardEnabled)
+            {
+                ClearSetpointStillness("Setpoint stillness is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            var triggerTouches = Math.Max(1, state.Settings.SetpointStillnessTriggerTouches);
+            var recentTouches = state.ExternalTouchTimes.Count;
+            if (recentTouches < triggerTouches)
+            {
+                ClearSetpointStillness($"Setpoint stillness is watching for repeated wall touches ({recentTouches}/{triggerTouches}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearSetpointStillness("Room comfort needs help now, so setpoint stillness is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.SetpointStillnessSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearSetpointStillness($"Room is above {allowedRoomTemperature:0.0} C, so setpoint stillness lets direct comfort continue.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearSetpointStillness("Setpoint is lined up; no stillness wait needed.");
+                SaveState();
+                return false;
+            }
+
+            var analysis = BuildSetpointStillnessAnalysis(reading.SetPointCelsius, now);
+            var requiredSamples = Math.Max(2, state.Settings.SetpointStillnessRequiredSamples);
+            if (analysis.StableSampleCount >= requiredSamples)
+            {
+                ClearSetpointStillness($"Wall setpoint stayed at {reading.SetPointCelsius:0.0} C for {analysis.StableSampleCount} readings; safe correction can continue.");
+                SaveState();
+                return false;
+            }
+
+            if (state.SetpointStillnessUntil is { } holdUntil)
+            {
+                if (holdUntil > now)
+                {
+                    waitUntil = holdUntil;
+                    message = $"Setpoint stillness is waiting until {holdUntil.ToLocalTime():HH:mm:ss}; wall setpoint has been steady for {analysis.StableSampleCount}/{requiredSamples} real readings.";
+                    state.SetpointStillnessStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearSetpointStillness("Setpoint stillness max wait ended; safe correction can continue if still needed.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = now.AddSeconds(Math.Clamp(state.Settings.SetpointStillnessMaxHoldSeconds, 5, 3600));
+            state.SetpointStillnessStartedAt = now;
+            state.SetpointStillnessUntil = waitUntil;
+            message = $"Setpoint stillness is waiting until {waitUntil.ToLocalTime():HH:mm:ss} for {requiredSamples} matching Home Assistant setpoint readings before the next safe correction.";
+            state.SetpointStillnessStatus = message;
             SaveState();
             return true;
         }
@@ -3006,6 +3105,7 @@ public sealed class DefenderStateStore
                 && state.NaturalChangePlannerDueAt is null
                 && state.ComfortEnvelopeUntil is null
                 && state.RepeatCommandHoldUntil is null
+                && state.SetpointStillnessUntil is null
                 && state.VisibilityGuardUntil is null
                 && state.SensorRhythmDueAt is null
                 && state.CoolingRunwayHoldUntil is null
@@ -3076,6 +3176,9 @@ public sealed class DefenderStateStore
             ClearRepeatCommand(state.Settings.RepeatCommandGuardEnabled
                 ? "Repeat quiet is lined up; no identical command hold needed."
                 : "Repeat quiet is off.");
+            ClearSetpointStillness(state.Settings.SetpointStillnessGuardEnabled
+                ? "Setpoint stillness is lined up; wall setpoint is settled."
+                : "Setpoint stillness is off.");
             ClearSensorRhythm(state.Settings.SensorRhythmGuardEnabled
                 ? "Sensor rhythm is lined up; no beat wait needed."
                 : "Sensor rhythm is off.");
@@ -3788,6 +3891,7 @@ public sealed class DefenderStateStore
         ClearComfortEnvelope("Cooler intent fast lane is active, so comfort envelope is stepping aside.");
         ClearVisibilityGuard("Cooler intent fast lane is active, so visibility guard is stepping aside.");
         ClearRepeatCommand("Cooler intent fast lane is active, so repeat quiet is stepping aside.");
+        ClearSetpointStillness("Cooler intent fast lane is active, so setpoint stillness is stepping aside.");
         ClearCoolingRunway("Cooler intent fast lane is active, so cooling runway is stepping aside.");
         ClearSensorRhythm("Cooler intent fast lane is active, so sensor rhythm is stepping aside.");
         state.RoomTrendHoldUntil = null;
@@ -4066,6 +4170,20 @@ public sealed class DefenderStateStore
         PruneHomeAssistantReadingTimes(now);
     }
 
+    private void RecordSetpointStillnessSample(ThermostatReading reading, DateTimeOffset now)
+    {
+        if (state.SetpointStillnessSamples.LastOrDefault() is { } latest
+            && now - latest.Timestamp < TimeSpan.FromSeconds(1))
+        {
+            return;
+        }
+
+        state.SetpointStillnessSamples.Add(new SetpointStillnessSample(
+            now,
+            Math.Round(reading.SetPointCelsius, 2)));
+        PruneSetpointStillnessSamples(now);
+    }
+
     private void TrackCoolingRunway(ThermostatReading reading, string? previousHvacAction, DateTimeOffset now)
     {
         if (!state.Settings.CoolingRunwayGuardEnabled)
@@ -4277,6 +4395,42 @@ public sealed class DefenderStateStore
         if (state.HomeAssistantReadingTimes.Count > 500)
         {
             state.HomeAssistantReadingTimes.RemoveRange(0, state.HomeAssistantReadingTimes.Count - 500);
+        }
+    }
+
+    private SetpointStillnessAnalysis BuildSetpointStillnessAnalysis(double currentSetPointCelsius, DateTimeOffset now)
+    {
+        PruneSetpointStillnessSamples(now);
+        if (state.SetpointStillnessSamples.Count == 0)
+        {
+            return new SetpointStillnessAnalysis(0, null);
+        }
+
+        var tolerance = Math.Clamp(state.Settings.SetpointStillnessToleranceCelsius, 0.01, 0.5);
+        var stableCount = 0;
+        DateTimeOffset? latestAt = null;
+        for (var i = state.SetpointStillnessSamples.Count - 1; i >= 0; i--)
+        {
+            var sample = state.SetpointStillnessSamples[i];
+            if (Math.Abs(sample.SetPointCelsius - currentSetPointCelsius) > tolerance)
+            {
+                break;
+            }
+
+            stableCount++;
+            latestAt ??= sample.Timestamp;
+        }
+
+        return new SetpointStillnessAnalysis(stableCount, latestAt);
+    }
+
+    private void PruneSetpointStillnessSamples(DateTimeOffset now)
+    {
+        var window = TimeSpan.FromMinutes(30);
+        state.SetpointStillnessSamples.RemoveAll(item => now - item.Timestamp > window);
+        if (state.SetpointStillnessSamples.Count > 500)
+        {
+            state.SetpointStillnessSamples.RemoveRange(0, state.SetpointStillnessSamples.Count - 500);
         }
     }
 
@@ -4972,6 +5126,23 @@ public sealed class DefenderStateStore
         }
     }
 
+    private static void PruneLoadedSetpointStillnessSamples(DefenderRuntimeState saved)
+    {
+        var now = DateTimeOffset.UtcNow;
+        saved.SetpointStillnessSamples ??= [];
+        saved.SetpointStillnessSamples.RemoveAll(item => now - item.Timestamp > TimeSpan.FromMinutes(30));
+        if (saved.SetpointStillnessSamples.Count > 500)
+        {
+            saved.SetpointStillnessSamples.RemoveRange(0, saved.SetpointStillnessSamples.Count - 500);
+        }
+
+        if (saved.SetpointStillnessUntil is { } until && until <= now)
+        {
+            saved.SetpointStillnessStartedAt = null;
+            saved.SetpointStillnessUntil = null;
+        }
+    }
+
     private DefenderRuntimeState LoadState()
     {
         try
@@ -5131,6 +5302,11 @@ public sealed class DefenderStateStore
         saved.Settings.RepeatCommandMinimumWaitSeconds = Math.Clamp(saved.Settings.RepeatCommandMinimumWaitSeconds, 0, 1800);
         saved.Settings.RepeatCommandPressureExtraSeconds = Math.Clamp(saved.Settings.RepeatCommandPressureExtraSeconds, 0, 3600);
         saved.Settings.RepeatCommandSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.RepeatCommandSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.SetpointStillnessTriggerTouches = Math.Clamp(saved.Settings.SetpointStillnessTriggerTouches <= 0 ? 2 : saved.Settings.SetpointStillnessTriggerTouches, 1, 20);
+        saved.Settings.SetpointStillnessRequiredSamples = Math.Clamp(saved.Settings.SetpointStillnessRequiredSamples <= 0 ? 3 : saved.Settings.SetpointStillnessRequiredSamples, 2, 20);
+        saved.Settings.SetpointStillnessMaxHoldSeconds = Math.Clamp(saved.Settings.SetpointStillnessMaxHoldSeconds <= 0 ? 180 : saved.Settings.SetpointStillnessMaxHoldSeconds, 5, 3600);
+        saved.Settings.SetpointStillnessToleranceCelsius = Math.Round(Math.Clamp(saved.Settings.SetpointStillnessToleranceCelsius <= 0 ? 0.05 : saved.Settings.SetpointStillnessToleranceCelsius, 0.01, 0.5), 2);
+        saved.Settings.SetpointStillnessSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.SetpointStillnessSafetyBandCelsius <= 0 ? 1.0 : saved.Settings.SetpointStillnessSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.SensorRhythmMinimumSamples = Math.Clamp(saved.Settings.SensorRhythmMinimumSamples, 2, 60);
         saved.Settings.SensorRhythmWindowMinutes = Math.Clamp(saved.Settings.SensorRhythmWindowMinutes, 5, 1440);
         saved.Settings.SensorRhythmJitterSeconds = Math.Clamp(saved.Settings.SensorRhythmJitterSeconds, 0, 300);
@@ -5177,6 +5353,7 @@ public sealed class DefenderStateStore
         saved.RoomTemperatureSamples ??= [];
         saved.WeatherSamples ??= [];
         saved.HomeAssistantReadingTimes ??= [];
+        saved.SetpointStillnessSamples ??= [];
         saved.ComfortMemorySlots ??= [];
         saved.DefenderCommandTimes ??= [];
         saved.VisibilityNoticeTimes ??= [];
@@ -5186,6 +5363,7 @@ public sealed class DefenderStateStore
         PruneLoadedVisibilityNoticeTimes(saved);
         PruneLoadedRemoteChangeTimes(saved);
         PruneLoadedHomeAssistantReadingTimes(saved);
+        PruneLoadedSetpointStillnessSamples(saved);
         saved.NaturalRecoveryStatus = string.IsNullOrWhiteSpace(saved.NaturalRecoveryStatus)
             ? "Comfort sync is ready."
             : saved.NaturalRecoveryStatus;
@@ -5337,6 +5515,21 @@ public sealed class DefenderStateStore
         {
             saved.RepeatCommandHoldUntil = null;
             saved.RepeatCommandStatus = "Repeat quiet is watching for identical follow-up commands.";
+        }
+        saved.SetpointStillnessStatus = string.IsNullOrWhiteSpace(saved.SetpointStillnessStatus)
+            ? "Setpoint stillness is watching for stable real readings."
+            : saved.SetpointStillnessStatus;
+        if (!saved.Settings.SetpointStillnessGuardEnabled)
+        {
+            saved.SetpointStillnessStartedAt = null;
+            saved.SetpointStillnessUntil = null;
+            saved.SetpointStillnessStatus = "Setpoint stillness is off.";
+        }
+        else if (saved.SetpointStillnessUntil is { } stillnessUntil && stillnessUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.SetpointStillnessStartedAt = null;
+            saved.SetpointStillnessUntil = null;
+            saved.SetpointStillnessStatus = "Setpoint stillness is watching for stable real readings.";
         }
         if (saved.PendingCommandAt is { } pendingAt
             && DateTimeOffset.UtcNow - pendingAt > TimeSpan.FromSeconds(Math.Max(saved.Settings.SetpointEchoGraceSeconds, 300)))
@@ -5590,6 +5783,13 @@ public sealed class DefenderStateStore
         var repeatCommandSeconds = state.RepeatCommandHoldUntil is { } repeatUntil && repeatUntil > now
             ? (int)Math.Ceiling((repeatUntil - now).TotalSeconds)
             : 0;
+        var setpointStillnessSeconds = state.SetpointStillnessUntil is { } stillnessUntil && stillnessUntil > now
+            ? (int)Math.Ceiling((stillnessUntil - now).TotalSeconds)
+            : 0;
+        if (setpointStillnessSeconds == 0 && state.SetpointStillnessUntil is not null)
+        {
+            ClearSetpointStillness("Setpoint stillness max wait ended; watching for settled wall setpoints.");
+        }
         var routineTimingSeconds = state.RoutineTimingDueAt is { } routineDueAt && routineDueAt > now
             ? (int)Math.Ceiling((routineDueAt - now).TotalSeconds)
             : 0;
@@ -5688,6 +5888,9 @@ public sealed class DefenderStateStore
         var coolerIntent = BuildCoolerIntentAnalysis(now);
         var wallSettlingTouchCount = GetRecentWallSettlingTouches(now).Count;
         var wallSettlingSettleSeconds = CalculateWallSettlingSeconds(wallSettlingTouchCount);
+        var setpointStillness = state.HomeAssistantThermostat is { } stillnessThermostat
+            ? BuildSetpointStillnessAnalysis(stillnessThermostat.SetPointCelsius, now)
+            : new SetpointStillnessAnalysis(0, null);
         var sensorRhythm = BuildSensorRhythmAnalysis(now);
         PruneComfortMemory(now);
         var memorySlot = FindComfortMemorySlot(now);
@@ -5966,6 +6169,17 @@ public sealed class DefenderStateStore
                     ? "Repeat quiet is watching for identical follow-up commands."
                     : state.RepeatCommandStatus,
                 repeatCommandSeconds > 0 ? state.RepeatCommandHoldUntil : null),
+            new SetpointStillnessSnapshot(
+                state.Settings.SetpointStillnessGuardEnabled,
+                setpointStillnessSeconds > 0,
+                setpointStillnessSeconds,
+                setpointStillness.StableSampleCount,
+                Math.Max(2, state.Settings.SetpointStillnessRequiredSamples),
+                state.HomeAssistantThermostat?.SetPointCelsius,
+                string.IsNullOrWhiteSpace(state.SetpointStillnessStatus)
+                    ? "Setpoint stillness is watching for stable real readings."
+                    : state.SetpointStillnessStatus,
+                setpointStillnessSeconds > 0 ? state.SetpointStillnessUntil : null),
             new SensorRhythmSnapshot(
                 state.Settings.SensorRhythmGuardEnabled,
                 sensorRhythmSeconds > 0,
@@ -6126,6 +6340,7 @@ public sealed class DefenderStateStore
         ClearNaturalChangePlanner("Comfort Pace is watching.");
         ClearComfortEnvelope("Comfort envelope is watching.");
         ClearRepeatCommand("Repeat quiet is watching.");
+        ClearSetpointStillness("Setpoint stillness is watching for stable real readings.");
         ClearCoolingRunway("Cooling runway is watching.");
         ClearSensorRhythm("Sensor rhythm is watching.");
         ClearHvacActionAlibi("HVAC alibi is watching for a real action transition.");
@@ -6227,6 +6442,13 @@ public sealed class DefenderStateStore
         state.RepeatCommandStatus = status;
     }
 
+    private void ClearSetpointStillness(string status)
+    {
+        state.SetpointStillnessStartedAt = null;
+        state.SetpointStillnessUntil = null;
+        state.SetpointStillnessStatus = status;
+    }
+
     private void ClearCoolingRunway(string status)
     {
         state.CoolingRunwayHoldUntil = null;
@@ -6321,6 +6543,7 @@ public sealed class DefenderStateStore
             ClearNaturalChangePlanner("Comfort Pace used its climate slot; watching for the next calm opening.");
             ClearComfortEnvelope("Real comfort command sent; comfort envelope is watching again.");
             ClearRepeatCommand("Repeat quiet used its slot; watching for identical follow-up commands.");
+            ClearSetpointStillness("Setpoint stillness used its settled window; watching for the next wall pause.");
             ClearHvacActionAlibi("HVAC alibi used its timing cue; watching for the next safe transition.");
         }
         else
@@ -6727,6 +6950,12 @@ public sealed class DefenderStateStore
             RepeatCommandMinimumWaitSeconds = settings.RepeatCommandMinimumWaitSeconds,
             RepeatCommandPressureExtraSeconds = settings.RepeatCommandPressureExtraSeconds,
             RepeatCommandSafetyBandCelsius = settings.RepeatCommandSafetyBandCelsius,
+            SetpointStillnessGuardEnabled = settings.SetpointStillnessGuardEnabled,
+            SetpointStillnessTriggerTouches = settings.SetpointStillnessTriggerTouches,
+            SetpointStillnessRequiredSamples = settings.SetpointStillnessRequiredSamples,
+            SetpointStillnessMaxHoldSeconds = settings.SetpointStillnessMaxHoldSeconds,
+            SetpointStillnessToleranceCelsius = settings.SetpointStillnessToleranceCelsius,
+            SetpointStillnessSafetyBandCelsius = settings.SetpointStillnessSafetyBandCelsius,
             SensorRhythmGuardEnabled = settings.SensorRhythmGuardEnabled,
             SensorRhythmMinimumSamples = settings.SensorRhythmMinimumSamples,
             SensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes,
@@ -7007,6 +7236,14 @@ public sealed class DefenderStateStore
 
         public string RepeatCommandStatus { get; set; } = "Repeat quiet is watching for identical follow-up commands.";
 
+        public DateTimeOffset? SetpointStillnessStartedAt { get; set; }
+
+        public DateTimeOffset? SetpointStillnessUntil { get; set; }
+
+        public List<SetpointStillnessSample> SetpointStillnessSamples { get; set; } = [];
+
+        public string SetpointStillnessStatus { get; set; } = "Setpoint stillness is watching for stable real readings.";
+
         public DateTimeOffset? SensorRhythmDueAt { get; set; }
 
         public string SensorRhythmStatus { get; set; } = "Sensor rhythm is watching.";
@@ -7168,6 +7405,14 @@ public sealed class DefenderStateStore
         DateTimeOffset Timestamp,
         double OutdoorTemperatureCelsius,
         string? Condition);
+
+    private sealed record SetpointStillnessSample(
+        DateTimeOffset Timestamp,
+        double SetPointCelsius);
+
+    private sealed record SetpointStillnessAnalysis(
+        int StableSampleCount,
+        DateTimeOffset? LatestSampleAt);
 
     private sealed record SensorRhythmAnalysis(
         int SampleCount,

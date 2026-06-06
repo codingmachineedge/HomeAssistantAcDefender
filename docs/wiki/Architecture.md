@@ -61,6 +61,8 @@ Super Defender is evaluated from the same real Home Assistant readings and audit
 
 Setpoint Echo is evaluated in `DefenderStateStore` using the same pending setpoint command record that attributes Home Assistant updates to the app. `AcDefenderService` can wait for that real echo before sending another safe command, and bypasses the wait when direct comfort correction is needed.
 
+Setpoint Stillness is a persisted timing guard in `DefenderStateStore`. It records real Home Assistant setpoint samples from climate readings and lets `AcDefenderService` wait only for safe corrections until the same wall setpoint appears for the configured number of readings. It clears when direct comfort correction is needed, the expected setpoint already matches, or the max hold expires.
+
 Repeat Quiet is evaluated after the final command setpoint is calculated and before `AcDefenderService` writes to Home Assistant. It compares the pending real command against the last defender setpoint and delays only safe identical repeats; different cooling steps and direct comfort corrections continue.
 
 Sensor Rhythm is a persisted timing guard in `DefenderStateStore`. It stores real Home Assistant climate reading timestamps, learns the median reading interval, and lets `AcDefenderService` delay only safe corrections until just after that cadence. It clears before direct comfort correction.

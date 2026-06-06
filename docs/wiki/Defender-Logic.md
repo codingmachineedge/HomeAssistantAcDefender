@@ -205,6 +205,12 @@ Waits before sending the very same thermostat number again.
 - **Logic:** if the next safe command repeats the last number, it waits at least the minimum wait plus extra pressure seconds (scaling with recent touches and commands). Different one-degree step-downs pass through.
 - **Settings:** `RepeatCommandGuardEnabled`, `RepeatCommandMinimumWaitSeconds`, `RepeatCommandPressureExtraSeconds`, `RepeatCommandSafetyBandCelsius`.
 
+### Setpoint Stillness
+Waits until the wall setpoint stops moving before a safe correction answers back.
+- **Watches:** real Home Assistant climate readings, the current reported setpoint, recent wall touches, and room temperature.
+- **Logic:** after repeated external touches, while the room is still inside the safe band, it requires the configured number of consecutive real readings at the same setpoint before allowing a safe correction. A too-warm room, cooler-intent bypass, matching expected setpoint, or max-hold expiry releases it.
+- **Settings:** `SetpointStillnessGuardEnabled`, `SetpointStillnessTriggerTouches`, `SetpointStillnessRequiredSamples`, `SetpointStillnessMaxHoldSeconds`, `SetpointStillnessToleranceCelsius`, `SetpointStillnessSafetyBandCelsius`.
+
 ### Sensor Rhythm
 Times nudges to just after the normal Home Assistant reading beat so they look less mechanical.
 - **Logic:** with at least the minimum samples in the rhythm window, it learns the median update interval and waits until just after the next beat plus a small jitter.

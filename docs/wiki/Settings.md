@@ -120,6 +120,12 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Repeat wait seconds: smallest wait before an identical follow-up command.
 - Repeat pressure seconds: extra wait added when wall touches or helper commands pile up.
 - Repeat safe band C: extra warmth allowed before repeat quiet stops waiting.
+- Setpoint stillness: waits for real readings to show the wall setpoint has stopped moving.
+- Stillness touches: recent external changes needed before this guard can hold.
+- Stable samples: matching Home Assistant setpoint readings needed before a safe correction continues.
+- Max hold seconds: longest safe wait for the wall setpoint to settle.
+- Tolerance C: how close readings must be to count as the same setpoint.
+- Stillness safe band C: extra warmth allowed before stillness stops waiting.
 - Sensor rhythm: waits for a normal Home Assistant sensor beat before safe nudges.
 - Rhythm samples: real Home Assistant readings needed before the beat is trusted.
 - Rhythm window minutes: how long reading timestamps stay useful.

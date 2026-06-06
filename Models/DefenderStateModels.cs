@@ -40,6 +40,7 @@ public sealed record DefenderSnapshot(
     CoolerIntentSnapshot CoolerIntent,
     SetpointEchoSnapshot SetpointEcho,
     RepeatCommandSnapshot RepeatCommand,
+    SetpointStillnessSnapshot SetpointStillness,
     SensorRhythmSnapshot SensorRhythm,
     HvacActionAlibiSnapshot HvacActionAlibi,
     CoolingRunwaySnapshot CoolingRunway,
@@ -346,6 +347,16 @@ public sealed record RepeatCommandSnapshot(
     int SecondsRemaining,
     int Pressure,
     double? LastSetPointCelsius,
+    string Status,
+    DateTimeOffset? Until);
+
+public sealed record SetpointStillnessSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    int StableSampleCount,
+    int RequiredStableSamples,
+    double? CurrentSetPointCelsius,
     string Status,
     DateTimeOffset? Until);
 
@@ -722,6 +733,18 @@ public sealed class DefenderSettings
     public int RepeatCommandPressureExtraSeconds { get; set; } = 240;
 
     public double RepeatCommandSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool SetpointStillnessGuardEnabled { get; set; } = true;
+
+    public int SetpointStillnessTriggerTouches { get; set; } = 2;
+
+    public int SetpointStillnessRequiredSamples { get; set; } = 3;
+
+    public int SetpointStillnessMaxHoldSeconds { get; set; } = 180;
+
+    public double SetpointStillnessToleranceCelsius { get; set; } = 0.05;
+
+    public double SetpointStillnessSafetyBandCelsius { get; set; } = 1.0;
 
     public bool SensorRhythmGuardEnabled { get; set; } = true;
 
