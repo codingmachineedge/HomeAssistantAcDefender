@@ -92,6 +92,17 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("remote settling home assistant phone automation quiet source")) {
+                <MudExpansionPanel Text="Remote settling" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Remote settling" Value="_remoteSettlingGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _remoteSettlingGuardEnabled = x))" Help="Wait quietly after repeated Home Assistant phone or automation changes." />
+                        <SettingInt Label="Remote trigger" Value="_remoteSettlingTriggerChanges" ValueChanged="@(v => SetDirty(v, x => _remoteSettlingTriggerChanges = x))" Min="1" Max="20" Help="Home Assistant-side changes needed before the quiet hold starts." />
+                        <SettingInt Label="Remote window" Unit="min" Value="_remoteSettlingWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _remoteSettlingWindowMinutes = x))" Min="1" Max="1440" Help="How long phone/automation changes remain part of the pattern." />
+                        <SettingInt Label="Quiet hold" Unit="min" Value="_remoteSettlingHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _remoteSettlingHoldMinutes = x))" Min="0" Max="240" Help="How long safe corrections wait after the remote pattern." />
+                        <SettingDouble Label="Safe band" Value="_remoteSettlingSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _remoteSettlingSafetyBandCelsius = x))" Min="0.1" Max="10" Help="Warmth allowed before remote settling stops waiting." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
         </MudExpansionPanels>
     </SectionCard>
 
@@ -746,6 +757,11 @@
     private int _superDefenderHoldMinutes = 45;
     private double _superDefenderSafetyBandCelsius = 1.5;
     private bool _superDefenderBypassQuietTiming = true;
+    private bool _remoteSettlingGuardEnabled = true;
+    private int _remoteSettlingTriggerChanges = 2;
+    private int _remoteSettlingWindowMinutes = 30;
+    private int _remoteSettlingHoldMinutes = 12;
+    private double _remoteSettlingSafetyBandCelsius = 1.0;
     private bool _fanEnergySaverEnabled;
     private double _fanEnergySaverThresholdCelsius = 0.6;
     private string _fanEnergySaverMode = "auto";
@@ -970,6 +986,11 @@
         _superDefenderHoldMinutes = settings.SuperDefenderHoldMinutes;
         _superDefenderSafetyBandCelsius = settings.SuperDefenderSafetyBandCelsius;
         _superDefenderBypassQuietTiming = settings.SuperDefenderBypassQuietTiming;
+        _remoteSettlingGuardEnabled = settings.RemoteSettlingGuardEnabled;
+        _remoteSettlingTriggerChanges = settings.RemoteSettlingTriggerChanges;
+        _remoteSettlingWindowMinutes = settings.RemoteSettlingWindowMinutes;
+        _remoteSettlingHoldMinutes = settings.RemoteSettlingHoldMinutes;
+        _remoteSettlingSafetyBandCelsius = settings.RemoteSettlingSafetyBandCelsius;
         _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
         _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
         _fanEnergySaverMode = settings.FanEnergySaverMode;
@@ -1246,6 +1267,11 @@
             _superDefenderHoldMinutes,
             _superDefenderSafetyBandCelsius,
             _superDefenderBypassQuietTiming,
+            _remoteSettlingGuardEnabled,
+            _remoteSettlingTriggerChanges,
+            _remoteSettlingWindowMinutes,
+            _remoteSettlingHoldMinutes,
+            _remoteSettlingSafetyBandCelsius,
             _fanEnergySaverEnabled,
             _fanEnergySaverThresholdCelsius,
             _fanEnergySaverMode,

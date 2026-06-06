@@ -49,6 +49,7 @@ public sealed record DefenderSnapshot(
     WeatherDriftSnapshot WeatherDrift,
     PeakPowerSaverSnapshot PeakPowerSaver,
     SuperDefenderSnapshot SuperDefender,
+    RemoteSettlingSnapshot RemoteSettling,
     CoolingFailureSnapshot CoolingFailure,
     ComfortSnapshot Comfort,
     DefenderSettings Settings,
@@ -441,6 +442,16 @@ public sealed record SuperDefenderSnapshot(
     string LastChangeDetail,
     string Status,
     string NetworkLockdownStatus,
+    DateTimeOffset? Until);
+
+public sealed record RemoteSettlingSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    int RecentRemoteChangeCount,
+    int TriggerRemoteChangeCount,
+    string LastChangeSource,
+    string Status,
     DateTimeOffset? Until);
 
 public sealed record CoolingFailureSnapshot(
@@ -841,6 +852,16 @@ public sealed class DefenderSettings
     public double SuperDefenderSafetyBandCelsius { get; set; } = 1.5;
 
     public bool SuperDefenderBypassQuietTiming { get; set; } = true;
+
+    public bool RemoteSettlingGuardEnabled { get; set; } = true;
+
+    public int RemoteSettlingTriggerChanges { get; set; } = 2;
+
+    public int RemoteSettlingWindowMinutes { get; set; } = 30;
+
+    public int RemoteSettlingHoldMinutes { get; set; } = 12;
+
+    public double RemoteSettlingSafetyBandCelsius { get; set; } = 1.0;
 
     public bool FanEnergySaverEnabled { get; set; }
 

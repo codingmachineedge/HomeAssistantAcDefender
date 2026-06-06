@@ -23,6 +23,11 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Remote window minutes: how long remote-style changes count.
 - Strict hold minutes: how long the strict response remains armed.
 - Strict safe band C: extra warmth allowed before Super Defender leaves normal quiet timing alone.
+- Remote settling: waits quietly after repeated Home Assistant phone/user or automation changes.
+- Remote trigger: Home Assistant-side changes needed before the quiet hold starts.
+- Remote settling window minutes: how long remote-style changes count for the quiet hold.
+- Quiet hold minutes: how long safe corrections wait after a remote pattern.
+- Remote settling safe band C: extra warmth allowed before remote settling stops waiting.
 
 ## Comfort Sync
 

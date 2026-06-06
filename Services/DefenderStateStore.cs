@@ -360,6 +360,15 @@ public sealed class DefenderStateStore
             {
                 ClearSuperDefender("Super Defender is off.");
             }
+            state.Settings.RemoteSettlingGuardEnabled = request.RemoteSettlingGuardEnabled;
+            state.Settings.RemoteSettlingTriggerChanges = Math.Clamp(request.RemoteSettlingTriggerChanges, 1, 20);
+            state.Settings.RemoteSettlingWindowMinutes = Math.Clamp(request.RemoteSettlingWindowMinutes, 1, 1440);
+            state.Settings.RemoteSettlingHoldMinutes = Math.Clamp(request.RemoteSettlingHoldMinutes, 0, 240);
+            state.Settings.RemoteSettlingSafetyBandCelsius = Math.Round(Math.Clamp(request.RemoteSettlingSafetyBandCelsius, 0.1, 10.0), 1);
+            if (!state.Settings.RemoteSettlingGuardEnabled)
+            {
+                ClearRemoteSettling("Remote settling guard is off.");
+            }
             state.Settings.FanEnergySaverEnabled = request.FanEnergySaverEnabled;
             state.Settings.FanEnergySaverThresholdCelsius = Math.Clamp(request.FanEnergySaverThresholdCelsius, 0.1, 5.0);
             state.Settings.FanEnergySaverMode = string.IsNullOrWhiteSpace(request.FanEnergySaverMode)
@@ -1613,6 +1622,94 @@ public sealed class DefenderStateStore
             state.SetpointStillnessUntil = waitUntil;
             message = $"Setpoint stillness is waiting until {waitUntil.ToLocalTime():HH:mm:ss} for {requiredSamples} matching Home Assistant setpoint readings before the next safe correction.";
             state.SetpointStillnessStatus = message;
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>Remote Settling: true while repeated Home Assistant user/automation changes get a quiet settling window.</summary>
+    public bool TryRespectRemoteSettlingGuard(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.RemoteSettlingGuardEnabled)
+            {
+                ClearRemoteSettling("Remote settling guard is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneRemoteChangeTimes(now);
+            var triggerChanges = Math.Max(1, state.Settings.RemoteSettlingTriggerChanges);
+            var recentRemoteChanges = state.RemoteChangeTimes.Count;
+            var lastSource = string.IsNullOrWhiteSpace(state.LastChangeSource) ? "none" : state.LastChangeSource;
+            if (recentRemoteChanges < triggerChanges || !IsRemoteChangeSource(lastSource))
+            {
+                ClearRemoteSettling($"Remote settling is watching for repeated Home Assistant changes ({recentRemoteChanges}/{triggerChanges}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearRemoteSettling("Room comfort needs help now, so remote settling is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.RemoteSettlingSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearRemoteSettling($"Room is above {allowedRoomTemperature:0.0} C, so remote settling lets direct comfort continue.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearRemoteSettling("Setpoint is lined up; no remote settling wait needed.");
+                SaveState();
+                return false;
+            }
+
+            if (state.RemoteSettlingUntil is { } holdUntil)
+            {
+                if (holdUntil > now)
+                {
+                    waitUntil = holdUntil;
+                    message = $"Remote settling is holding safe correction until {holdUntil.ToLocalTime():HH:mm:ss} after {recentRemoteChanges} Home Assistant-side change(s). Last source: {lastSource}.";
+                    state.RemoteSettlingStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearRemoteSettling("Remote settling window ended; safe correction can continue if still needed.");
+                SaveState();
+                return false;
+            }
+
+            var holdMinutes = Math.Clamp(state.Settings.RemoteSettlingHoldMinutes, 0, 240);
+            if (holdMinutes <= 0)
+            {
+                ClearRemoteSettling("Remote settling hold is set to 0 minutes; safe correction can continue.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = now.AddMinutes(holdMinutes);
+            state.RemoteSettlingStartedAt = now;
+            state.RemoteSettlingUntil = waitUntil;
+            message = $"Remote settling is giving {lastSource} changes a quiet {holdMinutes} min window before a safe correction answers back.";
+            state.RemoteSettlingStatus = message;
             SaveState();
             return true;
         }
@@ -3106,6 +3203,7 @@ public sealed class DefenderStateStore
                 && state.ComfortEnvelopeUntil is null
                 && state.RepeatCommandHoldUntil is null
                 && state.SetpointStillnessUntil is null
+                && state.RemoteSettlingUntil is null
                 && state.VisibilityGuardUntil is null
                 && state.SensorRhythmDueAt is null
                 && state.CoolingRunwayHoldUntil is null
@@ -3185,6 +3283,9 @@ public sealed class DefenderStateStore
             ClearCoolingRunway(state.Settings.CoolingRunwayGuardEnabled
                 ? "Cooling runway is lined up; no fresh cooling hold needed."
                 : "Cooling runway is off.");
+            ClearRemoteSettling(state.Settings.RemoteSettlingGuardEnabled
+                ? "Remote settling is lined up; no Home Assistant-side quiet hold needed."
+                : "Remote settling guard is off.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
         }
@@ -3213,6 +3314,7 @@ public sealed class DefenderStateStore
                     ClearNaturalChangePlanner($"Schedule {activeSchedule.Name} changed the target, so Comfort Pace reset.");
                     ClearComfortEnvelope($"Schedule {activeSchedule.Name} changed the target, so comfort envelope reset.");
                     ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
+                    ClearRemoteSettling($"Schedule {activeSchedule.Name} changed the target, so remote settling reset.");
                     ClearCoolingRunway($"Schedule {activeSchedule.Name} changed the target, so cooling runway reset.");
                     ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
                     AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C.");
@@ -3260,6 +3362,7 @@ public sealed class DefenderStateStore
                 ClearNaturalChangePlanner("Upstairs comfort changed the target, so Comfort Pace reset.");
                 ClearComfortEnvelope("Upstairs comfort changed the target, so comfort envelope reset.");
                 ClearRepeatCommand("Upstairs comfort changed the target, so repeat quiet reset.");
+                ClearRemoteSettling("Upstairs comfort changed the target, so remote settling reset.");
                 ClearCoolingRunway("Upstairs comfort changed the target, so cooling runway reset.");
                 ClearComfortCompromise("Upstairs comfort changed the target, so comfort compromise reset.");
                 AddEvent("warning", $"Upstairs comfort guard lowered target to {state.TargetTemperatureCelsius:0.0} C.");
@@ -3695,6 +3798,12 @@ public sealed class DefenderStateStore
             false);
     }
 
+    private static bool IsRemoteChangeSource(string? source)
+    {
+        return string.Equals(source, "home-assistant-user", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(source, "home-assistant-automation", StringComparison.OrdinalIgnoreCase);
+    }
+
     private bool TryClassifyPendingThermostatCommandEcho(
         ThermostatReading reading,
         DateTimeOffset now,
@@ -3751,20 +3860,26 @@ public sealed class DefenderStateStore
     {
         PruneRemoteChangeTimes(now);
 
-        if (!state.Settings.SuperDefenderModeEnabled)
-        {
-            ClearSuperDefender("Super Defender is off.");
-            return;
-        }
-
         if (!source.CountsAsRemote)
         {
             state.SuperDefenderStatus = $"Last change looked like {source.Label}; Super Defender is watching for phone/Home Assistant changes.";
+            state.RemoteSettlingStatus = $"Last change looked like {source.Label}; remote settling is watching for Home Assistant user or automation changes.";
             return;
         }
 
         state.RemoteChangeTimes.Add(now);
         PruneRemoteChangeTimes(now);
+
+        var remoteTrigger = Math.Max(1, state.Settings.RemoteSettlingTriggerChanges);
+        state.RemoteSettlingStatus = state.Settings.RemoteSettlingGuardEnabled
+            ? $"Remote settling logged {state.RemoteChangeTimes.Count}/{remoteTrigger} Home Assistant-side change(s); safe corrections may wait for the remote dust to settle."
+            : "Remote settling guard is off.";
+
+        if (!state.Settings.SuperDefenderModeEnabled)
+        {
+            ClearSuperDefender("Super Defender is off.");
+            return;
+        }
 
         var threshold = Math.Max(1, state.Settings.SuperDefenderRemoteChangeThreshold);
         var count = state.RemoteChangeTimes.Count;
@@ -3892,6 +4007,7 @@ public sealed class DefenderStateStore
         ClearVisibilityGuard("Cooler intent fast lane is active, so visibility guard is stepping aside.");
         ClearRepeatCommand("Cooler intent fast lane is active, so repeat quiet is stepping aside.");
         ClearSetpointStillness("Cooler intent fast lane is active, so setpoint stillness is stepping aside.");
+        ClearRemoteSettling("Cooler intent fast lane is active, so remote settling is stepping aside.");
         ClearCoolingRunway("Cooler intent fast lane is active, so cooling runway is stepping aside.");
         ClearSensorRhythm("Cooler intent fast lane is active, so sensor rhythm is stepping aside.");
         state.RoomTrendHoldUntil = null;
@@ -5038,7 +5154,10 @@ public sealed class DefenderStateStore
     private void PruneRemoteChangeTimes(DateTimeOffset now)
     {
         state.RemoteChangeTimes ??= [];
-        var window = TimeSpan.FromMinutes(Math.Max(1, state.Settings.SuperDefenderWindowMinutes));
+        var windowMinutes = Math.Max(
+            Math.Max(1, state.Settings.SuperDefenderWindowMinutes),
+            Math.Max(1, state.Settings.RemoteSettlingWindowMinutes));
+        var window = TimeSpan.FromMinutes(windowMinutes);
         state.RemoteChangeTimes.RemoveAll(item => now - item > window);
         if (state.RemoteChangeTimes.Count > 200)
         {
@@ -5048,6 +5167,11 @@ public sealed class DefenderStateStore
         if (state.SuperDefenderUntil is { } until && until <= now)
         {
             state.SuperDefenderUntil = null;
+        }
+
+        if (state.RemoteSettlingUntil is { } remoteUntil && remoteUntil <= now)
+        {
+            state.RemoteSettlingUntil = null;
         }
     }
 
@@ -5102,7 +5226,10 @@ public sealed class DefenderStateStore
     {
         var now = DateTimeOffset.UtcNow;
         saved.RemoteChangeTimes ??= [];
-        var window = TimeSpan.FromMinutes(Math.Max(1, saved.Settings.SuperDefenderWindowMinutes));
+        var windowMinutes = Math.Max(
+            Math.Max(1, saved.Settings.SuperDefenderWindowMinutes),
+            Math.Max(1, saved.Settings.RemoteSettlingWindowMinutes));
+        var window = TimeSpan.FromMinutes(windowMinutes);
         saved.RemoteChangeTimes.RemoveAll(item => now - item > window);
         if (saved.RemoteChangeTimes.Count > 200)
         {
@@ -5112,6 +5239,12 @@ public sealed class DefenderStateStore
         if (saved.SuperDefenderUntil is { } until && until <= now)
         {
             saved.SuperDefenderUntil = null;
+        }
+
+        if (saved.RemoteSettlingUntil is { } remoteUntil && remoteUntil <= now)
+        {
+            saved.RemoteSettlingStartedAt = null;
+            saved.RemoteSettlingUntil = null;
         }
     }
 
@@ -5343,6 +5476,10 @@ public sealed class DefenderStateStore
         saved.Settings.SuperDefenderWindowMinutes = Math.Clamp(saved.Settings.SuperDefenderWindowMinutes, 1, 1440);
         saved.Settings.SuperDefenderHoldMinutes = Math.Clamp(saved.Settings.SuperDefenderHoldMinutes, 0, 240);
         saved.Settings.SuperDefenderSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.SuperDefenderSafetyBandCelsius, 0.1, 10.0), 1);
+        saved.Settings.RemoteSettlingTriggerChanges = Math.Clamp(saved.Settings.RemoteSettlingTriggerChanges <= 0 ? 2 : saved.Settings.RemoteSettlingTriggerChanges, 1, 20);
+        saved.Settings.RemoteSettlingWindowMinutes = Math.Clamp(saved.Settings.RemoteSettlingWindowMinutes <= 0 ? 30 : saved.Settings.RemoteSettlingWindowMinutes, 1, 1440);
+        saved.Settings.RemoteSettlingHoldMinutes = Math.Clamp(saved.Settings.RemoteSettlingHoldMinutes <= 0 ? 12 : saved.Settings.RemoteSettlingHoldMinutes, 0, 240);
+        saved.Settings.RemoteSettlingSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.RemoteSettlingSafetyBandCelsius <= 0 ? 1.0 : saved.Settings.RemoteSettlingSafetyBandCelsius, 0.1, 10.0), 1);
         saved.Settings.DefenderRunsContinuously = true;
         saved.Schedule ??= [];
         saved.Events ??= [];
@@ -5638,6 +5775,21 @@ public sealed class DefenderStateStore
             saved.SuperDefenderUntil = null;
             saved.SuperDefenderStatus = "Super Defender is watching for repeated phone or Home Assistant changes.";
         }
+        saved.RemoteSettlingStatus = string.IsNullOrWhiteSpace(saved.RemoteSettlingStatus)
+            ? "Remote settling is watching for Home Assistant user or automation changes."
+            : saved.RemoteSettlingStatus;
+        if (!saved.Settings.RemoteSettlingGuardEnabled)
+        {
+            saved.RemoteSettlingStartedAt = null;
+            saved.RemoteSettlingUntil = null;
+            saved.RemoteSettlingStatus = "Remote settling guard is off.";
+        }
+        else if (saved.RemoteSettlingUntil is { } remoteSettlingUntil && remoteSettlingUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.RemoteSettlingStartedAt = null;
+            saved.RemoteSettlingUntil = null;
+            saved.RemoteSettlingStatus = "Remote settling is watching for Home Assistant user or automation changes.";
+        }
         saved.EmergencyProtocol = string.IsNullOrWhiteSpace(saved.EmergencyProtocol)
             ? "None"
             : saved.EmergencyProtocol;
@@ -5748,6 +5900,13 @@ public sealed class DefenderStateStore
         var superDefenderSeconds = state.SuperDefenderUntil is { } superUntil && superUntil > now
             ? (int)Math.Ceiling((superUntil - now).TotalSeconds)
             : 0;
+        var remoteSettlingSeconds = state.RemoteSettlingUntil is { } remoteSettlingUntil && remoteSettlingUntil > now
+            ? (int)Math.Ceiling((remoteSettlingUntil - now).TotalSeconds)
+            : 0;
+        if (remoteSettlingSeconds == 0 && state.RemoteSettlingUntil is not null)
+        {
+            ClearRemoteSettling("Remote settling window ended; watching for the next Home Assistant-side change pattern.");
+        }
         var superDefenderBypassing = state.Settings.SuperDefenderModeEnabled
             && state.Settings.SuperDefenderBypassQuietTiming
             && superDefenderSeconds > 0
@@ -6275,6 +6434,17 @@ public sealed class DefenderStateStore
                     : state.SuperDefenderStatus,
                 "Automatic Wi-Fi blocking is intentionally not sent by AC Defender. Use router/MAC controls manually only if you accept the risk of cutting off thermostat recovery and monitoring.",
                 superDefenderSeconds > 0 ? state.SuperDefenderUntil : null),
+            new RemoteSettlingSnapshot(
+                state.Settings.RemoteSettlingGuardEnabled,
+                remoteSettlingSeconds > 0,
+                remoteSettlingSeconds,
+                state.RemoteChangeTimes.Count,
+                Math.Max(1, state.Settings.RemoteSettlingTriggerChanges),
+                string.IsNullOrWhiteSpace(state.LastChangeSource) ? "none" : state.LastChangeSource,
+                string.IsNullOrWhiteSpace(state.RemoteSettlingStatus)
+                    ? "Remote settling is watching for Home Assistant user or automation changes."
+                    : state.RemoteSettlingStatus,
+                remoteSettlingSeconds > 0 ? state.RemoteSettlingUntil : null),
             new CoolingFailureSnapshot(
                 true,
                 coolingFailureAlerting,
@@ -6341,6 +6511,7 @@ public sealed class DefenderStateStore
         ClearComfortEnvelope("Comfort envelope is watching.");
         ClearRepeatCommand("Repeat quiet is watching.");
         ClearSetpointStillness("Setpoint stillness is watching for stable real readings.");
+        ClearRemoteSettling("Remote settling is watching for Home Assistant user or automation changes.");
         ClearCoolingRunway("Cooling runway is watching.");
         ClearSensorRhythm("Sensor rhythm is watching.");
         ClearHvacActionAlibi("HVAC alibi is watching for a real action transition.");
@@ -6449,6 +6620,13 @@ public sealed class DefenderStateStore
         state.SetpointStillnessStatus = status;
     }
 
+    private void ClearRemoteSettling(string status)
+    {
+        state.RemoteSettlingStartedAt = null;
+        state.RemoteSettlingUntil = null;
+        state.RemoteSettlingStatus = status;
+    }
+
     private void ClearCoolingRunway(string status)
     {
         state.CoolingRunwayHoldUntil = null;
@@ -6544,6 +6722,7 @@ public sealed class DefenderStateStore
             ClearComfortEnvelope("Real comfort command sent; comfort envelope is watching again.");
             ClearRepeatCommand("Repeat quiet used its slot; watching for identical follow-up commands.");
             ClearSetpointStillness("Setpoint stillness used its settled window; watching for the next wall pause.");
+            ClearRemoteSettling("Remote settling used its quiet window; watching for the next Home Assistant-side pattern.");
             ClearHvacActionAlibi("HVAC alibi used its timing cue; watching for the next safe transition.");
         }
         else
@@ -7004,6 +7183,11 @@ public sealed class DefenderStateStore
             SuperDefenderHoldMinutes = settings.SuperDefenderHoldMinutes,
             SuperDefenderSafetyBandCelsius = settings.SuperDefenderSafetyBandCelsius,
             SuperDefenderBypassQuietTiming = settings.SuperDefenderBypassQuietTiming,
+            RemoteSettlingGuardEnabled = settings.RemoteSettlingGuardEnabled,
+            RemoteSettlingTriggerChanges = settings.RemoteSettlingTriggerChanges,
+            RemoteSettlingWindowMinutes = settings.RemoteSettlingWindowMinutes,
+            RemoteSettlingHoldMinutes = settings.RemoteSettlingHoldMinutes,
+            RemoteSettlingSafetyBandCelsius = settings.RemoteSettlingSafetyBandCelsius,
             FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
             FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
             FanEnergySaverMode = settings.FanEnergySaverMode,
@@ -7319,6 +7503,12 @@ public sealed class DefenderStateStore
         public DateTimeOffset? SuperDefenderUntil { get; set; }
 
         public string SuperDefenderStatus { get; set; } = "Super Defender is watching for repeated phone or Home Assistant changes.";
+
+        public DateTimeOffset? RemoteSettlingStartedAt { get; set; }
+
+        public DateTimeOffset? RemoteSettlingUntil { get; set; }
+
+        public string RemoteSettlingStatus { get; set; } = "Remote settling is watching for Home Assistant user or automation changes.";
 
         public List<DateTimeOffset> RemoteChangeTimes { get; set; } = [];
 

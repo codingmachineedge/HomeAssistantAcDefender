@@ -589,6 +589,24 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Remote Settling Guard", GuardCategory.System,
+            "Gives repeated phone/Home Assistant or automation thermostat changes a quiet settling window before a safe answer-back.",
+            "Home Assistant change source attribution, recent remote-style change count, room temperature, and the expected setpoint.",
+            "When Home Assistant context shows repeated user/phone or automation changes inside the configured window, and the room is still inside the safety band, it holds only safe corrections for the quiet hold minutes. A too-warm room, cooler intent, matching setpoint, disabled setting, or expired hold releases it immediately.",
+            "Delays only safe corrections after remote-style thermostat changes so the response does not look instant.",
+            ["RemoteSettlingGuardEnabled", "RemoteSettlingTriggerChanges", "RemoteSettlingWindowMinutes", "RemoteSettlingHoldMinutes", "RemoteSettlingSafetyBandCelsius"],
+            s =>
+            {
+                var r = s.RemoteSettling;
+                return GuardLiveView.Standard(r.Enabled, r.Holding, "Holding", r.Status,
+                [
+                    new("Remote wait", OffWait(r.Enabled, r.Holding, r.SecondsRemaining), "Quiet hold after Home Assistant-side changes."),
+                    new("Remote changes", r.Enabled ? $"{r.RecentRemoteChangeCount}/{r.TriggerRemoteChangeCount}" : "Off", "Phone/Home Assistant changes inside the window."),
+                    new("Last source", r.Enabled ? r.LastChangeSource : "Off", "Last external source classification from Home Assistant context."),
+                ], busyTone: GuardTone.Holding);
+            }),
+
+        new GuardInfo(
             "Alectra Peak Power Saver", GuardCategory.System,
             "Makes the defender more chill and resource-saving when Alectra Hui reports on-peak, high price, or high power use.",
             "Alectra Hui current TOU period, current price, current power, and current plan sensors from Home Assistant.",

@@ -11,6 +11,7 @@ Key capabilities:
 - Dynamic cooldown after manual changes.
 - Home Assistant context attribution for user/phone, automation, and thermostat/device changes.
 - Super Defender strict timing for repeated remote-style thermostat changes, with network lockout left as a manual router decision.
+- Remote Settling Guard for quiet safe holds after repeated Home Assistant user/phone or automation changes.
 - Custom schedule with weather activation rules.
 - Helper descriptions under controls and action labels.
 - Upstairs comfort guard with optional home-presence awareness.

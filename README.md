@@ -39,6 +39,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds Touch Intent so clear warmer wall-choice patterns can get extra safe grace instead of an obvious immediate fight-back.
 - Adds Cooler Intent Fast Lane so repeated cooler wall choices can skip quiet waits and cool sooner without changing the website target.
 - Adds Super Defender so repeated Home Assistant user/phone or automation changes can temporarily bypass quiet waits while the room still needs cooling.
+- Adds Remote Settling Guard so repeated Home Assistant user/phone or automation changes get a quiet safe window before the defender answers back.
 - Adds Setpoint Stillness so safe corrections wait until real Home Assistant readings show the wall setpoint has stopped changing.
 - Adds a two-minute website command debounce only around controls that can affect thermostat temperature or mode.
 - Adds emergency protocols for too-cold, someone-upset, and suspicion quiet situations.
@@ -129,12 +130,13 @@ Every cycle:
 29. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
 30. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
 31. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
-32. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-33. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
-34. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
-35. Optionally set fan saver mode when near target.
-36. Correct the thermostat setpoint when it does not match the defender decision.
-37. Update the real-time dashboard status.
+32. Respect Remote Settling Guard when repeated Home Assistant-side changes should get a quiet safe window.
+33. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+34. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
+35. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
+36. Optionally set fan saver mode when near target.
+37. Correct the thermostat setpoint when it does not match the defender decision.
+38. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -145,6 +147,8 @@ Cooling failure watch reads only real Home Assistant data. It raises a repeated 
 Emergency protocols are real controls on the dashboard. `Too cold` pauses the defender and turns the thermostat off through Home Assistant. `Someone upset` and `Suspicion quiet` start observe-only windows where the worker keeps reading the thermostat 24/7 but does not send corrective thermostat commands until the quiet window ends.
 
 Super Defender is the strict response mode for repeated phone/Home Assistant changes. It watches only real Home Assistant context data from the climate entity. When enough remote-style changes happen inside the configured window, it arms for a hold period. While armed, if the room is still above target and not inside a safe natural-recovery band, it can bypass quiet timing so the normal warm-room correction runs sooner. The app intentionally does not send router or Wi-Fi blocking commands. If you want to block thermostat network access, use router/MAC controls manually and only if you accept the risk that the defender may lose thermostat monitoring and recovery.
+
+Remote Settling Guard is the quieter partner to Super Defender. It also uses real Home Assistant context attribution, but instead of getting stricter it gives repeated phone/user or automation changes a quiet settling window. During that window only safe corrections wait; if the room gets too warm, cooler intent is active, or direct cooling is needed, it clears immediately.
 
 ## Cool Mode Restore
 
@@ -282,6 +286,11 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `CoolerIntentHoldMinutes`: how long fast lane can keep quiet waits out of the way.
 - `CoolerIntentNetCoolThresholdCelsius`: net cooler movement needed before fast lane starts.
 - `CoolerIntentSafetyBandCelsius`: extra room warmth allowed before fast lane lets normal safety rules lead.
+- `RemoteSettlingGuardEnabled`: waits after repeated Home Assistant user/phone or automation changes before a safe correction answers back.
+- `RemoteSettlingTriggerChanges`: remote-style changes needed before Remote Settling can hold.
+- `RemoteSettlingWindowMinutes`: how long Home Assistant-side changes remain useful to the pattern.
+- `RemoteSettlingHoldMinutes`: quiet safe hold after the remote pattern is detected.
+- `RemoteSettlingSafetyBandCelsius`: extra room warmth allowed before Remote Settling stops waiting.
 - `SetpointEchoGuardEnabled`: waits for Home Assistant to report the last helper setpoint before another safe command.
 - `SetpointEchoGraceSeconds`: maximum safe wait for that Home Assistant setpoint echo.
 - `SetpointEchoSafetyBandCelsius`: extra room warmth allowed before Setpoint Echo stops waiting.

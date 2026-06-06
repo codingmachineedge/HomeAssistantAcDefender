@@ -59,6 +59,8 @@ Cooler Intent Fast Lane is also evaluated in `DefenderStateStore` after a real e
 
 Super Defender is evaluated from the same real Home Assistant readings and audit path. Repeated user/phone or automation-sourced changes inside the configured window arm a strict response hold. While armed, `AcDefenderService` can bypass quiet timing if the room still needs cooling and the safety band does not allow a normal natural hold. It does not send router, Wi-Fi, or firewall commands; the UI only explains that network blocking must be a manual router/MAC decision because automatic blocking can remove thermostat visibility and recovery.
 
+Remote Settling Guard uses the same real Home Assistant context attribution as Super Defender, but it delays only safe corrections instead of bypassing quiet timing. `DefenderStateStore` keeps the recent remote-style change timestamps, source label, and hold expiry. `AcDefenderService` checks it after Setpoint Stillness and before later sensor timing guards, clearing it immediately when room comfort requires direct cooling.
+
 Setpoint Echo is evaluated in `DefenderStateStore` using the same pending setpoint command record that attributes Home Assistant updates to the app. `AcDefenderService` can wait for that real echo before sending another safe command, and bypasses the wait when direct comfort correction is needed.
 
 Setpoint Stillness is a persisted timing guard in `DefenderStateStore`. It records real Home Assistant setpoint samples from climate readings and lets `AcDefenderService` wait only for safe corrections until the same wall setpoint appears for the configured number of readings. It clears when direct comfort correction is needed, the expected setpoint already matches, or the max hold expires.

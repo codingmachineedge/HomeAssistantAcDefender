@@ -47,6 +47,7 @@ The status snapshot includes:
 - `thermalMomentum`: real cooling rate, estimated minutes to target, hold status, and remaining hold seconds.
 - `peakPowerSaver`: Alectra Hui peak/high-price/high-power status, hold seconds, current kW, current c/kWh, TOU period, plan, thresholds, fan-saver flag, and latest usage timestamp.
 - `superDefender`: repeated Home Assistant user/phone or automation change status, active flag, strict wait bypass flag, recent remote-change count, last source, remaining seconds, and manual-only network-lockdown warning.
+- `remoteSettling`: quiet hold status after repeated Home Assistant-side changes, recent remote-change count, trigger count, last source, remaining seconds, and expiry time.
 - `coolingFailure`: mega-alert status, active seconds, alert count, suspected time, next repeat alert time, and status message.
 - `thermostatChanges`: external thermostat touch audit log, including previous/new setpoint, room/outdoor/weather context, source label, Home Assistant context ID, parent ID, user ID, and the raw JSON details shown by the Logs page.
 - `comfort`: upstairs comfort and presence status.
@@ -75,7 +76,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, Human Nudge, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, Setpoint Stillness, HVAC Alibi, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Human Nudge, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, Setpoint Stillness, HVAC Alibi, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, Remote Settling, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 

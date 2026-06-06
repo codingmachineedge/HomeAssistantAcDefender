@@ -191,6 +191,12 @@ Treats repeated phone/Home Assistant changes as a stricter signal than a single 
 - **Logic:** `user_id` is labeled as a Home Assistant user or phone app change, `parent_id` as an automation/script/service chain, and context without either field as a thermostat/device change. When enough remote-style changes happen inside the configured window, Super Defender arms for a hold period. While armed, if the room is above target and not inside the configured safe natural-recovery band, it can bypass quiet waits so the normal 1 C-below-room correction runs sooner. It does not automatically block Wi-Fi, router, or firewall access because that can remove thermostat monitoring and recovery; the app shows a manual-only network-lockdown warning instead.
 - **Settings:** `SuperDefenderModeEnabled`, `SuperDefenderRemoteChangeThreshold`, `SuperDefenderWindowMinutes`, `SuperDefenderHoldMinutes`, `SuperDefenderSafetyBandCelsius`, `SuperDefenderBypassQuietTiming`.
 
+### Remote Settling Guard
+Gives repeated Home Assistant user/phone or automation thermostat changes a quiet safe window before answering back.
+- **Watches:** real Home Assistant context source attribution, recent remote-style change count, room temperature, and the expected setpoint.
+- **Logic:** after enough Home Assistant user/phone or automation changes inside the configured window, it holds only safe corrections for the quiet hold minutes. A too-warm room, cooler-intent fast lane, direct comfort bypass, matching expected setpoint, disabled setting, or expired hold clears it.
+- **Settings:** `RemoteSettlingGuardEnabled`, `RemoteSettlingTriggerChanges`, `RemoteSettlingWindowMinutes`, `RemoteSettlingHoldMinutes`, `RemoteSettlingSafetyBandCelsius`.
+
 ---
 
 ## Sensor timing

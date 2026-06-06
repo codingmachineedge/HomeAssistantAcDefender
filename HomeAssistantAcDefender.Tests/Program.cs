@@ -34,6 +34,7 @@ tests.ComfortPaceWaitsAfterFrequentWallTouchesButBypassesHotRoom();
 tests.ComfortEnvelopeObservesSmallSafeWallPreferenceButBypassesHotRoom();
 tests.PeakPowerSaverHoldsSafeCoolingDuringAlectraOnPeakButBypassesHotRoom();
 tests.SuperDefenderClassifiesRemoteHomeAssistantChangesAndBypassesQuietTiming();
+tests.RemoteSettlingHoldsSafeRemotePatternButBypassesHotRoom();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -45,9 +46,9 @@ internal sealed class DefenderSetPointRegressionTests
         var snapshot = fixture.Store.GetSnapshot();
 
         var live = GuardCatalog.Live.ToList();
-        if (live.Count < 30)
+        if (live.Count < 31)
         {
-            throw new InvalidOperationException($"Expected at least 30 live guard cards in the catalog, found {live.Count}.");
+            throw new InvalidOperationException($"Expected at least 31 live guard cards in the catalog, found {live.Count}.");
         }
 
         foreach (var guard in live)
@@ -1381,6 +1382,83 @@ internal sealed class DefenderSetPointRegressionTests
         if (nearTargetBypass)
         {
             throw new InvalidOperationException("Super Defender should not bypass quiet timing when the room is already at target.");
+        }
+    }
+
+    public void RemoteSettlingHoldsSafeRemotePatternButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.SuperDefenderModeEnabled = false;
+        settings.RemoteSettlingGuardEnabled = true;
+        settings.RemoteSettlingTriggerChanges = 2;
+        settings.RemoteSettlingWindowMinutes = 30;
+        settings.RemoteSettlingHoldMinutes = 12;
+        settings.RemoteSettlingSafetyBandCelsius = 1.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var baseline = new ThermostatReading(
+            "climate.dining_room",
+            22.4,
+            22.0,
+            "cool",
+            "idle",
+            null,
+            [],
+            new HomeAssistantStateContext("ctx-base", null, null));
+        store.RecordHomeAssistantReading(baseline);
+        store.RecordHomeAssistantReading(baseline with
+        {
+            SetPointCelsius = 24.0,
+            Context = new HomeAssistantStateContext("ctx-user-1", null, "ha-user")
+        });
+        store.RecordHomeAssistantReading(baseline with
+        {
+            SetPointCelsius = 25.0,
+            Context = new HomeAssistantStateContext("ctx-user-2", null, "ha-user")
+        });
+
+        var now = DateTimeOffset.UtcNow;
+        var waited = store.TryRespectRemoteSettlingGuard(
+            baseline with { SetPointCelsius = 25.0 },
+            22.0,
+            bypassForComfort: false,
+            now,
+            out var waitUntil,
+            out var message);
+
+        if (!waited || waitUntil <= now || !message.Contains("Remote settling", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Remote Settling should hold a safe correction after repeated Home Assistant user changes.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.RemoteSettling.Holding
+            || snapshot.RemoteSettling.RecentRemoteChangeCount < 2
+            || snapshot.RemoteSettling.LastChangeSource != "home-assistant-user")
+        {
+            throw new InvalidOperationException("Remote Settling snapshot should show the active hold, source, and recent remote change count.");
+        }
+
+        var hotRoom = store.TryRespectRemoteSettlingGuard(
+            baseline with { CurrentTemperatureCelsius = 24.2, SetPointCelsius = 25.0 },
+            22.0,
+            bypassForComfort: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Remote Settling must step aside when direct cooling is needed.");
+        }
+
+        snapshot = store.GetSnapshot();
+        if (snapshot.RemoteSettling.Holding)
+        {
+            throw new InvalidOperationException("Remote Settling should clear its hold after comfort safety takes over.");
         }
     }
 

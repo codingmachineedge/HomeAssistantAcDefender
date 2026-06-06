@@ -221,6 +221,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectRemoteSettlingGuard(reading, expectedSetPoint, bypassQuietTiming, now, out var remoteSettlingUntil, out var remoteSettlingMessage))
+                {
+                    stateStore.SetNextAction(remoteSettlingMessage, remoteSettlingUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectCoolingRunway(reading, expectedSetPoint, bypassQuietTiming, now, out var runwayUntil, out var runwayMessage))
                 {
                     stateStore.SetNextAction(runwayMessage, runwayUntil);
