@@ -59,9 +59,20 @@ internal sealed class DefenderSetPointRegressionTests
                 throw new InvalidOperationException($"Guard '{guard.Name}' projected a null live view from a default snapshot.");
             }
 
-            if (string.IsNullOrWhiteSpace(guard.Summary) || string.IsNullOrWhiteSpace(guard.Logic))
+            if (string.IsNullOrWhiteSpace(guard.Summary)
+                || string.IsNullOrWhiteSpace(guard.Watches)
+                || string.IsNullOrWhiteSpace(guard.Logic)
+                || string.IsNullOrWhiteSpace(guard.Output))
             {
-                throw new InvalidOperationException($"Guard '{guard.Name}' is missing help text.");
+                throw new InvalidOperationException($"Guard '{guard.Name}' is missing detail drawer help text.");
+            }
+
+            foreach (var metric in view.Metrics)
+            {
+                if (string.IsNullOrWhiteSpace(metric.Label) || string.IsNullOrWhiteSpace(metric.Value))
+                {
+                    throw new InvalidOperationException($"Guard '{guard.Name}' has a blank live evidence metric.");
+                }
             }
         }
     }

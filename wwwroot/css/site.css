@@ -380,6 +380,45 @@ body {
   gap: 10px;
 }
 
+.guard-detail__brief {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 8px;
+}
+
+.guard-detail-brief {
+  border: 1px solid var(--mud-palette-lines-default);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--mud-palette-primary) 6%, var(--mud-palette-surface));
+  min-width: 0;
+}
+
+.guard-detail-brief span {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--mud-palette-primary);
+}
+
+.guard-detail-brief strong {
+  display: block;
+  font-size: 0.92rem;
+  line-height: 1.25;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.guard-detail-brief small {
+  display: block;
+  color: var(--mud-palette-text-secondary);
+  line-height: 1.25;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
 .guard-detail__row,
 .guard-detail__algorithm,
 .guard-detail__evidence {

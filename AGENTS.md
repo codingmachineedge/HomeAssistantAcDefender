@@ -41,6 +41,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 
 - Run `dotnet build` before pushing.
 - Use the dashboard and settings page in a browser after frontend changes.
+- Use the Defense page in a browser after guard-card changes; verify the hidden "More extra-specific info" drawer shows next step, trigger verdict, future trigger, overrule rules, algorithm path, and live evidence without clipping on desktop or mobile.
 - Use the Energy page in a browser after Alectra Hui frontend changes; verify tabs, search/filter controls, charts, and mobile layout.
 - Check mobile layout for horizontal overflow after CSS/layout changes.
 - After each coherent change set, commit, push, rebuild, and redeploy the Docker Compose stack on the Linux host.

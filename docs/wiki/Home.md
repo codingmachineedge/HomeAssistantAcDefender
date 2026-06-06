@@ -6,6 +6,7 @@ Key capabilities:
 
 - MudBlazor dashboard with automatic live updates and 24-hour time display.
 - 24/7 Home Assistant thermostat checking.
+- Defense tab guard cards with hidden extra-specific decision reports for next step, trigger reason, future trigger, algorithm path, overrule rules, and live evidence.
 - External thermostat touch detection.
 - Audit log with timestamp, old setpoint, new setpoint, room temperature, outdoor temperature, and weather condition.
 - Dynamic cooldown after manual changes.

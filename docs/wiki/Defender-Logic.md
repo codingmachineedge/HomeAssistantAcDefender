@@ -1,8 +1,11 @@
 # Defender Logic
 
 This page describes every algorithm the AC Defender runs. The same descriptions appear in the app:
-each guard on the **Defense** page has a "How this works" explainer, and the **Guide** page lists the
-whole reference. The source of truth for the live cards and this document is `Guards/GuardCatalog.cs`,
+each guard on the **Defense** page has a "How this works" explainer and a hidden
+"More extra-specific info" decision report. That report shows the card's current verdict, next worker
+step, trigger reason, future trigger condition, live evidence source, overrule rules, command effect,
+and algorithm path. The **Guide** page lists the whole reference. The source of truth for the live cards
+and this document is `Guards/GuardCatalog.cs`,
 projected from the real implementation in `Services/DefenderStateStore.cs` and orchestrated by
 `Services/AcDefenderService.RunCycleAsync`.
 

@@ -489,7 +489,7 @@ The front end is built with Blazor Server and MudBlazor. It uses a responsive na
 routed pages instead of a single crowded page:
 
 - **Dashboard** (`/`) — summary-first hero (target, live readings, connection, defender switch), priority alerts, a "defense at a glance" summary, and quick controls.
-- **Defense** (`/defense`) — every timing/comfort/safety guard as a live card with "How this works" and "More extra-specific info" drawers for next step, trigger reason, future trigger, bypass rules, algorithm path, and live evidence; searchable and filterable by category.
+- **Defense** (`/defense`) — every timing/comfort/safety guard as a live card with "How this works" and "More extra-specific info" drawers. The extra drawer now shows a per-card decision brief, what the worker will do next, what triggered or did not trigger, what would trigger the card next, what evidence it is reading, what can overrule it, the command effect, the exact algorithm path, and live evidence metrics; searchable and filterable by category.
 - **Comfort** (`/comfort`) — upstairs comfort guard, sensors, and presence.
 - **Energy** (`/energy`) — tabbed Alectra Hui overview, search/filter entity groups, charts, table view, live usage sensors, and 24-hour history.
 - **Logs** (`/logs`) — the wall-touch audit log and activity events with clickable JSON detail.
