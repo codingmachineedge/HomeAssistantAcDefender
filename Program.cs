@@ -68,7 +68,10 @@ if (!app.Environment.IsDevelopment())
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseAntiforgery();
+app.UseWhen(ctx => !ctx.Request.Path.StartsWithSegments("/login"), branch =>
+{
+    branch.UseAntiforgery();
+});
 
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
