@@ -1,3 +1,4 @@
+@using Microsoft.AspNetCore.Components.Endpoints
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,11 +8,11 @@
     <title>Home Assistant AC Defender</title>
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
     <link rel="stylesheet" href="css/site.css" />
-    <HeadOutlet @rendermode="InteractiveServer" />
+    <HeadOutlet @rendermode="PageRenderMode" />
 </head>
 <body>
     <CascadingAuthenticationState>
-        <Routes @rendermode="InteractiveServer" />
+        <Routes @rendermode="PageRenderMode" />
     </CascadingAuthenticationState>
 
     <div id="blazor-error-ui" data-nosnippet>
@@ -24,3 +25,14 @@
     <script src="_content/MudBlazor/MudBlazor.min.js"></script>
 </body>
 </html>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    // Pages marked [ExcludeFromInteractiveRouting] (e.g. /login) render as static SSR,
+    // which is required for HttpContext.SignInAsync / cookie writes during a form POST.
+    // Every other page keeps the InteractiveServer render mode for live updates.
+    private IComponentRenderMode? PageRenderMode =>
+        HttpContext.AcceptsInteractiveRouting() ? InteractiveServer : null;
+}

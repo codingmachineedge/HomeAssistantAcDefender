@@ -6,13 +6,30 @@ namespace HomeAssistantAcDefender.Services;
 
 public class TwoFactorAuth
 {
+    private const int PasswordSaltBytes = 16;
+    private const int PasswordHashBytes = 32;
+    private const int PasswordIterations = 100_000;
+
     private string? _secret;
     private readonly string _secretFilePath;
+    private readonly string _authConfigFilePath;
     private readonly IConfiguration _configuration;
     private readonly ILogger<TwoFactorAuth> _logger;
 
+    private bool _passwordEnabled;
+    private byte[]? _passwordHash;
+    private byte[]? _passwordSalt;
+    private readonly string? _configPassword;
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_secret);
     public string? ManualKey => _secret;
+
+    /// <summary>A password value is configured (via file or app config).</summary>
+    public bool HasPassword => _passwordHash is not null || !string.IsNullOrEmpty(_configPassword);
+
+    /// <summary>Password login is switched on and a password value is actually set.</summary>
+    public bool IsPasswordEnabled => (_passwordEnabled && _passwordHash is not null)
+                                     || !string.IsNullOrEmpty(_configPassword);
 
     public TwoFactorAuth(IConfiguration configuration, IWebHostEnvironment env, ILogger<TwoFactorAuth> logger)
     {
@@ -28,6 +45,7 @@ public class TwoFactorAuth
         }
 
         _secretFilePath = Path.Combine(env.ContentRootPath, "App_Data", "totp-secret.json");
+        _authConfigFilePath = Path.Combine(env.ContentRootPath, "App_Data", "auth-config.json");
 
         if (string.IsNullOrWhiteSpace(_secret) && File.Exists(_secretFilePath))
         {
@@ -46,6 +64,125 @@ public class TwoFactorAuth
                 logger.LogWarning(ex, "Failed to read TOTP secret file");
             }
         }
+
+        // Optional config override (mirrors TwoFactor:Secret). When set, it always wins.
+        var configPassword = configuration["Auth:Password"];
+        if (!string.IsNullOrEmpty(configPassword))
+        {
+            _configPassword = configPassword;
+            _passwordEnabled = true;
+            logger.LogInformation("Login password loaded from configuration");
+        }
+
+        LoadAuthConfig();
+    }
+
+    private void LoadAuthConfig()
+    {
+        if (!File.Exists(_authConfigFilePath))
+            return;
+
+        try
+        {
+            var json = File.ReadAllText(_authConfigFilePath);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("passwordEnabled", out var enabledProp))
+                _passwordEnabled = enabledProp.GetBoolean();
+
+            if (root.TryGetProperty("passwordHash", out var hashProp) &&
+                root.TryGetProperty("passwordSalt", out var saltProp))
+            {
+                var hash = hashProp.GetString();
+                var salt = saltProp.GetString();
+                if (!string.IsNullOrWhiteSpace(hash) && !string.IsNullOrWhiteSpace(salt))
+                {
+                    _passwordHash = Convert.FromBase64String(hash);
+                    _passwordSalt = Convert.FromBase64String(salt);
+                }
+            }
+
+            _logger.LogInformation("Login password configuration loaded from file");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read auth config file");
+        }
+    }
+
+    private void SaveAuthConfig()
+    {
+        var dir = Path.GetDirectoryName(_authConfigFilePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        var content = JsonSerializer.Serialize(new
+        {
+            passwordEnabled = _passwordEnabled,
+            passwordHash = _passwordHash is null ? null : Convert.ToBase64String(_passwordHash),
+            passwordSalt = _passwordSalt is null ? null : Convert.ToBase64String(_passwordSalt),
+            updatedAt = DateTimeOffset.UtcNow
+        });
+        File.WriteAllText(_authConfigFilePath, content);
+        _logger.LogInformation("Login password configuration saved to file");
+    }
+
+    /// <summary>Sets (or replaces) the login password and turns password login on.</summary>
+    public void SetPassword(string password)
+    {
+        if (string.IsNullOrEmpty(password))
+            throw new ArgumentException("Password must not be empty.", nameof(password));
+
+        _passwordSalt = RandomNumberGenerator.GetBytes(PasswordSaltBytes);
+        _passwordHash = Rfc2898DeriveBytes.Pbkdf2(
+            password,
+            _passwordSalt,
+            PasswordIterations,
+            HashAlgorithmName.SHA256,
+            PasswordHashBytes);
+        _passwordEnabled = true;
+        SaveAuthConfig();
+    }
+
+    /// <summary>Removes the stored password and turns password login off.</summary>
+    public void ClearPassword()
+    {
+        _passwordHash = null;
+        _passwordSalt = null;
+        _passwordEnabled = false;
+        SaveAuthConfig();
+    }
+
+    /// <summary>Turns password login on or off without changing the stored value.</summary>
+    public void SetPasswordEnabled(bool enabled)
+    {
+        _passwordEnabled = enabled;
+        SaveAuthConfig();
+    }
+
+    public bool ValidatePassword(string? password)
+    {
+        if (string.IsNullOrEmpty(password))
+            return false;
+
+        if (!string.IsNullOrEmpty(_configPassword))
+            return CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(password),
+                Encoding.UTF8.GetBytes(_configPassword));
+
+        if (_passwordHash is null || _passwordSalt is null)
+            return false;
+
+        var candidate = Rfc2898DeriveBytes.Pbkdf2(
+            password,
+            _passwordSalt,
+            PasswordIterations,
+            HashAlgorithmName.SHA256,
+            PasswordHashBytes);
+        return CryptographicOperations.FixedTimeEquals(candidate, _passwordHash);
     }
 
     public string GenerateNewSecret()

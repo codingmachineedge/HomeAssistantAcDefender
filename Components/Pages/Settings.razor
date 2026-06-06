@@ -1,6 +1,7 @@
 @page "/settings"
 @inject DefenderStateStore StateStore
 @inject ISnackbar Snackbar
+@inject TwoFactorAuth TwoFactorAuth
 
 <PageTitle>Settings - AC Defender</PageTitle>
 
@@ -17,6 +18,36 @@
                           Placeholder="Search settings (cooldown, walkback, upstairs, weather…)"
                           Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mt-1" />
         </ChildContent>
+    </SectionCard>
+
+    @* ───────────── Security ───────────── *@
+    <SectionCard Title="Security" Help="Password login works alongside the authenticator app — either the 6-digit code or this password signs you in. Leave it off to require the code only.">
+        <MudGrid Spacing="2">
+            <SettingSwitch Label="Enable password login" Value="_passwordEnabled" ValueChanged="@(v => _passwordEnabled = v)"
+                           Help="Allow signing in with a password as an alternative to the authenticator code." />
+            <MudItem xs="12">
+                <MudAlert Severity="@(TwoFactorAuth.HasPassword ? Severity.Success : Severity.Info)" Variant="Variant.Outlined" Dense="true">
+                    @(TwoFactorAuth.HasPassword
+                        ? "A password is currently set. Enter a new one below to change it."
+                        : "No password is set yet. Enter one below, then save, to enable password login.")
+                </MudAlert>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_newPassword" Label="New password" InputType="InputType.Password"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" Placeholder="At least 6 characters" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_confirmPassword" Label="Confirm password" InputType="InputType.Password"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" />
+            </MudItem>
+            <MudItem xs="12" Class="d-flex flex-wrap gap-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SavePassword" StartIcon="@Icons.Material.Filled.Lock">Save password settings</MudButton>
+                @if (TwoFactorAuth.HasPassword)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="RemovePassword" StartIcon="@Icons.Material.Filled.LockOpen">Remove password</MudButton>
+                }
+            </MudItem>
+        </MudGrid>
     </SectionCard>
 
     @* ───────────── Automation ───────────── *@
@@ -618,6 +649,9 @@
     private static readonly TimeZoneInfo TorontoTimeZone = ResolveTorontoTimeZone();
 
     private string _settingsSearch = "";
+    private bool _passwordEnabled;
+    private string _newPassword = "";
+    private string _confirmPassword = "";
     private bool _scheduleEnabled;
     private string _weatherActivationMode = "always";
     private int _baseCooldownSeconds = 45;
@@ -855,6 +889,53 @@
     protected override void OnInitialized()
     {
         LoadFromSnapshot(StateStore.GetSnapshot());
+        _passwordEnabled = TwoFactorAuth.IsPasswordEnabled;
+    }
+
+    private void SavePassword()
+    {
+        var hasNew = !string.IsNullOrEmpty(_newPassword) || !string.IsNullOrEmpty(_confirmPassword);
+
+        if (hasNew)
+        {
+            if (_newPassword.Length < 6)
+            {
+                Snackbar.Add("Password must be at least 6 characters.", Severity.Error);
+                return;
+            }
+            if (!string.Equals(_newPassword, _confirmPassword, StringComparison.Ordinal))
+            {
+                Snackbar.Add("Passwords do not match.", Severity.Error);
+                return;
+            }
+
+            TwoFactorAuth.SetPassword(_newPassword);
+            _newPassword = "";
+            _confirmPassword = "";
+            _passwordEnabled = true;
+            Snackbar.Add("Password saved. Password login is enabled.", Severity.Success);
+            return;
+        }
+
+        // No new password entered — just toggling enable/disable on the existing one.
+        if (_passwordEnabled && !TwoFactorAuth.HasPassword)
+        {
+            Snackbar.Add("Set a password before enabling password login.", Severity.Warning);
+            _passwordEnabled = false;
+            return;
+        }
+
+        TwoFactorAuth.SetPasswordEnabled(_passwordEnabled);
+        Snackbar.Add(_passwordEnabled ? "Password login enabled." : "Password login disabled.", Severity.Success);
+    }
+
+    private void RemovePassword()
+    {
+        TwoFactorAuth.ClearPassword();
+        _passwordEnabled = false;
+        _newPassword = "";
+        _confirmPassword = "";
+        Snackbar.Add("Password removed. Login now requires the authenticator code.", Severity.Success);
     }
 
     private void LoadFromSnapshot(DefenderSnapshot snapshot)

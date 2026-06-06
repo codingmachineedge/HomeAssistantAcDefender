@@ -31,7 +31,7 @@
                 <p class="login-subtitle">Scan the QR code with your authenticator app, or enter the key manually.</p>
             </div>
 
-            <form method="post" class="login-form" data-enhance="false">
+            <form method="post" class="login-form" data-enhance="false" @formname="onboarding">
                 <AntiforgeryToken />
                 <input type="hidden" name="pendingSecret" value="@_pendingSecret" />
                 <input type="hidden" name="onboarding" value="true" />
@@ -48,6 +48,14 @@
                 <div class="input-group">
                     <input type="text" name="code" class="code-input" placeholder="000000" maxlength="6"
                            inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required />
+                </div>
+
+                <div class="password-setup">
+                    <p class="password-setup-label">Optional password — log in with this instead of a code</p>
+                    <input type="password" name="newPassword" class="text-input" placeholder="Set a password (optional)"
+                           autocomplete="new-password" minlength="6" />
+                    <input type="password" name="confirmPassword" class="text-input" placeholder="Confirm password"
+                           autocomplete="new-password" minlength="6" />
                 </div>
 
                 <div class="login-options">
@@ -76,13 +84,23 @@ else
                 <p class="login-subtitle">Enter the code from your authenticator app.</p>
             </div>
 
-            <form method="post" class="login-form" data-enhance="false">
+            <form method="post" class="login-form" data-enhance="false" @formname="login">
                 <AntiforgeryToken />
 
                 <div class="input-group">
                     <input type="text" name="code" class="code-input" placeholder="000000" maxlength="6"
-                           inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required autofocus />
+                           inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code"
+                           required="@(!TwoFactorAuth.IsPasswordEnabled)" autofocus />
                 </div>
+
+                @if (TwoFactorAuth.IsPasswordEnabled)
+                {
+                    <div class="login-divider"><span>or</span></div>
+                    <div class="input-group">
+                        <input type="password" name="password" class="text-input" placeholder="Password"
+                               autocomplete="current-password" />
+                    </div>
+                }
 
                 <div class="login-options">
                     <label class="option-label">
@@ -180,6 +198,65 @@ else
 
     .code-input::placeholder {
         color: #4a5c54;
+    }
+
+    .text-input {
+        width: 100%;
+        padding: 12px 16px;
+        font-size: 1rem;
+        background: #0f1614;
+        border: 1px solid #2a3832;
+        border-radius: 8px;
+        color: #e7f6ef;
+        outline: none;
+        transition: border-color 0.2s;
+    }
+
+    .text-input:focus {
+        border-color: #46c1a7;
+        box-shadow: 0 0 0 2px rgba(70,193,167,0.2);
+    }
+
+    .text-input::placeholder {
+        color: #4a5c54;
+    }
+
+    .password-setup {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px;
+        background: #0f1614;
+        border-radius: 8px;
+        border: 1px dashed #2a3832;
+    }
+
+    .password-setup-label {
+        color: #9fb0a8;
+        font-size: 0.78rem;
+        margin-bottom: 2px;
+    }
+
+    .login-divider {
+        display: flex;
+        align-items: center;
+        text-align: center;
+        color: #6b7d75;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+    }
+
+    .login-divider::before,
+    .login-divider::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: #2a3832;
+    }
+
+    .login-divider span {
+        padding: 0 12px;
     }
 
     .login-options {
@@ -292,6 +369,15 @@ else
     [SupplyParameterFromForm(Name = "code")]
     public string? Code { get; set; }
 
+    [SupplyParameterFromForm(Name = "password")]
+    public string? PasswordForm { get; set; }
+
+    [SupplyParameterFromForm(Name = "newPassword")]
+    public string? NewPasswordForm { get; set; }
+
+    [SupplyParameterFromForm(Name = "confirmPassword")]
+    public string? ConfirmPasswordForm { get; set; }
+
     [SupplyParameterFromForm(Name = "keepSignedIn")]
     public bool KeepSignedInForm { get; set; }
 
@@ -338,6 +424,15 @@ else
         }
     }
 
+    private void ShowOnboarding(string pendingSecret, string error)
+    {
+        _error = error;
+        _pendingSecret = pendingSecret;
+        var url = TwoFactorAuth.GetOtpAuthUrl(_pendingSecret);
+        _qrSvg = TwoFactorAuth.GenerateQrSvg(url);
+        _onboarding = true;
+    }
+
     private async Task<bool> TryAutoLoginAsync(HttpContext httpContext)
     {
         var clientIp = GetClientIp(httpContext);
@@ -372,30 +467,55 @@ else
 
             if (!TwoFactorAuth.ValidateCode(pendingSecret, code))
             {
-                _error = "Incorrect verification code. Please try again.";
-                _pendingSecret = pendingSecret;
-                var url = TwoFactorAuth.GetOtpAuthUrl(_pendingSecret);
-                _qrSvg = TwoFactorAuth.GenerateQrSvg(url);
-                _onboarding = true;
+                ShowOnboarding(pendingSecret, "Incorrect verification code. Please try again.");
                 return;
+            }
+
+            // Password is optional during onboarding (2FA still works on its own).
+            var newPassword = NewPasswordForm ?? "";
+            var confirmPassword = ConfirmPasswordForm ?? "";
+            var wantsPassword = !string.IsNullOrEmpty(newPassword) || !string.IsNullOrEmpty(confirmPassword);
+            if (wantsPassword)
+            {
+                if (newPassword.Length < 6)
+                {
+                    ShowOnboarding(pendingSecret, "Password must be at least 6 characters.");
+                    return;
+                }
+                if (!string.Equals(newPassword, confirmPassword, StringComparison.Ordinal))
+                {
+                    ShowOnboarding(pendingSecret, "Passwords do not match.");
+                    return;
+                }
             }
 
             TwoFactorAuth.SaveSecret(pendingSecret);
-            _pendingSecret = null;
-            _qrSvg = "";
-            _onboarding = false;
+            if (wantsPassword)
+                TwoFactorAuth.SetPassword(newPassword);
+
+            // Blazor SSR re-renders this component after the form handler and requires the
+            // submitted form ("onboarding") to still be present, or it replaces the redirect
+            // with a 400. Keep it rendered; the redirect below wins and the body is discarded.
+            _onboarding = true;
         }
         else
         {
-            if (!TwoFactorAuth.IsConfigured)
+            if (!TwoFactorAuth.IsConfigured && !TwoFactorAuth.IsPasswordEnabled)
             {
-                _error = "2FA is not configured. Please reload the page.";
+                _error = "Login is not configured. Please reload the page.";
                 return;
             }
 
-            if (!TwoFactorAuth.ValidateCurrentCode(code))
+            var passwordOk = TwoFactorAuth.IsPasswordEnabled && TwoFactorAuth.ValidatePassword(PasswordForm);
+            var codeOk = TwoFactorAuth.IsConfigured
+                         && !string.IsNullOrWhiteSpace(code)
+                         && TwoFactorAuth.ValidateCurrentCode(code);
+
+            if (!passwordOk && !codeOk)
             {
-                _error = "Incorrect code. Please try again.";
+                _error = TwoFactorAuth.IsPasswordEnabled
+                    ? "Incorrect code or password. Please try again."
+                    : "Incorrect code. Please try again.";
                 return;
             }
         }
