@@ -11,6 +11,7 @@ Key capabilities:
 - Audit log with timestamp, old setpoint, new setpoint, room temperature, outdoor temperature, and weather condition.
 - Dynamic cooldown after manual changes.
 - Home Assistant context attribution for user/phone, automation, and thermostat/device changes.
+- Tug-of-War Truce that holds safe answer-backs after alternating up/down thermostat fights.
 - Super Defender strict timing for repeated remote-style thermostat changes, with network lockout left as a manual router decision.
 - Remote Settling Guard for quiet safe holds after repeated Home Assistant user/phone or automation changes.
 - Custom schedule with weather activation rules.

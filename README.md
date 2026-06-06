@@ -15,6 +15,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Classifies Home Assistant user/phone changes, Home Assistant automation changes, and thermostat/device changes when Home Assistant includes context data.
 - Uses a dynamic cooldown after manual thermostat touches so corrections do not happen instantly every time.
 - Adds Conflict Quiet so repeated wall touches can trigger a temporary stand-down while the room is still safe.
+- Adds Tug-of-War Truce so alternating up/down thermostat fights get a temporary safe answer-back hold.
 - Adds Comfort Sync quiet recovery: randomized extra waits, optional extra holds, command spacing, adaptive quiet levels, and small setpoint nudges so repeated wall changes do not create an obvious immediate tug-of-war.
 - Adds Manual Comfort Grace so a wall thermostat change can be left alone while the room remains within the configured comfort band.
 - Adds Room Trend Guard so the defender keeps observing when the room is stable or cooling after a wall change, and resumes when it starts warming.
@@ -127,17 +128,18 @@ Every cycle:
 25. Respect Telemetry Alibi when repeated safe wall changes can wait for a normal Home Assistant, weather, or Alectra Hui update.
 26. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
 27. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
-28. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-29. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-30. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-31. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
-32. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
-33. Respect Remote Settling Guard when repeated Home Assistant-side changes should get a quiet safe window.
-34. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-35. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
-36. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
-37. Optionally set fan saver mode when near target.
-38. Correct the thermostat setpoint when it does not match the defender decision.
+28. Respect Tug-of-War Truce when alternating up/down thermostat flips suggest someone is watching the fight.
+29. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+30. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+31. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+32. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
+33. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
+34. Respect Remote Settling Guard when repeated Home Assistant-side changes should get a quiet safe window.
+35. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+36. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
+37. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
+38. Optionally set fan saver mode when near target.
+39. Correct the thermostat setpoint when it does not match the defender decision.
 39. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
@@ -185,6 +187,18 @@ currentRoomTemperature <= targetTemperature + ConflictQuietComfortBandCelsius
 ```
 
 If the room gets warmer than that, severe upstairs heat is active, or the safety override is crossed, Conflict Quiet ends and the correction path resumes.
+
+## Tug-of-War Truce
+
+Tug-of-War Truce is for the fun little "is this thermostat arguing with me?" moment. It reads the real external thermostat audit log, converts recent setpoint changes into an `up -> down -> up` style direction pattern, and counts direction flips inside `TugOfWarTruceWindowMinutes`.
+
+When `TugOfWarTruceMinimumFlips` is reached, it holds only safe answer-back corrections for `TugOfWarTruceHoldMinutes` while:
+
+```text
+currentRoomTemperature <= targetTemperature + TugOfWarTruceSafetyBandCelsius
+```
+
+If the room gets too warm, upstairs comfort needs direct cooling, Cooler Intent Fast Lane is active, or Super Defender strict timing is active, the truce clears and the normal comfort path continues.
 
 ## Comfort Sync Quiet Recovery
 
@@ -257,6 +271,11 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `NaturalChangePlannerSafetyBandCelsius`: extra room warmth allowed before Comfort Pace stops waiting.
 - `NaturalChangePlannerPreferWeatherSlots`: lets real weather updates or outdoor warming shorten the selected wait.
 - `NaturalChangePlannerPreferSensorBeat`: lines the selected wait up with the learned Home Assistant climate reading rhythm.
+- `TugOfWarTruceEnabled`: enables an up/down flip detector for obvious thermostat back-and-forth.
+- `TugOfWarTruceMinimumFlips`: direction flips needed before the truce can hold a safe answer-back.
+- `TugOfWarTruceWindowMinutes`: how long real external thermostat changes count for flip detection.
+- `TugOfWarTruceHoldMinutes`: how long safe answer-back commands wait after the flip trigger.
+- `TugOfWarTruceSafetyBandCelsius`: extra room warmth allowed before Tug-of-War Truce stops waiting.
 - `ComfortEnvelopeEnabled`: lets small safe wall setpoint differences rest briefly after repeated touches.
 - `ComfortEnvelopeTriggerTouches`: recent wall touches needed before Comfort Envelope can hold.
 - `ComfortEnvelopeHoldMinutes`: how long the safe accepted range can rest.
@@ -388,6 +407,8 @@ Stealth Governor is the broad low-profile layer. It scores recent wall touches, 
 Natural Cadence picks a variable future slot for safe corrections after repeated wall touches. The slot gets later as touch pressure or recent command pressure rises, and it has a small jitter so safe nudges do not land at identical times. If the room gets too warm or upstairs comfort needs direct cooling, cadence clears and the real correction path continues.
 
 Comfort Pace is the high-frequency wall-change planner. When enough wall touches happen and the room is still inside its safety band, it chooses a calmer slot from touch pressure, recent command pressure, real outdoor weather movement, the learned Home Assistant sensor beat, and 5/10-minute local clock boundaries. It waits only for safe corrections; if the room gets too warm or direct cooling is needed, it clears immediately and the real correction path continues.
+
+Tug-of-War Truce watches the same real external touch audit log, but it looks specifically for alternating direction flips. If the wall setpoint bounces up/down enough times inside the configured window, the defender assumes somebody may be watching and holds only safe answer-back corrections for the truce window. If the room gets too warm, upstairs heat needs direct cooling, or a strict quiet bypass is active, it clears immediately.
 
 Comfort Envelope accepts tiny safe wall preferences for a short time. When repeated wall touches keep the thermostat inside the configured setpoint range and the real room is still under the safety band, the defender observes instead of correcting that small difference immediately. The dashboard shows the accepted range, preferred wall setpoint, remaining hold, and status. If the room gets too warm, the setpoint moves outside the range, or direct cooling is needed, the envelope clears and the real correction path continues.
 

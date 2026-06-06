@@ -25,6 +25,7 @@ tests.OmegaAlertEscalatesOnlyWhenRoomRisesDuringIdleCoolingFailure();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
+tests.TugOfWarTruceHoldsAlternatingSafeCorrectionsButBypassesHotRoom();
 tests.CoolerIntentFastLaneBypassesQuietTimingForRepeatedCoolerTouches();
 tests.WeatherDriftWaitsOnlyForSafeStableOutdoorConditions();
 tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
@@ -47,9 +48,9 @@ internal sealed class DefenderSetPointRegressionTests
         var snapshot = fixture.Store.GetSnapshot();
 
         var live = GuardCatalog.Live.ToList();
-        if (live.Count < 32)
+        if (live.Count < 33)
         {
-            throw new InvalidOperationException($"Expected at least 32 live guard cards in the catalog, found {live.Count}.");
+            throw new InvalidOperationException($"Expected at least 33 live guard cards in the catalog, found {live.Count}.");
         }
 
         foreach (var guard in live)
@@ -335,6 +336,75 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.RepeatCommand.Holding)
         {
             throw new InvalidOperationException("Repeat Quiet should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void TugOfWarTruceHoldsAlternatingSafeCorrectionsButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.TugOfWarTruceEnabled = true;
+        settings.TugOfWarTruceMinimumFlips = 2;
+        settings.TugOfWarTruceWindowMinutes = 12;
+        settings.TugOfWarTruceHoldMinutes = 20;
+        settings.TugOfWarTruceSafetyBandCelsius = 1.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.5,
+            22.0,
+            "cool",
+            "idle",
+            null,
+            []);
+
+        store.RecordHomeAssistantReading(safeReading);
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 24.0 });
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 23.0 });
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 24.0 });
+
+        var now = DateTimeOffset.UtcNow;
+        var held = store.TryRespectTugOfWarTruce(
+            safeReading with { SetPointCelsius = 24.0 },
+            22.0,
+            bypassForComfort: false,
+            now,
+            out var waitUntil,
+            out var message);
+
+        if (!held || waitUntil <= now || !message.Contains("Tug-of-War", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Tug-of-War Truce should hold a safe answer-back after alternating wall changes.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.TugOfWarTruce.Holding
+            || snapshot.TugOfWarTruce.FlipCount < 2
+            || !snapshot.TugOfWarTruce.DirectionPattern.Contains("down", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Tug-of-War Truce snapshot should show the active hold, flip count, and direction pattern.");
+        }
+
+        var hotRoom = store.TryRespectTugOfWarTruce(
+            safeReading with { CurrentTemperatureCelsius = 24.2, SetPointCelsius = 24.0 },
+            22.0,
+            bypassForComfort: false,
+            now.AddSeconds(1),
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Tug-of-War Truce must step aside when direct cooling is needed.");
+        }
+
+        snapshot = store.GetSnapshot();
+        if (snapshot.TugOfWarTruce.Holding)
+        {
+            throw new InvalidOperationException("Tug-of-War Truce should clear its hold after comfort safety takes over.");
         }
     }
 

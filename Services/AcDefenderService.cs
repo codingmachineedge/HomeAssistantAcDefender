@@ -191,6 +191,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectTugOfWarTruce(reading, expectedSetPoint, bypassQuietTiming, now, out var truceUntil, out var truceMessage))
+                {
+                    stateStore.SetNextAction(truceMessage, truceUntil);
+                    return;
+                }
+
                 if (stateStore.TryRespectRoomTrendGuard(reading, expectedSetPoint, bypassQuietTiming, now, out var trendUntil, out var trendMessage))
                 {
                     stateStore.SetNextAction(trendMessage, trendUntil);

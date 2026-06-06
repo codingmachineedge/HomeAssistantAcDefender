@@ -308,6 +308,24 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Tug-of-War Truce", GuardCategory.WallTouch,
+            "Calls a temporary truce when the real thermostat bounces up and down, so answer-back commands do not look like a duel.",
+            "The real external thermostat audit log: previous setpoint, new setpoint, timestamp, and source classification.",
+            "Inside the configured flip window it converts each external setpoint change into up/down/flat, counts direction flips, and compares that count to the flip trigger. If the flip trigger is met and the room is still inside the safety band, it holds only safe answer-back corrections for the truce minutes. A warm room, severe upstairs heat, matching setpoint, cooler-intent fast lane, or Super Defender strict bypass clears it.",
+            "Holds safe corrections until the truce window ends, then lets the normal defender chain continue.",
+            ["TugOfWarTruceEnabled", "TugOfWarTruceMinimumFlips", "TugOfWarTruceWindowMinutes", "TugOfWarTruceHoldMinutes", "TugOfWarTruceSafetyBandCelsius"],
+            s =>
+            {
+                var t = s.TugOfWarTruce;
+                return GuardLiveView.Standard(t.Enabled, t.Holding, "Truce", t.Status,
+                [
+                    new("Truce wait", OffWait(t.Enabled, t.Holding, t.SecondsRemaining), "Time left before answer-back commands can resume."),
+                    new("Flips", t.Enabled ? $"{t.FlipCount}/{t.TriggerFlips}" : "Off", "Up/down direction flips inside the window."),
+                    new("Pattern", t.Enabled ? t.DirectionPattern : "Off", "Compact recent setpoint direction pattern."),
+                ], busyTone: GuardTone.Warning);
+            }),
+
+        new GuardInfo(
             "Wall Settling", GuardCategory.WallTouch,
             "Waits for someone who is still tapping the wall thermostat to stop before correcting.",
             "Recent touches inside the settling window and the room temperature.",

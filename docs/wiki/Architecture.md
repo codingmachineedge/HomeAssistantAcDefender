@@ -83,6 +83,8 @@ Manual Comfort Grace is stored and evaluated in `DefenderStateStore` as well. `A
 
 Conflict Quiet is stored in `DefenderStateStore` and evaluated by `AcDefenderService` before normal cooldown. It turns repeated external wall touches into a temporary stand-down while room temperature remains within the configured safe band. It does not fake a thermostat update; it only avoids sending an obvious corrective command for a while.
 
+Tug-of-War Truce is another persisted wall-touch hold in `DefenderStateStore`. It analyzes the real external thermostat audit log for alternating up/down setpoint flips, then `AcDefenderService` checks it while a real correction is pending. It delays only safe answer-back corrections, clears when comfort needs direct cooling, and never writes fake thermostat state.
+
 Room Trend Guard is also stored and evaluated in `DefenderStateStore`. It keeps a small history of real dining room temperature samples and classifies the room as warming, stable, or cooling before `AcDefenderService` sends a correction. It only affects timing; all commands still go through `HomeAssistantClient`.
 
 Thermal Momentum is another `DefenderStateStore` decision that uses those same real room-temperature samples. It estimates cooling rate and minutes to target after a recent wall touch, then lets `AcDefenderService` wait when the room is already moving toward the target fast enough. It never invents thermostat state and does not issue fake commands.

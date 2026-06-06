@@ -110,6 +110,15 @@ public sealed class DefenderStateStore
             state.Settings.ConflictQuietTouchThreshold = Math.Clamp(request.ConflictQuietTouchThreshold, 2, 20);
             state.Settings.ConflictQuietMinutes = Math.Clamp(request.ConflictQuietMinutes, 1, 240);
             state.Settings.ConflictQuietComfortBandCelsius = Math.Round(Math.Clamp(request.ConflictQuietComfortBandCelsius, 0.1, 5.0), 1);
+            state.Settings.TugOfWarTruceEnabled = request.TugOfWarTruceEnabled;
+            state.Settings.TugOfWarTruceMinimumFlips = Math.Clamp(request.TugOfWarTruceMinimumFlips, 1, 20);
+            state.Settings.TugOfWarTruceWindowMinutes = Math.Clamp(request.TugOfWarTruceWindowMinutes, 1, 240);
+            state.Settings.TugOfWarTruceHoldMinutes = Math.Clamp(request.TugOfWarTruceHoldMinutes, 0, 240);
+            state.Settings.TugOfWarTruceSafetyBandCelsius = Math.Round(Math.Clamp(request.TugOfWarTruceSafetyBandCelsius, 0.1, 5.0), 1);
+            if (!state.Settings.TugOfWarTruceEnabled)
+            {
+                ClearTugOfWarTruce("Tug-of-War Truce is off.");
+            }
             state.Settings.WallSettlingGuardEnabled = request.WallSettlingGuardEnabled;
             state.Settings.WallSettlingMinimumTouches = Math.Clamp(request.WallSettlingMinimumTouches, 1, 20);
             state.Settings.WallSettlingWindowMinutes = Math.Clamp(request.WallSettlingWindowMinutes, 1, 1440);
@@ -1041,6 +1050,99 @@ public sealed class DefenderStateStore
             message = $"Repeated wall touches noticed; standing down until {holdUntil.ToLocalTime():HH:mm:ss} unless room rises above {allowedRoomTemperature:0.0} C.";
             state.ConflictQuietStatus = message;
             AddEvent("warning", $"Conflict quiet activated after {recentTouches} wall touches.");
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>Tug-of-War Truce: true while alternating real setpoint changes suggest someone is actively watching.</summary>
+    public bool TryRespectTugOfWarTruce(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.TugOfWarTruceEnabled)
+            {
+                ClearTugOfWarTruce("Tug-of-War Truce is off.");
+                SaveState();
+                return false;
+            }
+
+            var analysis = BuildTugOfWarAnalysis(now);
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearTugOfWarTruce("Room comfort needs help now, so Tug-of-War Truce is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.TugOfWarTruceSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearTugOfWarTruce($"Room is above {allowedRoomTemperature:0.0} C, so Tug-of-War Truce lets the correction continue.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearTugOfWarTruce("Thermostat already matches the defender setpoint, so no truce hold is needed.");
+                SaveState();
+                return false;
+            }
+
+            if (state.TugOfWarTruceUntil is { } activeUntil)
+            {
+                if (activeUntil > now)
+                {
+                    waitUntil = activeUntil;
+                    var triggerFlips = state.TugOfWarTruceFlipCount > 0
+                        ? state.TugOfWarTruceFlipCount
+                        : analysis.FlipCount;
+                    var triggerPattern = string.IsNullOrWhiteSpace(state.TugOfWarTruceDirectionPattern)
+                        ? analysis.DirectionPattern
+                        : state.TugOfWarTruceDirectionPattern;
+                    message = $"Tug-of-War Truce is holding safe answer-back until {activeUntil.ToLocalTime():HH:mm:ss} after {triggerFlips} up/down flip(s). Pattern: {triggerPattern}.";
+                    state.TugOfWarTruceStatus = message;
+                    SaveState();
+                    return true;
+                }
+
+                ClearTugOfWarTruce("Tug-of-War Truce window ended; watching for another up/down thermostat fight.");
+                SaveState();
+                return false;
+            }
+
+            if (analysis.FlipCount < analysis.TriggerFlips)
+            {
+                state.TugOfWarTruceStatus = analysis.Status;
+                SaveState();
+                return false;
+            }
+
+            var holdMinutes = Math.Max(0, state.Settings.TugOfWarTruceHoldMinutes);
+            if (holdMinutes == 0)
+            {
+                ClearTugOfWarTruce("Tug-of-War Truce saw flips, but hold minutes is set to 0.");
+                SaveState();
+                return false;
+            }
+
+            waitUntil = now.AddMinutes(holdMinutes);
+            state.TugOfWarTruceUntil = waitUntil;
+            state.TugOfWarTruceFlipCount = analysis.FlipCount;
+            state.TugOfWarTruceDirectionPattern = analysis.DirectionPattern;
+            message = $"Tug-of-War Truce counted {analysis.FlipCount} up/down flip(s) in {state.Settings.TugOfWarTruceWindowMinutes} min; holding safe answer-back until {waitUntil.ToLocalTime():HH:mm:ss}. Pattern: {analysis.DirectionPattern}.";
+            state.TugOfWarTruceStatus = message;
+            AddEvent("warning", $"Tug-of-War Truce activated after {analysis.FlipCount} thermostat direction flip(s).");
             SaveState();
             return true;
         }
@@ -3330,6 +3432,7 @@ public sealed class DefenderStateStore
                 && state.SensorRhythmDueAt is null
                 && state.CoolingRunwayHoldUntil is null
                 && state.ConflictQuietUntil is null
+                && state.TugOfWarTruceUntil is null
                 && state.WallSettlingUntil is null
                 && state.CoolerIntentUntil is null
                 && state.RoomTrendHoldUntil is null
@@ -3346,6 +3449,9 @@ public sealed class DefenderStateStore
             state.ConflictQuietStatus = state.Settings.ConflictQuietModeEnabled
                 ? "Conflict quiet is lined up; no stand-down needed."
                 : "Conflict quiet is off.";
+            ClearTugOfWarTruce(state.Settings.TugOfWarTruceEnabled
+                ? "Tug-of-War Truce is lined up; no up/down fight hold needed."
+                : "Tug-of-War Truce is off.");
             ClearWallSettling(state.Settings.WallSettlingGuardEnabled
                 ? "Wall settling is lined up; no active wall adjustments."
                 : "Wall settling guard is off.");
@@ -3435,6 +3541,7 @@ public sealed class DefenderStateStore
                     ClearStealthGovernor($"Schedule {activeSchedule.Name} changed the target, so stealth governor reset.");
                     ClearNaturalChangePlanner($"Schedule {activeSchedule.Name} changed the target, so Comfort Pace reset.");
                     ClearComfortEnvelope($"Schedule {activeSchedule.Name} changed the target, so comfort envelope reset.");
+                    ClearTugOfWarTruce($"Schedule {activeSchedule.Name} changed the target, so Tug-of-War Truce reset.");
                     ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
                     ClearRemoteSettling($"Schedule {activeSchedule.Name} changed the target, so remote settling reset.");
                     ClearCoolingRunway($"Schedule {activeSchedule.Name} changed the target, so cooling runway reset.");
@@ -3483,6 +3590,7 @@ public sealed class DefenderStateStore
                 ClearStealthGovernor("Upstairs comfort changed the target, so stealth governor reset.");
                 ClearNaturalChangePlanner("Upstairs comfort changed the target, so Comfort Pace reset.");
                 ClearComfortEnvelope("Upstairs comfort changed the target, so comfort envelope reset.");
+                ClearTugOfWarTruce("Upstairs comfort changed the target, so Tug-of-War Truce reset.");
                 ClearRepeatCommand("Upstairs comfort changed the target, so repeat quiet reset.");
                 ClearRemoteSettling("Upstairs comfort changed the target, so remote settling reset.");
                 ClearCoolingRunway("Upstairs comfort changed the target, so cooling runway reset.");
@@ -4117,6 +4225,7 @@ public sealed class DefenderStateStore
         state.NaturalHoldCount = 0;
         state.ConflictQuietUntil = null;
         state.ConflictQuietStatus = "Cooler intent fast lane is active, so conflict quiet is stepping aside.";
+        ClearTugOfWarTruce("Cooler intent fast lane is active, so Tug-of-War Truce is stepping aside.");
         ClearWallSettling("Cooler intent fast lane is active, so wall settling is stepping aside.");
         ClearManualComfortGrace();
         ClearRoutineTiming("Cooler intent fast lane is active, so routine timing is stepping aside.");
@@ -4193,6 +4302,74 @@ public sealed class DefenderStateStore
             count,
             netChange,
             $"Cooler intent fast lane sees no cooler pattern yet ({netChange:+0.0;-0.0;0.0} C net).");
+    }
+
+    private TugOfWarAnalysis BuildTugOfWarAnalysis(DateTimeOffset now)
+    {
+        var triggerFlips = Math.Max(1, state.Settings.TugOfWarTruceMinimumFlips);
+        if (!state.Settings.TugOfWarTruceEnabled)
+        {
+            return new TugOfWarAnalysis(false, 0, triggerFlips, "off", "Tug-of-War Truce is off.");
+        }
+
+        var windowMinutes = Math.Max(1, state.Settings.TugOfWarTruceWindowMinutes);
+        var window = TimeSpan.FromMinutes(windowMinutes);
+        var recentChanges = state.ThermostatChanges
+            .Where(change => now - change.Timestamp <= window)
+            .OrderBy(change => change.Timestamp)
+            .TakeLast(12)
+            .ToList();
+
+        if (recentChanges.Count < 2)
+        {
+            return new TugOfWarAnalysis(
+                true,
+                0,
+                triggerFlips,
+                recentChanges.Count == 0 ? "watching" : DirectionLabel(recentChanges[0]),
+                $"Tug-of-War Truce is watching for alternating thermostat directions ({recentChanges.Count} change(s) in {windowMinutes} min).");
+        }
+
+        var directions = recentChanges
+            .Select(DirectionLabel)
+            .Where(direction => direction is "up" or "down")
+            .ToList();
+        if (directions.Count < 2)
+        {
+            return new TugOfWarAnalysis(
+                true,
+                0,
+                triggerFlips,
+                directions.Count == 0 ? "flat" : string.Join(" -> ", directions),
+                $"Tug-of-War Truce sees {directions.Count} real direction sample(s), not enough for a truce.");
+        }
+
+        var flips = 0;
+        for (var i = 1; i < directions.Count; i++)
+        {
+            if (!string.Equals(directions[i], directions[i - 1], StringComparison.OrdinalIgnoreCase))
+            {
+                flips++;
+            }
+        }
+
+        var pattern = string.Join(" -> ", directions);
+        var status = flips >= triggerFlips
+            ? $"Tug-of-War Truce sees {flips}/{triggerFlips} up/down flip(s) in {windowMinutes} min. Pattern: {pattern}."
+            : $"Tug-of-War Truce is watching ({flips}/{triggerFlips} up/down flip(s) in {windowMinutes} min). Pattern: {pattern}.";
+
+        return new TugOfWarAnalysis(true, flips, triggerFlips, pattern, status);
+    }
+
+    private static string DirectionLabel(ThermostatChangeAudit change)
+    {
+        var delta = change.NewSetPointCelsius - change.PreviousSetPointCelsius;
+        if (delta > 0.05)
+        {
+            return "up";
+        }
+
+        return delta < -0.05 ? "down" : "flat";
     }
 
     private TouchIntentAnalysis BuildTouchIntentAnalysis(DateTimeOffset now)
@@ -5585,6 +5762,10 @@ public sealed class DefenderStateStore
         saved.Settings.ConflictQuietTouchThreshold = Math.Clamp(saved.Settings.ConflictQuietTouchThreshold, 2, 20);
         saved.Settings.ConflictQuietMinutes = Math.Clamp(saved.Settings.ConflictQuietMinutes, 1, 240);
         saved.Settings.ConflictQuietComfortBandCelsius = Math.Round(Math.Clamp(saved.Settings.ConflictQuietComfortBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.TugOfWarTruceMinimumFlips = Math.Clamp(saved.Settings.TugOfWarTruceMinimumFlips <= 0 ? 2 : saved.Settings.TugOfWarTruceMinimumFlips, 1, 20);
+        saved.Settings.TugOfWarTruceWindowMinutes = Math.Clamp(saved.Settings.TugOfWarTruceWindowMinutes <= 0 ? 12 : saved.Settings.TugOfWarTruceWindowMinutes, 1, 240);
+        saved.Settings.TugOfWarTruceHoldMinutes = Math.Clamp(saved.Settings.TugOfWarTruceHoldMinutes < 0 ? 20 : saved.Settings.TugOfWarTruceHoldMinutes, 0, 240);
+        saved.Settings.TugOfWarTruceSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TugOfWarTruceSafetyBandCelsius <= 0 ? 1.0 : saved.Settings.TugOfWarTruceSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.WallSettlingMinimumTouches = Math.Clamp(saved.Settings.WallSettlingMinimumTouches, 1, 20);
         saved.Settings.WallSettlingWindowMinutes = Math.Clamp(saved.Settings.WallSettlingWindowMinutes, 1, 1440);
         saved.Settings.WallSettlingBaseSeconds = Math.Clamp(saved.Settings.WallSettlingBaseSeconds, 0, 1800);
@@ -5782,6 +5963,26 @@ public sealed class DefenderStateStore
         saved.ConflictQuietStatus = string.IsNullOrWhiteSpace(saved.ConflictQuietStatus)
             ? "Conflict quiet is watching."
             : saved.ConflictQuietStatus;
+        saved.TugOfWarTruceStatus = string.IsNullOrWhiteSpace(saved.TugOfWarTruceStatus)
+            ? "Tug-of-War Truce is watching for up/down thermostat fights."
+            : saved.TugOfWarTruceStatus;
+        saved.TugOfWarTruceDirectionPattern = string.IsNullOrWhiteSpace(saved.TugOfWarTruceDirectionPattern)
+            ? "watching"
+            : saved.TugOfWarTruceDirectionPattern;
+        if (!saved.Settings.TugOfWarTruceEnabled)
+        {
+            saved.TugOfWarTruceUntil = null;
+            saved.TugOfWarTruceFlipCount = 0;
+            saved.TugOfWarTruceDirectionPattern = "off";
+            saved.TugOfWarTruceStatus = "Tug-of-War Truce is off.";
+        }
+        else if (saved.TugOfWarTruceUntil is { } tugUntil && tugUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.TugOfWarTruceUntil = null;
+            saved.TugOfWarTruceFlipCount = 0;
+            saved.TugOfWarTruceDirectionPattern = "watching";
+            saved.TugOfWarTruceStatus = "Tug-of-War Truce is watching for up/down thermostat fights.";
+        }
         saved.WallSettlingStatus = string.IsNullOrWhiteSpace(saved.WallSettlingStatus)
             ? "Wall settling is watching."
             : saved.WallSettlingStatus;
@@ -6053,6 +6254,13 @@ public sealed class DefenderStateStore
         var conflictQuietSeconds = state.ConflictQuietUntil is { } conflictUntil && conflictUntil > now
             ? (int)Math.Ceiling((conflictUntil - now).TotalSeconds)
             : 0;
+        var tugOfWarTruceSeconds = state.TugOfWarTruceUntil is { } tugUntil && tugUntil > now
+            ? (int)Math.Ceiling((tugUntil - now).TotalSeconds)
+            : 0;
+        if (tugOfWarTruceSeconds == 0 && state.TugOfWarTruceUntil is not null)
+        {
+            ClearTugOfWarTruce("Tug-of-War Truce window ended; watching for another up/down thermostat fight.");
+        }
         var wallSettlingSeconds = state.WallSettlingUntil is { } settlingUntil && settlingUntil > now
             ? (int)Math.Ceiling((settlingUntil - now).TotalSeconds)
             : 0;
@@ -6243,6 +6451,7 @@ public sealed class DefenderStateStore
         var weatherDrift = BuildWeatherDrift(now);
         var touchIntent = BuildTouchIntentAnalysis(now);
         var coolerIntent = BuildCoolerIntentAnalysis(now);
+        var tugOfWar = BuildTugOfWarAnalysis(now);
         var wallSettlingTouchCount = GetRecentWallSettlingTouches(now).Count;
         var wallSettlingSettleSeconds = CalculateWallSettlingSeconds(wallSettlingTouchCount);
         var setpointStillness = state.HomeAssistantThermostat is { } stillnessThermostat
@@ -6468,6 +6677,19 @@ public sealed class DefenderStateStore
                     ? "Conflict quiet is watching."
                     : state.ConflictQuietStatus,
                 conflictQuietSeconds > 0 ? state.ConflictQuietUntil : null),
+            new TugOfWarTruceSnapshot(
+                state.Settings.TugOfWarTruceEnabled,
+                tugOfWarTruceSeconds > 0,
+                tugOfWarTruceSeconds,
+                tugOfWarTruceSeconds > 0 ? state.TugOfWarTruceFlipCount : tugOfWar.FlipCount,
+                tugOfWar.TriggerFlips,
+                tugOfWarTruceSeconds > 0 && !string.IsNullOrWhiteSpace(state.TugOfWarTruceDirectionPattern)
+                    ? state.TugOfWarTruceDirectionPattern
+                    : tugOfWar.DirectionPattern,
+                string.IsNullOrWhiteSpace(state.TugOfWarTruceStatus)
+                    ? tugOfWar.Status
+                    : state.TugOfWarTruceStatus,
+                tugOfWarTruceSeconds > 0 ? state.TugOfWarTruceUntil : null),
             new WallSettlingSnapshot(
                 state.Settings.WallSettlingGuardEnabled,
                 wallSettlingSeconds > 0,
@@ -6733,6 +6955,7 @@ public sealed class DefenderStateStore
         state.CoolModeRestoreStatus = "Cool mode restore is watching.";
         state.ConflictQuietUntil = null;
         state.ConflictQuietStatus = "Conflict quiet is watching.";
+        ClearTugOfWarTruce("Tug-of-War Truce is watching for up/down thermostat fights.");
         ClearWallSettling("Wall settling is watching.");
         ClearManualComfortGrace();
         state.TouchIntentStatus = "Touch intent is watching.";
@@ -6756,6 +6979,14 @@ public sealed class DefenderStateStore
     {
         state.CoolerIntentUntil = null;
         state.CoolerIntentStatus = status;
+    }
+
+    private void ClearTugOfWarTruce(string status)
+    {
+        state.TugOfWarTruceUntil = null;
+        state.TugOfWarTruceFlipCount = 0;
+        state.TugOfWarTruceDirectionPattern = "watching";
+        state.TugOfWarTruceStatus = status;
     }
 
     private void ClearWallSettling(string status)
@@ -7317,6 +7548,11 @@ public sealed class DefenderStateStore
             TelemetryAlibiUseWeather = settings.TelemetryAlibiUseWeather,
             TelemetryAlibiUseSensorBeat = settings.TelemetryAlibiUseSensorBeat,
             TelemetryAlibiUsePeakPower = settings.TelemetryAlibiUsePeakPower,
+            TugOfWarTruceEnabled = settings.TugOfWarTruceEnabled,
+            TugOfWarTruceMinimumFlips = settings.TugOfWarTruceMinimumFlips,
+            TugOfWarTruceWindowMinutes = settings.TugOfWarTruceWindowMinutes,
+            TugOfWarTruceHoldMinutes = settings.TugOfWarTruceHoldMinutes,
+            TugOfWarTruceSafetyBandCelsius = settings.TugOfWarTruceSafetyBandCelsius,
             ComfortEnvelopeEnabled = settings.ComfortEnvelopeEnabled,
             ComfortEnvelopeTriggerTouches = settings.ComfortEnvelopeTriggerTouches,
             ComfortEnvelopeHoldMinutes = settings.ComfortEnvelopeHoldMinutes,
@@ -7624,6 +7860,14 @@ public sealed class DefenderStateStore
 
         public string ConflictQuietStatus { get; set; } = "Conflict quiet is watching.";
 
+        public DateTimeOffset? TugOfWarTruceUntil { get; set; }
+
+        public int TugOfWarTruceFlipCount { get; set; }
+
+        public string TugOfWarTruceDirectionPattern { get; set; } = "watching";
+
+        public string TugOfWarTruceStatus { get; set; } = "Tug-of-War Truce is watching for up/down thermostat fights.";
+
         public DateTimeOffset? WallSettlingUntil { get; set; }
 
         public string WallSettlingStatus { get; set; } = "Wall settling is watching.";
@@ -7821,6 +8065,13 @@ public sealed class DefenderStateStore
         bool Active,
         int RecentTouchCount,
         double NetChangeCelsius,
+        string Status);
+
+    private sealed record TugOfWarAnalysis(
+        bool Enabled,
+        int FlipCount,
+        int TriggerFlips,
+        string DirectionPattern,
         string Status);
 
     private sealed record RoomTemperatureSample(

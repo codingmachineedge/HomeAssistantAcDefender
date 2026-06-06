@@ -34,6 +34,7 @@ public sealed record DefenderSnapshot(
     ComfortCompromiseSnapshot ComfortCompromise,
     ComfortMemorySnapshot ComfortMemory,
     ConflictQuietSnapshot ConflictQuiet,
+    TugOfWarTruceSnapshot TugOfWarTruce,
     WallSettlingSnapshot WallSettling,
     ManualComfortGraceSnapshot ManualComfortGrace,
     TouchIntentSnapshot TouchIntent,
@@ -300,6 +301,16 @@ public sealed record ConflictQuietSnapshot(
     string Status,
     DateTimeOffset? Until);
 
+public sealed record TugOfWarTruceSnapshot(
+    bool Enabled,
+    bool Holding,
+    int SecondsRemaining,
+    int FlipCount,
+    int TriggerFlips,
+    string DirectionPattern,
+    string Status,
+    DateTimeOffset? Until);
+
 public sealed record WallSettlingSnapshot(
     bool Enabled,
     bool Holding,
@@ -529,6 +540,16 @@ public sealed class DefenderSettings
     public int ConflictQuietMinutes { get; set; } = 35;
 
     public double ConflictQuietComfortBandCelsius { get; set; } = 1.2;
+
+    public bool TugOfWarTruceEnabled { get; set; } = true;
+
+    public int TugOfWarTruceMinimumFlips { get; set; } = 2;
+
+    public int TugOfWarTruceWindowMinutes { get; set; } = 12;
+
+    public int TugOfWarTruceHoldMinutes { get; set; } = 20;
+
+    public double TugOfWarTruceSafetyBandCelsius { get; set; } = 1.0;
 
     public bool WallSettlingGuardEnabled { get; set; } = true;
 

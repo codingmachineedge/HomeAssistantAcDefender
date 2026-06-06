@@ -92,6 +92,11 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Max cadence minutes: longest safe cadence wait.
 - Cadence wiggle minutes: small random time wobble so cadence slots are not exact.
 - Cadence safe band C: extra warmth allowed before cadence stops waiting.
+- Tug-of-War Truce: holds safe answer-backs when the wall setpoint bounces up/down.
+- Flip trigger: direction flips needed before the truce starts.
+- Flip window minutes: how long real thermostat changes count for up/down detection.
+- Truce hold minutes: how long safe answer-backs wait after the flip trigger.
+- Truce safe band C: extra warmth allowed before the truce clears.
 - Comfort compromise: temporarily blends repeated wall choices while the room is still safe.
 - Compromise touches: recent wall touches needed before blending starts.
 - Compromise hold minutes: how long the wall choice can rest.

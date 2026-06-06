@@ -158,6 +158,18 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("tug war truce alternating thermostat fight flips up down suspicion"))
+            {
+                <MudExpansionPanel Text="Tug-of-War Truce" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Tug-of-War Truce" Value="_tugOfWarTruceEnabled" ValueChanged="@(v => SetDirty(v, x => _tugOfWarTruceEnabled = x))" Help="Hold safe answer-backs when the thermostat keeps bouncing up and down." />
+                        <SettingInt Label="Flip trigger" Value="_tugOfWarTruceMinimumFlips" ValueChanged="@(v => SetDirty(v, x => _tugOfWarTruceMinimumFlips = x))" Min="1" Max="20" />
+                        <SettingInt Label="Flip window" Unit="min" Value="_tugOfWarTruceWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _tugOfWarTruceWindowMinutes = x))" Min="1" Max="240" />
+                        <SettingInt Label="Truce hold" Unit="min" Value="_tugOfWarTruceHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _tugOfWarTruceHoldMinutes = x))" Min="0" Max="240" />
+                        <SettingDouble Label="Safe band" Value="_tugOfWarTruceSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _tugOfWarTruceSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("touch signature learned step")) {
                 <MudExpansionPanel Text="Touch signature" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -619,6 +631,11 @@
     private int _conflictQuietTouchThreshold = 4;
     private int _conflictQuietMinutes = 35;
     private double _conflictQuietComfortBandCelsius = 1.2;
+    private bool _tugOfWarTruceEnabled = true;
+    private int _tugOfWarTruceMinimumFlips = 2;
+    private int _tugOfWarTruceWindowMinutes = 12;
+    private int _tugOfWarTruceHoldMinutes = 20;
+    private double _tugOfWarTruceSafetyBandCelsius = 1.0;
     private bool _wallSettlingGuardEnabled = true;
     private int _wallSettlingMinimumTouches = 2;
     private int _wallSettlingWindowMinutes = 10;
@@ -856,6 +873,11 @@
         _conflictQuietTouchThreshold = settings.ConflictQuietTouchThreshold;
         _conflictQuietMinutes = settings.ConflictQuietMinutes;
         _conflictQuietComfortBandCelsius = settings.ConflictQuietComfortBandCelsius;
+        _tugOfWarTruceEnabled = settings.TugOfWarTruceEnabled;
+        _tugOfWarTruceMinimumFlips = settings.TugOfWarTruceMinimumFlips;
+        _tugOfWarTruceWindowMinutes = settings.TugOfWarTruceWindowMinutes;
+        _tugOfWarTruceHoldMinutes = settings.TugOfWarTruceHoldMinutes;
+        _tugOfWarTruceSafetyBandCelsius = settings.TugOfWarTruceSafetyBandCelsius;
         _wallSettlingGuardEnabled = settings.WallSettlingGuardEnabled;
         _wallSettlingMinimumTouches = settings.WallSettlingMinimumTouches;
         _wallSettlingWindowMinutes = settings.WallSettlingWindowMinutes;
@@ -1130,6 +1152,11 @@
             _conflictQuietTouchThreshold,
             _conflictQuietMinutes,
             _conflictQuietComfortBandCelsius,
+            _tugOfWarTruceEnabled,
+            _tugOfWarTruceMinimumFlips,
+            _tugOfWarTruceWindowMinutes,
+            _tugOfWarTruceHoldMinutes,
+            _tugOfWarTruceSafetyBandCelsius,
             _wallSettlingGuardEnabled,
             _wallSettlingMinimumTouches,
             _wallSettlingWindowMinutes,

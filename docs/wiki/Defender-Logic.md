@@ -30,7 +30,7 @@ sequence. The first guard that wants to wait stops the cycle and reports its nex
 12. **Alectra Peak Power Saver** makes safe cooling more chill during On-peak, high-price, or high-power usage.
 13. **Fan Energy Saver** moves the fan to a saver mode when near target.
 14. Compute the **expected setpoint**: 1 C below room when the room is warm.
-15. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver -> Comfort Envelope -> Room Trend -> Thermal Momentum -> Weather Drift -> Setpoint Echo -> Setpoint Stillness -> Remote Settling -> Cooling Runway -> Sensor Rhythm -> HVAC Alibi -> Telemetry Alibi -> Comfort Sync -> Comfort Pace -> Routine Timing -> Comfort Budget -> Command Camouflage -> Stealth Governor -> Visibility Guard -> Natural Cadence**.
+15. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver -> Comfort Envelope -> Tug-of-War Truce -> Room Trend -> Thermal Momentum -> Weather Drift -> Setpoint Echo -> Setpoint Stillness -> Remote Settling -> Cooling Runway -> Sensor Rhythm -> HVAC Alibi -> Telemetry Alibi -> Comfort Sync -> Comfort Pace -> Routine Timing -> Comfort Budget -> Command Camouflage -> Stealth Governor -> Visibility Guard -> Natural Cadence**.
 16. Shape the command size with **Natural Walkback**, **Touch Signature**, and **Human Nudge**, then **Repeat Quiet**.
 17. Send the corrected setpoint to Home Assistant.
 18. **Cooling Failure Watch** runs alongside and raises a mega-alert if cooling is demanded but not real.
@@ -161,6 +161,12 @@ Stands the defender down during an obvious tug-of-war over the thermostat.
 - **Watches:** recent wall touches within the touch window and how far the room is above target.
 - **Logic:** when touches reach the threshold, it stops sending visible corrections for the stand-down minutes while the room stays within `target + comfort band`.
 - **Settings:** `ConflictQuietModeEnabled`, `ConflictQuietTouchThreshold`, `ConflictQuietMinutes`, `ConflictQuietComfortBandCelsius`.
+
+### Tug-of-War Truce
+Calls a temporary truce when the real thermostat bounces up and down.
+- **Watches:** the external thermostat audit log: previous setpoint, new setpoint, timestamp, and source classification.
+- **Logic:** inside the flip window, it maps real setpoint changes to `up`, `down`, or `flat`, counts direction flips, and starts a truce once the flip trigger is met. The truce holds only safe answer-back corrections while the room stays within `target + safety band`.
+- **Settings:** `TugOfWarTruceEnabled`, `TugOfWarTruceMinimumFlips`, `TugOfWarTruceWindowMinutes`, `TugOfWarTruceHoldMinutes`, `TugOfWarTruceSafetyBandCelsius`.
 
 ### Wall Settling
 Waits for someone who is still tapping the wall thermostat to stop before correcting.

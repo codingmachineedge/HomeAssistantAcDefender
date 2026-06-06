@@ -35,6 +35,7 @@ The status snapshot includes:
 - `comfortCompromise`: temporary blended target status, preferred wall setpoint, effective target, remaining seconds, and expiry time.
 - `comfortMemory`: learned time-window status, active flag, sample count, learned offset, and effective target.
 - `conflictQuiet`: repeated-touch stand-down status, remaining seconds, trigger touch count, comfort band, and expiry time.
+- `tugOfWarTruce`: up/down thermostat fight status, hold seconds, flip count, trigger flips, direction pattern, and expiry time.
 - `manualComfortGrace`: wall-change grace status, remaining seconds, comfort band, and expiry time.
 - `touchIntent`: wall-choice intent status, active flag, direction, recent touch count, net change, and extra grace minutes.
 - `setpointEcho`: pending setpoint confirmation status, wait seconds, pending target, and expiry time.
@@ -42,6 +43,7 @@ The status snapshot includes:
 - `setpointStillness`: stable wall-setpoint reading status, hold seconds, stable sample count, required samples, current reported setpoint, and expiry time.
 - `sensorRhythm`: Home Assistant reading cadence status, wait seconds, learned median interval, sample count, and due time.
 - `hvacActionAlibi`: real HVAC action transition timing status, wait seconds, current action, recent touch count, last transition time, and expiry time.
+- `telemetryAlibi`: real Home Assistant/weather/Alectra telemetry timing status, wait seconds, latest signal, recent touch count, and expiry time.
 - `coolingRunway`: fresh-cooling hold status, wait seconds, pressure, cooling start time, and expiry time.
 - `roomTrend`: real room trend direction, delta, sample count, hold status, and remaining hold seconds.
 - `thermalMomentum`: real cooling rate, estimated minutes to target, hold status, and remaining hold seconds.
@@ -76,7 +78,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, Human Nudge, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, Setpoint Stillness, HVAC Alibi, Telemetry Alibi, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, Remote Settling, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Human Nudge, Command Camouflage, Stealth Governor, Comfort Pace, Tug-of-War Truce, Comfort Envelope, Setpoint Stillness, HVAC Alibi, Telemetry Alibi, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, Remote Settling, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 
