@@ -71,6 +71,8 @@ Sensor Rhythm is a persisted timing guard in `DefenderStateStore`. It stores rea
 
 HVAC Alibi is another persisted timing guard in `DefenderStateStore`. It tracks the real Home Assistant `hvac_action` and its last transition, then lets `AcDefenderService` delay only safe corrections until a real action change occurs or the max hold expires. It clears before direct comfort correction and never creates fake thermostat state.
 
+Telemetry Alibi is a persisted timing guard in `DefenderStateStore`. It reuses real Home Assistant reading timestamps, weather samples, and Alectra Hui usage updates as cover signals. `AcDefenderService` checks it after HVAC Alibi and before broader natural recovery timing, delaying only safe corrections after repeated wall touches until the configured quiet hold has passed and a fresh enabled telemetry signal appears. It clears immediately for direct comfort correction.
+
 Cooling Runway is a persisted timing guard in `DefenderStateStore` that watches the real Home Assistant `hvac_action`. When the action changes into cooling, `AcDefenderService` can delay only safe follow-up corrections so the AC gets time to work before another command. It clears when cooling stops or direct comfort correction is needed.
 
 Adaptive quietness is also calculated in `DefenderStateStore`. It turns recent external thermostat touches into a quiet level and effective delay, hold chance, command gap, and nudge size. The dashboard displays those effective values so the UI matches the worker decision.

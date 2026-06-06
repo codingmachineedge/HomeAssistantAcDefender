@@ -470,6 +470,25 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Telemetry Alibi", GuardCategory.Sensor,
+            "Waits for a normal Home Assistant/weather/usage update before a safe correction, so the nudge is not an isolated event.",
+            "Recent wall touches, real Home Assistant reading beats, weather samples, Alectra Hui usage updates, and room temperature.",
+            "After repeated wall touches, while the room is still inside the safety band, it starts a short quiet hold and then waits for the next enabled real telemetry signal. A too-warm room, direct comfort need, matching setpoint, disabled signal source, or max wait clears the hold.",
+            "Delays only safe corrections until a normal house telemetry update can act as cover.",
+            ["TelemetryAlibiEnabled", "TelemetryAlibiTriggerTouches", "TelemetryAlibiMinimumHoldSeconds", "TelemetryAlibiMaxHoldMinutes", "TelemetryAlibiSafetyBandCelsius", "TelemetryAlibiUseWeather", "TelemetryAlibiUseSensorBeat", "TelemetryAlibiUsePeakPower"],
+            s =>
+            {
+                var a = s.TelemetryAlibi;
+                return GuardLiveView.Standard(a.Enabled, a.Waiting, "Waiting", a.Status,
+                [
+                    new("Telemetry wait", OffWait(a.Enabled, a.Waiting, a.SecondsRemaining), "Time left waiting for a normal telemetry cover signal."),
+                    new("Touches", a.Enabled ? a.RecentTouchCount.ToString() : "Off", "Recent external thermostat changes."),
+                    new("Signal", a.Enabled ? a.LastSignal : "Off", "Newest enabled telemetry signal."),
+                    new("Signal time", a.LastSignalAt is { } at ? at.ToLocalTime().ToString("HH:mm:ss") : a.Enabled ? "--" : "Off", "When the newest telemetry signal arrived."),
+                ], busyTone: GuardTone.Holding);
+            }),
+
+        new GuardInfo(
             "Cooling Runway", GuardCategory.Sensor,
             "Gives the AC time to work after cooling starts before nudging the setpoint again.",
             "The Home Assistant hvac_action and how long ago cooling started, plus command pressure.",

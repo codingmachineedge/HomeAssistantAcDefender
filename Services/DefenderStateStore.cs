@@ -238,6 +238,18 @@ public sealed class DefenderStateStore
             {
                 ClearNaturalChangePlanner("Comfort Pace is off.");
             }
+            state.Settings.TelemetryAlibiEnabled = request.TelemetryAlibiEnabled;
+            state.Settings.TelemetryAlibiTriggerTouches = Math.Clamp(request.TelemetryAlibiTriggerTouches, 1, 20);
+            state.Settings.TelemetryAlibiMinimumHoldSeconds = Math.Clamp(request.TelemetryAlibiMinimumHoldSeconds, 0, 1800);
+            state.Settings.TelemetryAlibiMaxHoldMinutes = Math.Clamp(request.TelemetryAlibiMaxHoldMinutes, 1, 240);
+            state.Settings.TelemetryAlibiSafetyBandCelsius = Math.Round(Math.Clamp(request.TelemetryAlibiSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.TelemetryAlibiUseWeather = request.TelemetryAlibiUseWeather;
+            state.Settings.TelemetryAlibiUseSensorBeat = request.TelemetryAlibiUseSensorBeat;
+            state.Settings.TelemetryAlibiUsePeakPower = request.TelemetryAlibiUsePeakPower;
+            if (!state.Settings.TelemetryAlibiEnabled)
+            {
+                ClearTelemetryAlibi("Telemetry alibi is off.");
+            }
             state.Settings.ComfortEnvelopeEnabled = request.ComfortEnvelopeEnabled;
             state.Settings.ComfortEnvelopeTriggerTouches = Math.Clamp(request.ComfortEnvelopeTriggerTouches, 1, 20);
             state.Settings.ComfortEnvelopeHoldMinutes = Math.Clamp(request.ComfortEnvelopeHoldMinutes, 0, 240);
@@ -1889,6 +1901,116 @@ public sealed class DefenderStateStore
             state.HvacActionAlibiStatus = message;
             SaveState();
             return true;
+        }
+    }
+
+    /// <summary>Telemetry Alibi: true while waiting for a real telemetry update after a short safe quiet hold.</summary>
+    public bool TryRespectTelemetryAlibi(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!state.Settings.TelemetryAlibiEnabled)
+            {
+                ClearTelemetryAlibi("Telemetry alibi is off.");
+                SaveState();
+                return false;
+            }
+
+            PruneTouchTimes(now);
+            PruneHomeAssistantReadingTimes(now);
+            PruneWeatherSamples(now);
+
+            var triggerTouches = Math.Max(1, state.Settings.TelemetryAlibiTriggerTouches);
+            var recentTouches = state.ExternalTouchTimes.Count;
+            if (recentTouches < triggerTouches)
+            {
+                ClearTelemetryAlibi($"Telemetry alibi is watching for repeated wall touches ({recentTouches}/{triggerTouches}).");
+                SaveState();
+                return false;
+            }
+
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearTelemetryAlibi("Room comfort needs help now, so telemetry alibi is stepping aside.");
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.TelemetryAlibiSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearTelemetryAlibi($"Room is above {allowedRoomTemperature:0.0} C, so telemetry alibi lets direct comfort continue.");
+                SaveState();
+                return false;
+            }
+
+            if (Math.Abs(reading.SetPointCelsius - expectedSetPointCelsius) <= 0.05)
+            {
+                ClearTelemetryAlibi("Telemetry alibi is lined up; no telemetry wait is needed.");
+                SaveState();
+                return false;
+            }
+
+            var latestSignal = BuildTelemetryAlibiSignal();
+            if (latestSignal is not null)
+            {
+                state.TelemetryAlibiLastSignal = latestSignal.Label;
+                state.TelemetryAlibiLastSignalAt = latestSignal.Timestamp;
+            }
+
+            if (state.TelemetryAlibiStartedAt is null)
+            {
+                state.TelemetryAlibiStartedAt = now;
+                waitUntil = now.AddMinutes(Math.Clamp(state.Settings.TelemetryAlibiMaxHoldMinutes, 1, 240));
+                state.TelemetryAlibiUntil = waitUntil;
+                message = BuildTelemetryAlibiWaitMessage(now, waitUntil, latestSignal, recentTouches);
+                state.TelemetryAlibiStatus = message;
+                SaveState();
+                return true;
+            }
+
+            var startedAt = state.TelemetryAlibiStartedAt.Value;
+            var minimumHoldUntil = startedAt.AddSeconds(Math.Clamp(state.Settings.TelemetryAlibiMinimumHoldSeconds, 0, 1800));
+            if (now < minimumHoldUntil)
+            {
+                waitUntil = minimumHoldUntil;
+                message = $"Telemetry alibi is holding until {minimumHoldUntil.ToLocalTime():HH:mm:ss} before it accepts a normal house telemetry update.";
+                state.TelemetryAlibiStatus = message;
+                SaveState();
+                return true;
+            }
+
+            if (latestSignal is { } signal && signal.Timestamp >= minimumHoldUntil)
+            {
+                ClearTelemetryAlibi($"Telemetry alibi saw {signal.Label} at {signal.Timestamp.ToLocalTime():HH:mm:ss}; safe correction can ride that normal update.");
+                SaveState();
+                return false;
+            }
+
+            if (state.TelemetryAlibiUntil is { } holdUntil && holdUntil > now)
+            {
+                waitUntil = holdUntil;
+                var signalText = latestSignal is null
+                    ? "no enabled telemetry signal yet"
+                    : $"latest signal was {latestSignal.Label} at {latestSignal.Timestamp.ToLocalTime():HH:mm:ss}";
+                message = $"Telemetry alibi is waiting until {holdUntil.ToLocalTime():HH:mm:ss} for a fresh telemetry update after the quiet hold; {signalText}.";
+                state.TelemetryAlibiStatus = message;
+                SaveState();
+                return true;
+            }
+
+            ClearTelemetryAlibi("Telemetry alibi max wait ended; safe correction can continue if still needed.");
+            SaveState();
+            return false;
         }
     }
 
@@ -4485,6 +4607,52 @@ public sealed class DefenderStateStore
             state.HomeAssistantReadingTimes.LastOrDefault());
     }
 
+    private TelemetryAlibiSignal? BuildTelemetryAlibiSignal()
+    {
+        TelemetryAlibiSignal? latest = null;
+
+        void Consider(DateTimeOffset? timestamp, string label)
+        {
+            if (timestamp is null)
+            {
+                return;
+            }
+
+            if (latest is null || timestamp.Value > latest.Timestamp)
+            {
+                latest = new TelemetryAlibiSignal(timestamp.Value, label);
+            }
+        }
+
+        if (state.Settings.TelemetryAlibiUseWeather && state.WeatherSamples.LastOrDefault() is { } weather)
+        {
+            var condition = string.IsNullOrWhiteSpace(weather.Condition) ? "weather" : weather.Condition;
+            Consider(weather.Timestamp, $"weather update ({condition}, {weather.OutdoorTemperatureCelsius:0.0} C outside)");
+        }
+
+        if (state.Settings.TelemetryAlibiUseSensorBeat)
+        {
+            Consider(state.HomeAssistantReadingTimes.LastOrDefault(), "Home Assistant sensor beat");
+        }
+
+        if (state.Settings.TelemetryAlibiUsePeakPower && state.AlectraPeakPower?.UpdatedAt is { } usageAt)
+        {
+            Consider(usageAt, "Alectra Hui usage update");
+        }
+
+        return latest;
+    }
+
+    private string BuildTelemetryAlibiWaitMessage(DateTimeOffset now, DateTimeOffset waitUntil, TelemetryAlibiSignal? latestSignal, int recentTouches)
+    {
+        var minimumHold = Math.Clamp(state.Settings.TelemetryAlibiMinimumHoldSeconds, 0, 1800);
+        var quietUntil = now.AddSeconds(minimumHold);
+        var sourceText = latestSignal is null
+            ? "no telemetry source has reported yet"
+            : $"latest signal is {latestSignal.Label} at {latestSignal.Timestamp.ToLocalTime():HH:mm:ss}";
+        return $"Telemetry alibi is waiting for a normal house update after {recentTouches} wall touches: quiet hold until {quietUntil.ToLocalTime():HH:mm:ss}, max wait {waitUntil.ToLocalTime():HH:mm:ss}; {sourceText}.";
+    }
+
     private DateTimeOffset CalculateSensorRhythmDueAt(DateTimeOffset now, SensorRhythmAnalysis analysis)
     {
         var medianSeconds = Math.Clamp(analysis.MedianIntervalSeconds, 2, 3600);
@@ -5391,6 +5559,10 @@ public sealed class DefenderStateStore
             480);
         saved.Settings.NaturalChangePlannerJitterMinutes = Math.Clamp(saved.Settings.NaturalChangePlannerJitterMinutes, 0, 120);
         saved.Settings.NaturalChangePlannerSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.NaturalChangePlannerSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.TelemetryAlibiTriggerTouches = Math.Clamp(saved.Settings.TelemetryAlibiTriggerTouches <= 0 ? 2 : saved.Settings.TelemetryAlibiTriggerTouches, 1, 20);
+        saved.Settings.TelemetryAlibiMinimumHoldSeconds = Math.Clamp(saved.Settings.TelemetryAlibiMinimumHoldSeconds <= 0 ? 90 : saved.Settings.TelemetryAlibiMinimumHoldSeconds, 0, 1800);
+        saved.Settings.TelemetryAlibiMaxHoldMinutes = Math.Clamp(saved.Settings.TelemetryAlibiMaxHoldMinutes <= 0 ? 10 : saved.Settings.TelemetryAlibiMaxHoldMinutes, 1, 240);
+        saved.Settings.TelemetryAlibiSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TelemetryAlibiSafetyBandCelsius <= 0 ? 1.0 : saved.Settings.TelemetryAlibiSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.ComfortEnvelopeTriggerTouches = Math.Clamp(saved.Settings.ComfortEnvelopeTriggerTouches, 1, 20);
         saved.Settings.ComfortEnvelopeHoldMinutes = Math.Clamp(saved.Settings.ComfortEnvelopeHoldMinutes, 0, 240);
         saved.Settings.ComfortEnvelopeMaxOffsetCelsius = Math.Round(Math.Clamp(saved.Settings.ComfortEnvelopeMaxOffsetCelsius, 0.1, 5.0), 1);
@@ -5705,6 +5877,24 @@ public sealed class DefenderStateStore
             saved.HvacActionAlibiUntil = null;
             saved.HvacActionAlibiStatus = "HVAC alibi is watching for a real action transition.";
         }
+        saved.TelemetryAlibiStatus = string.IsNullOrWhiteSpace(saved.TelemetryAlibiStatus)
+            ? "Telemetry alibi is watching for normal house updates."
+            : saved.TelemetryAlibiStatus;
+        saved.TelemetryAlibiLastSignal = string.IsNullOrWhiteSpace(saved.TelemetryAlibiLastSignal)
+            ? "none"
+            : saved.TelemetryAlibiLastSignal;
+        if (!saved.Settings.TelemetryAlibiEnabled)
+        {
+            saved.TelemetryAlibiStartedAt = null;
+            saved.TelemetryAlibiUntil = null;
+            saved.TelemetryAlibiStatus = "Telemetry alibi is off.";
+        }
+        else if (saved.TelemetryAlibiUntil is { } telemetryUntil && telemetryUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.TelemetryAlibiStartedAt = null;
+            saved.TelemetryAlibiUntil = null;
+            saved.TelemetryAlibiStatus = "Telemetry alibi is watching for normal house updates.";
+        }
         saved.CoolingRunwayStatus = string.IsNullOrWhiteSpace(saved.CoolingRunwayStatus)
             ? "Cooling runway is watching for a fresh cooling start."
             : saved.CoolingRunwayStatus;
@@ -5930,6 +6120,14 @@ public sealed class DefenderStateStore
         {
             ClearHvacActionAlibi("HVAC alibi max wait ended; watching for the next real action transition.");
         }
+        var telemetryAlibiSeconds = state.TelemetryAlibiUntil is { } telemetryUntil && telemetryUntil > now
+            ? (int)Math.Ceiling((telemetryUntil - now).TotalSeconds)
+            : 0;
+        if (telemetryAlibiSeconds == 0 && state.TelemetryAlibiUntil is not null)
+        {
+            ClearTelemetryAlibi("Telemetry alibi max wait ended; watching for normal house updates.");
+        }
+        var telemetryAlibiSignal = BuildTelemetryAlibiSignal();
         var coolingRunwaySeconds = state.CoolingRunwayHoldUntil is { } runwayUntil && runwayUntil > now
             ? (int)Math.Ceiling((runwayUntil - now).TotalSeconds)
             : 0;
@@ -6362,6 +6560,17 @@ public sealed class DefenderStateStore
                     ? "HVAC alibi is watching for a real action transition."
                     : state.HvacActionAlibiStatus,
                 hvacActionAlibiSeconds > 0 ? state.HvacActionAlibiUntil : null),
+            new TelemetryAlibiSnapshot(
+                state.Settings.TelemetryAlibiEnabled,
+                telemetryAlibiSeconds > 0,
+                telemetryAlibiSeconds,
+                state.ExternalTouchTimes.Count,
+                telemetryAlibiSignal?.Label ?? (string.IsNullOrWhiteSpace(state.TelemetryAlibiLastSignal) ? "none" : state.TelemetryAlibiLastSignal),
+                telemetryAlibiSignal?.Timestamp ?? state.TelemetryAlibiLastSignalAt,
+                string.IsNullOrWhiteSpace(state.TelemetryAlibiStatus)
+                    ? "Telemetry alibi is watching for normal house updates."
+                    : state.TelemetryAlibiStatus,
+                telemetryAlibiSeconds > 0 ? state.TelemetryAlibiUntil : null),
             new CoolingRunwaySnapshot(
                 state.Settings.CoolingRunwayGuardEnabled,
                 coolingRunwaySeconds > 0,
@@ -6515,6 +6724,7 @@ public sealed class DefenderStateStore
         ClearCoolingRunway("Cooling runway is watching.");
         ClearSensorRhythm("Sensor rhythm is watching.");
         ClearHvacActionAlibi("HVAC alibi is watching for a real action transition.");
+        ClearTelemetryAlibi("Telemetry alibi is watching for normal house updates.");
         ClearComfortCompromise("Comfort compromise reset after website target change.");
         state.ComfortMemoryEffectiveTargetCelsius = null;
         state.ComfortMemoryStatus = "Comfort memory is watching wall choices.";
@@ -6724,6 +6934,7 @@ public sealed class DefenderStateStore
             ClearSetpointStillness("Setpoint stillness used its settled window; watching for the next wall pause.");
             ClearRemoteSettling("Remote settling used its quiet window; watching for the next Home Assistant-side pattern.");
             ClearHvacActionAlibi("HVAC alibi used its timing cue; watching for the next safe transition.");
+            ClearTelemetryAlibi("Telemetry alibi used its normal house update; watching for the next safe cover signal.");
         }
         else
         {
@@ -6749,6 +6960,13 @@ public sealed class DefenderStateStore
         state.HvacActionAlibiStartedAt = null;
         state.HvacActionAlibiUntil = null;
         state.HvacActionAlibiStatus = status;
+    }
+
+    private void ClearTelemetryAlibi(string status)
+    {
+        state.TelemetryAlibiStartedAt = null;
+        state.TelemetryAlibiUntil = null;
+        state.TelemetryAlibiStatus = status;
     }
 
     private void ClearWeatherDrift(string status)
@@ -7091,6 +7309,14 @@ public sealed class DefenderStateStore
             NaturalChangePlannerSafetyBandCelsius = settings.NaturalChangePlannerSafetyBandCelsius,
             NaturalChangePlannerPreferWeatherSlots = settings.NaturalChangePlannerPreferWeatherSlots,
             NaturalChangePlannerPreferSensorBeat = settings.NaturalChangePlannerPreferSensorBeat,
+            TelemetryAlibiEnabled = settings.TelemetryAlibiEnabled,
+            TelemetryAlibiTriggerTouches = settings.TelemetryAlibiTriggerTouches,
+            TelemetryAlibiMinimumHoldSeconds = settings.TelemetryAlibiMinimumHoldSeconds,
+            TelemetryAlibiMaxHoldMinutes = settings.TelemetryAlibiMaxHoldMinutes,
+            TelemetryAlibiSafetyBandCelsius = settings.TelemetryAlibiSafetyBandCelsius,
+            TelemetryAlibiUseWeather = settings.TelemetryAlibiUseWeather,
+            TelemetryAlibiUseSensorBeat = settings.TelemetryAlibiUseSensorBeat,
+            TelemetryAlibiUsePeakPower = settings.TelemetryAlibiUsePeakPower,
             ComfortEnvelopeEnabled = settings.ComfortEnvelopeEnabled,
             ComfortEnvelopeTriggerTouches = settings.ComfortEnvelopeTriggerTouches,
             ComfortEnvelopeHoldMinutes = settings.ComfortEnvelopeHoldMinutes,
@@ -7448,6 +7674,16 @@ public sealed class DefenderStateStore
 
         public string HvacActionAlibiStatus { get; set; } = "HVAC alibi is watching for a real action transition.";
 
+        public DateTimeOffset? TelemetryAlibiStartedAt { get; set; }
+
+        public DateTimeOffset? TelemetryAlibiUntil { get; set; }
+
+        public string TelemetryAlibiLastSignal { get; set; } = "none";
+
+        public DateTimeOffset? TelemetryAlibiLastSignalAt { get; set; }
+
+        public string TelemetryAlibiStatus { get; set; } = "Telemetry alibi is watching for normal house updates.";
+
         public DateTimeOffset? CoolingRunwayStartedAt { get; set; }
 
         public DateTimeOffset? CoolingRunwayHoldUntil { get; set; }
@@ -7608,6 +7844,10 @@ public sealed class DefenderStateStore
         int SampleCount,
         int MedianIntervalSeconds,
         DateTimeOffset? LastReadingAt);
+
+    private sealed record TelemetryAlibiSignal(
+        DateTimeOffset Timestamp,
+        string Label);
 
     private sealed record RoomTrendAnalysis(
         string Direction,

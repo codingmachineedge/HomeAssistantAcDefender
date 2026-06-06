@@ -141,6 +141,12 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Transition window seconds: how recently a real action change can count as the alibi.
 - Max alibi minutes: longest safe wait for a real action change.
 - Alibi safe band C: extra warmth allowed before HVAC alibi stops waiting.
+- Telemetry alibi: waits for normal Home Assistant, weather, or Alectra Hui telemetry before a safe correction.
+- Telemetry alibi touches: external thermostat touches needed before telemetry alibi can wait.
+- Quiet hold seconds: short safe delay before a telemetry signal can release the wait.
+- Telemetry max wait minutes: longest safe wait for a real telemetry signal.
+- Telemetry safe band C: extra warmth allowed before telemetry alibi stops waiting.
+- Use weather / sensor beat / Alectra: which real telemetry sources count as cover.
 - Cooling runway: waits after Home Assistant reports that cooling started.
 - Runway wait seconds: smallest wait after cooling starts.
 - Runway pressure seconds: extra wait added when wall touches or helper commands pile up.

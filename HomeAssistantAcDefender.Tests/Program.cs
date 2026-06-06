@@ -30,6 +30,7 @@ tests.WeatherDriftWaitsOnlyForSafeStableOutdoorConditions();
 tests.CoolingRunwayWaitsOnlyAfterSafeCoolingStarts();
 tests.SensorRhythmWaitsOnlyForSafeCorrections();
 tests.HvacActionAlibiWaitsForRealActionTransitionButBypassesHotRoom();
+tests.TelemetryAlibiWaitsForHouseSignalButBypassesHotRoom();
 tests.ComfortPaceWaitsAfterFrequentWallTouchesButBypassesHotRoom();
 tests.ComfortEnvelopeObservesSmallSafeWallPreferenceButBypassesHotRoom();
 tests.PeakPowerSaverHoldsSafeCoolingDuringAlectraOnPeakButBypassesHotRoom();
@@ -46,9 +47,9 @@ internal sealed class DefenderSetPointRegressionTests
         var snapshot = fixture.Store.GetSnapshot();
 
         var live = GuardCatalog.Live.ToList();
-        if (live.Count < 31)
+        if (live.Count < 32)
         {
-            throw new InvalidOperationException($"Expected at least 31 live guard cards in the catalog, found {live.Count}.");
+            throw new InvalidOperationException($"Expected at least 32 live guard cards in the catalog, found {live.Count}.");
         }
 
         foreach (var guard in live)
@@ -334,6 +335,105 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.RepeatCommand.Holding)
         {
             throw new InvalidOperationException("Repeat Quiet should not keep holding after a comfort bypass.");
+        }
+    }
+
+    public void TelemetryAlibiWaitsForHouseSignalButBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.TelemetryAlibiEnabled = true;
+        settings.TelemetryAlibiTriggerTouches = 2;
+        settings.TelemetryAlibiMinimumHoldSeconds = 60;
+        settings.TelemetryAlibiMaxHoldMinutes = 10;
+        settings.TelemetryAlibiSafetyBandCelsius = 1.0;
+        settings.TelemetryAlibiUseWeather = false;
+        settings.TelemetryAlibiUseSensorBeat = true;
+        settings.TelemetryAlibiUsePeakPower = false;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.4,
+            25.0,
+            "cool",
+            "idle",
+            null,
+            []);
+
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 22.0 });
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 24.0 });
+        store.RecordHomeAssistantReading(safeReading);
+
+        var startedAt = DateTimeOffset.UtcNow;
+        var held = store.TryRespectTelemetryAlibi(
+            safeReading,
+            22.0,
+            bypassForComfort: false,
+            startedAt,
+            out var waitUntil,
+            out var message);
+
+        if (!held || waitUntil <= startedAt || !message.Contains("Telemetry alibi", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Telemetry Alibi should hold a safe correction after repeated wall touches.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.TelemetryAlibi.Waiting
+            || snapshot.TelemetryAlibi.RecentTouchCount < 2
+            || !snapshot.TelemetryAlibi.LastSignal.Contains("sensor", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Telemetry Alibi snapshot should show active wait, touch pressure, and latest signal.");
+        }
+
+        var hotRoom = store.TryRespectTelemetryAlibi(
+            safeReading with { CurrentTemperatureCelsius = 24.2 },
+            22.0,
+            bypassForComfort: false,
+            startedAt.AddSeconds(1),
+            out _,
+            out _);
+
+        if (hotRoom)
+        {
+            throw new InvalidOperationException("Telemetry Alibi must step aside when direct cooling is needed.");
+        }
+
+        snapshot = store.GetSnapshot();
+        if (snapshot.TelemetryAlibi.Waiting)
+        {
+            throw new InvalidOperationException("Telemetry Alibi should clear its hold after comfort safety takes over.");
+        }
+
+        var secondStart = startedAt.AddSeconds(2);
+        held = store.TryRespectTelemetryAlibi(
+            safeReading,
+            22.0,
+            bypassForComfort: false,
+            secondStart,
+            out _,
+            out _);
+
+        if (!held)
+        {
+            throw new InvalidOperationException("Telemetry Alibi should start a second safe hold before a fresh signal arrives.");
+        }
+
+        SeedHomeAssistantReadingTimes(store, secondStart.AddSeconds(61));
+        var released = store.TryRespectTelemetryAlibi(
+            safeReading,
+            22.0,
+            bypassForComfort: false,
+            secondStart.AddSeconds(61),
+            out _,
+            out _);
+
+        if (released)
+        {
+            throw new InvalidOperationException("Telemetry Alibi should release once a fresh sensor beat arrives after the quiet hold.");
         }
     }
 

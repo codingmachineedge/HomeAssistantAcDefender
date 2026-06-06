@@ -388,6 +388,20 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("telemetry alibi weather sensor beat alectra usage house update cover")) {
+                <MudExpansionPanel Text="Telemetry alibi" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Telemetry alibi" Value="_telemetryAlibiEnabled" ValueChanged="@(v => SetDirty(v, x => _telemetryAlibiEnabled = x))" Help="Wait for a normal house telemetry update before a safe correction." />
+                        <SettingInt Label="Alibi touches" Value="_telemetryAlibiTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _telemetryAlibiTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingInt Label="Quiet hold" Unit="s" Value="_telemetryAlibiMinimumHoldSeconds" ValueChanged="@(v => SetDirty(v, x => _telemetryAlibiMinimumHoldSeconds = x))" Min="0" Max="1800" />
+                        <SettingInt Label="Max wait" Unit="min" Value="_telemetryAlibiMaxHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _telemetryAlibiMaxHoldMinutes = x))" Min="1" Max="240" />
+                        <SettingDouble Label="Safe band" Value="_telemetryAlibiSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _telemetryAlibiSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                        <SettingSwitch Label="Use weather" Value="_telemetryAlibiUseWeather" ValueChanged="@(v => SetDirty(v, x => _telemetryAlibiUseWeather = x))" Help="Let weather updates count as cover." />
+                        <SettingSwitch Label="Use sensor beat" Value="_telemetryAlibiUseSensorBeat" ValueChanged="@(v => SetDirty(v, x => _telemetryAlibiUseSensorBeat = x))" Help="Let normal Home Assistant readings count as cover." />
+                        <SettingSwitch Label="Use Alectra" Value="_telemetryAlibiUsePeakPower" ValueChanged="@(v => SetDirty(v, x => _telemetryAlibiUsePeakPower = x))" Help="Let Alectra Hui usage updates count as cover." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("cooling runway hvac action")) {
                 <MudExpansionPanel Text="Cooling runway" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -734,6 +748,14 @@
     private int _hvacActionAlibiTransitionWindowSeconds = 90;
     private int _hvacActionAlibiMaxHoldMinutes = 12;
     private double _hvacActionAlibiSafetyBandCelsius = 1.0;
+    private bool _telemetryAlibiEnabled = true;
+    private int _telemetryAlibiTriggerTouches = 2;
+    private int _telemetryAlibiMinimumHoldSeconds = 90;
+    private int _telemetryAlibiMaxHoldMinutes = 10;
+    private double _telemetryAlibiSafetyBandCelsius = 1.0;
+    private bool _telemetryAlibiUseWeather = true;
+    private bool _telemetryAlibiUseSensorBeat = true;
+    private bool _telemetryAlibiUsePeakPower = true;
     private bool _coolingRunwayGuardEnabled = true;
     private int _coolingRunwayMinimumSeconds = 120;
     private int _coolingRunwayPressureExtraSeconds = 240;
@@ -963,6 +985,14 @@
         _hvacActionAlibiTransitionWindowSeconds = settings.HvacActionAlibiTransitionWindowSeconds;
         _hvacActionAlibiMaxHoldMinutes = settings.HvacActionAlibiMaxHoldMinutes;
         _hvacActionAlibiSafetyBandCelsius = settings.HvacActionAlibiSafetyBandCelsius;
+        _telemetryAlibiEnabled = settings.TelemetryAlibiEnabled;
+        _telemetryAlibiTriggerTouches = settings.TelemetryAlibiTriggerTouches;
+        _telemetryAlibiMinimumHoldSeconds = settings.TelemetryAlibiMinimumHoldSeconds;
+        _telemetryAlibiMaxHoldMinutes = settings.TelemetryAlibiMaxHoldMinutes;
+        _telemetryAlibiSafetyBandCelsius = settings.TelemetryAlibiSafetyBandCelsius;
+        _telemetryAlibiUseWeather = settings.TelemetryAlibiUseWeather;
+        _telemetryAlibiUseSensorBeat = settings.TelemetryAlibiUseSensorBeat;
+        _telemetryAlibiUsePeakPower = settings.TelemetryAlibiUsePeakPower;
         _coolingRunwayGuardEnabled = settings.CoolingRunwayGuardEnabled;
         _coolingRunwayMinimumSeconds = settings.CoolingRunwayMinimumSeconds;
         _coolingRunwayPressureExtraSeconds = settings.CoolingRunwayPressureExtraSeconds;
@@ -1175,6 +1205,14 @@
             _naturalChangePlannerSafetyBandCelsius,
             _naturalChangePlannerPreferWeatherSlots,
             _naturalChangePlannerPreferSensorBeat,
+            _telemetryAlibiEnabled,
+            _telemetryAlibiTriggerTouches,
+            _telemetryAlibiMinimumHoldSeconds,
+            _telemetryAlibiMaxHoldMinutes,
+            _telemetryAlibiSafetyBandCelsius,
+            _telemetryAlibiUseWeather,
+            _telemetryAlibiUseSensorBeat,
+            _telemetryAlibiUsePeakPower,
             _comfortEnvelopeEnabled,
             _comfortEnvelopeTriggerTouches,
             _comfortEnvelopeHoldMinutes,

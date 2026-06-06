@@ -76,7 +76,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, Human Nudge, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, Setpoint Stillness, HVAC Alibi, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, Remote Settling, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Human Nudge, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, Setpoint Stillness, HVAC Alibi, Telemetry Alibi, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, Remote Settling, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 

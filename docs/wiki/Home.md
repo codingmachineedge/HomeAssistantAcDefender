@@ -20,6 +20,7 @@ Key capabilities:
 - Setpoint Stillness that waits for repeated real readings to show the wall setpoint has stopped changing.
 - Weather Drift Timing that uses real outdoor temperature movement to time safe corrections.
 - HVAC Alibi that waits for real Home Assistant `hvac_action` transitions before safe corrections.
+- Telemetry Alibi that waits for normal Home Assistant/weather/Alectra updates before safe corrections after repeated touches.
 - Alectra Peak Power Saver that relaxes safe cooling during On-peak, high-price, or high-power usage.
 - Tabbed Alectra Hui Energy page with search, desk filters, grouped entity cards, charts, and a mobile-friendly table.
 - Front-door Guard Post that can pause the defender and turn the thermostat off when a real front-door person detector trips.

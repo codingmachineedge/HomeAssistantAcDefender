@@ -245,6 +245,12 @@ public sealed class AcDefenderService
                     return;
                 }
 
+                if (stateStore.TryRespectTelemetryAlibi(reading, expectedSetPoint, bypassQuietTiming, now, out var telemetryUntil, out var telemetryMessage))
+                {
+                    stateStore.SetNextAction(telemetryMessage, telemetryUntil);
+                    return;
+                }
+
                 if (stateStore.TryDelayNaturalCorrection(reading, expectedSetPoint, bypassQuietTiming, now, out var waitUntil, out var waitMessage))
                 {
                     stateStore.SetNextAction(waitMessage, waitUntil);

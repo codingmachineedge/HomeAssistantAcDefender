@@ -43,6 +43,7 @@ public sealed record DefenderSnapshot(
     SetpointStillnessSnapshot SetpointStillness,
     SensorRhythmSnapshot SensorRhythm,
     HvacActionAlibiSnapshot HvacActionAlibi,
+    TelemetryAlibiSnapshot TelemetryAlibi,
     CoolingRunwaySnapshot CoolingRunway,
     RoomTrendSnapshot RoomTrend,
     ThermalMomentumSnapshot ThermalMomentum,
@@ -380,6 +381,16 @@ public sealed record HvacActionAlibiSnapshot(
     string Status,
     DateTimeOffset? Until);
 
+public sealed record TelemetryAlibiSnapshot(
+    bool Enabled,
+    bool Waiting,
+    int SecondsRemaining,
+    int RecentTouchCount,
+    string LastSignal,
+    DateTimeOffset? LastSignalAt,
+    string Status,
+    DateTimeOffset? Until);
+
 public sealed record CoolingRunwaySnapshot(
     bool Enabled,
     bool Holding,
@@ -668,6 +679,22 @@ public sealed class DefenderSettings
     public bool NaturalChangePlannerPreferWeatherSlots { get; set; } = true;
 
     public bool NaturalChangePlannerPreferSensorBeat { get; set; } = true;
+
+    public bool TelemetryAlibiEnabled { get; set; } = true;
+
+    public int TelemetryAlibiTriggerTouches { get; set; } = 2;
+
+    public int TelemetryAlibiMinimumHoldSeconds { get; set; } = 90;
+
+    public int TelemetryAlibiMaxHoldMinutes { get; set; } = 10;
+
+    public double TelemetryAlibiSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool TelemetryAlibiUseWeather { get; set; } = true;
+
+    public bool TelemetryAlibiUseSensorBeat { get; set; } = true;
+
+    public bool TelemetryAlibiUsePeakPower { get; set; } = true;
 
     public bool ComfortEnvelopeEnabled { get; set; } = true;
 
