@@ -106,7 +106,7 @@ public class TwoFactorAuth
 
     public string GenerateQrSvg(string url)
     {
-        return QrSvgGenerator.Generate(url, 220);
+        return QrSvgGenerator.Generate(url, 8);
     }
 
     private static string ComputeTotpCode(byte[] key, long counter)
