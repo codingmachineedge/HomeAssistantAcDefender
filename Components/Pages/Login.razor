@@ -1,6 +1,7 @@
 @page "/login"
 @layout EmptyLayout
 @attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
 @using Microsoft.AspNetCore.Authentication
 @using Microsoft.AspNetCore.Authentication.Cookies
 @using Microsoft.AspNetCore.Authorization
@@ -30,7 +31,7 @@
                 <p class="login-subtitle">Scan the QR code with your authenticator app, or enter the key manually.</p>
             </div>
 
-            <form method="post" class="login-form">
+            <form method="post" class="login-form" data-enhance="false">
                 <AntiforgeryToken />
                 <input type="hidden" name="pendingSecret" value="@_pendingSecret" />
                 <input type="hidden" name="onboarding" value="true" />
@@ -75,7 +76,7 @@ else
                 <p class="login-subtitle">Enter the code from your authenticator app.</p>
             </div>
 
-            <form method="post" class="login-form">
+            <form method="post" class="login-form" data-enhance="false">
                 <AntiforgeryToken />
 
                 <div class="input-group">
