@@ -1,8 +1,12 @@
+using System.Security.Claims;
 using System.Text.Json;
 using HomeAssistantAcDefender.Models;
 using HomeAssistantAcDefender.Options;
 using HomeAssistantAcDefender.Components;
 using HomeAssistantAcDefender.Services;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Components.Authorization;
 using MudBlazor.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,10 +20,30 @@ builder.Services.Configure<HomeAssistantOptions>(builder.Configuration.GetSectio
 builder.Services.Configure<DefenderOptions>(builder.Configuration.GetSection(DefenderOptions.SectionName));
 builder.Services.AddSingleton<DefenderStateStore>();
 builder.Services.AddSingleton<AcDefenderService>();
+builder.Services.AddSingleton<TwoFactorAuth>();
 builder.Services.AddHttpClient<HomeAssistantClient>();
 builder.Services.AddHostedService<AcDefenderWorker>();
 builder.Services.AddScoped<DefenderStateProvider>();
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddMudServices();
+
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.LoginPath = "/login";
+        options.LogoutPath = "/logout";
+        options.AccessDeniedPath = "/login";
+        options.ExpireTimeSpan = TimeSpan.FromDays(30);
+        options.SlidingExpiration = true;
+        options.Cookie.Name = "AC_Defender_Auth";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.Cookie.SameSite = SameSiteMode.Lax;
+    });
+builder.Services.AddAuthorization();
+
+builder.Services.AddCascadingAuthenticationState();
+
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
@@ -42,6 +66,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseRouting();
+app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
 
@@ -49,6 +74,12 @@ app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()
     .WithStaticAssets();
+
+app.MapGet("/logout", async (HttpContext context) =>
+{
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    context.Response.Redirect("/login");
+});
 
 app.MapGet("/api/status", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
 app.MapGet("/api/settings", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));

@@ -38,6 +38,9 @@
         <MudText Typo="Typo.h6" Class="brand-text">AC Defender Guard Post</MudText>
         <MudSpacer />
         <MudChip T="string" Class="status-chip" Color="@HeaderColor" Variant="Variant.Filled" Size="Size.Small">@HeaderStatus</MudChip>
+        <MudTooltip Text="Sign out">
+            <MudIconButton Color="Color.Inherit" Icon="@Icons.Material.Filled.Logout" OnClick="SignOut" aria-label="Sign out" />
+        </MudTooltip>
         <MudTooltip Text="@ThemeTooltip">
             <MudIconButton Color="Color.Inherit" Icon="@ThemeIcon" OnClick="ToggleTheme" aria-label="@ThemeTooltip" />
         </MudTooltip>
@@ -185,6 +188,11 @@
     {
         DismissOmega();
         Nav.NavigateTo("/controls");
+    }
+
+    private void SignOut()
+    {
+        Nav.NavigateTo("/logout", forceLoad: true);
     }
 
     private void OnStateChanged()
