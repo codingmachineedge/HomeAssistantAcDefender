@@ -166,6 +166,14 @@ public sealed class DefenderStateStore
                 state.Settings.TouchSignatureMinimumStepCelsius,
                 5.0), 1);
             state.Settings.TouchSignatureSafetyBandCelsius = Math.Round(Math.Clamp(request.TouchSignatureSafetyBandCelsius, 0.1, 5.0), 1);
+            state.Settings.HumanNudgeEnabled = request.HumanNudgeEnabled;
+            state.Settings.HumanNudgeTriggerTouches = Math.Clamp(request.HumanNudgeTriggerTouches, 1, 20);
+            state.Settings.HumanNudgeStepCelsius = Math.Round(Math.Clamp(request.HumanNudgeStepCelsius, 0.1, 2.0), 1);
+            state.Settings.HumanNudgeSafetyBandCelsius = Math.Round(Math.Clamp(request.HumanNudgeSafetyBandCelsius, 0.1, 5.0), 1);
+            if (!state.Settings.HumanNudgeEnabled)
+            {
+                ClearHumanNudge("Human nudge is off.");
+            }
             state.Settings.VisibilityGuardEnabled = request.VisibilityGuardEnabled;
             state.Settings.VisibilityGuardTriggerNotices = Math.Clamp(request.VisibilityGuardTriggerNotices, 1, 20);
             state.Settings.VisibilityGuardNoticeWindowMinutes = Math.Clamp(request.VisibilityGuardNoticeWindowMinutes, 1, 1440);
@@ -2593,6 +2601,115 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Human Nudge: snaps safe follow-up commands to a normal thermostat-looking step.</summary>
+    public double CalculateHumanNudgeCommandSetPoint(
+        ThermostatReading reading,
+        double expectedSetPointCelsius,
+        double candidateSetPointCelsius,
+        bool bypassHumanNudge)
+    {
+        lock (gate)
+        {
+            var candidate = Math.Round(candidateSetPointCelsius, 1);
+            if (!state.Settings.HumanNudgeEnabled)
+            {
+                ClearHumanNudge("Human nudge is off.");
+                SaveState();
+                return candidate;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            PruneTouchTimes(now);
+            var touches = state.ExternalTouchTimes.Count;
+            var triggerTouches = Math.Max(1, state.Settings.HumanNudgeTriggerTouches);
+            if (touches < triggerTouches)
+            {
+                ClearHumanNudge($"Human nudge is watching for repeated wall touches ({touches}/{triggerTouches}).");
+                SaveState();
+                return candidate;
+            }
+
+            if (bypassHumanNudge || ShouldBypassNaturalRecovery(reading))
+            {
+                ClearHumanNudge("Room comfort needs help now, so human nudge is stepping aside.");
+                SaveState();
+                return candidate;
+            }
+
+            if (reading.CurrentTemperatureCelsius > state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius
+                && reading.SetPointCelsius > expectedSetPointCelsius + 0.05)
+            {
+                ClearHumanNudge("Warm-room defense is active, so the current-room-minus-1 C correction is not reshaped.");
+                SaveState();
+                return candidate;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + state.Settings.HumanNudgeSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature)
+            {
+                ClearHumanNudge($"Room is above {allowedRoomTemperature:0.0} C, so human nudge lets direct comfort continue.");
+                SaveState();
+                return candidate;
+            }
+
+            var delta = candidate - reading.SetPointCelsius;
+            if (Math.Abs(delta) <= 0.05)
+            {
+                ClearHumanNudge("Human nudge is lined up; no command shaping is needed.");
+                SaveState();
+                return candidate;
+            }
+
+            var step = Math.Round(Math.Clamp(state.Settings.HumanNudgeStepCelsius, 0.1, 2.0), 1);
+            if (Math.Abs(delta) <= step + 0.05)
+            {
+                ClearHumanNudge($"Human nudge sees a natural {Math.Abs(delta):0.0} C step toward {expectedSetPointCelsius:0.0} C.");
+                SaveState();
+                return candidate;
+            }
+
+            var direction = Math.Sign(delta);
+            var oneStep = RoundToHumanStep(reading.SetPointCelsius + direction * step, step);
+            double shaped;
+            if (direction < 0)
+            {
+                if (oneStep >= reading.SetPointCelsius - 0.05)
+                {
+                    oneStep = Math.Round(reading.SetPointCelsius - step, 1);
+                }
+
+                shaped = Math.Max(candidate, oneStep);
+                shaped = Math.Min(shaped, Math.Round(reading.SetPointCelsius - 0.1, 1));
+            }
+            else
+            {
+                if (oneStep <= reading.SetPointCelsius + 0.05)
+                {
+                    oneStep = Math.Round(reading.SetPointCelsius + step, 1);
+                }
+
+                shaped = Math.Min(candidate, oneStep);
+                shaped = Math.Max(shaped, Math.Round(reading.SetPointCelsius + 0.1, 1));
+            }
+
+            shaped = Math.Round(shaped, 1);
+            if (Math.Abs(shaped - reading.SetPointCelsius) <= 0.05)
+            {
+                ClearHumanNudge("Human nudge could not make a visible safe step, so it left the command unchanged.");
+                SaveState();
+                return candidate;
+            }
+
+            state.HumanNudgeActive = Math.Abs(shaped - candidate) > 0.05;
+            state.HumanNudgeLastSetPointCelsius = shaped;
+            state.HumanNudgeStatus = state.HumanNudgeActive
+                ? $"Human nudge shaped {candidate:0.0} C into a normal {step:0.0} C step at {shaped:0.0} C after {touches} wall touches."
+                : $"Human nudge allowed {candidate:0.0} C because it already looks like a normal thermostat step.";
+            SaveState();
+            return shaped;
+        }
+    }
+
     private double CalculateNaturalWalkbackStep(
         ThermostatReading reading,
         double expectedSetPointCelsius,
@@ -2749,6 +2866,16 @@ public sealed class DefenderStateStore
             median,
             state.Settings.TouchSignatureMinimumStepCelsius,
             state.Settings.TouchSignatureMaximumStepCelsius), 1);
+    }
+
+    private static double RoundToHumanStep(double value, double step)
+    {
+        if (step <= 0)
+        {
+            return Math.Round(value, 1);
+        }
+
+        return Math.Round(Math.Round(value / step, MidpointRounding.AwayFromZero) * step, 1);
     }
 
     public void RecordNaturalRecoverySettled()
@@ -3276,6 +3403,11 @@ public sealed class DefenderStateStore
         state.TouchSignatureStatus = state.Settings.TouchSignatureEnabled
             ? "Manual wall step logged; touch signature will shape safe nudges after enough samples."
             : "Touch signature is off.";
+        state.HumanNudgeActive = false;
+        state.HumanNudgeLastSetPointCelsius = null;
+        state.HumanNudgeStatus = state.Settings.HumanNudgeEnabled
+            ? $"Manual wall touch logged; human nudge can make the next safe command look like a normal {state.Settings.HumanNudgeStepCelsius:0.0} C thermostat step."
+            : "Human nudge is off.";
         state.VisibilityGuardStatus = state.Settings.VisibilityGuardEnabled
             ? $"Visibility guard has {state.VisibilityNoticeTimes.Count} noticed correction signal(s)."
             : "Visibility guard is off.";
@@ -4773,6 +4905,9 @@ public sealed class DefenderStateStore
             saved.Settings.TouchSignatureMinimumStepCelsius,
             5.0), 1);
         saved.Settings.TouchSignatureSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.TouchSignatureSafetyBandCelsius, 0.1, 5.0), 1);
+        saved.Settings.HumanNudgeTriggerTouches = Math.Clamp(saved.Settings.HumanNudgeTriggerTouches <= 0 ? 2 : saved.Settings.HumanNudgeTriggerTouches, 1, 20);
+        saved.Settings.HumanNudgeStepCelsius = Math.Round(Math.Clamp(saved.Settings.HumanNudgeStepCelsius <= 0 ? 0.5 : saved.Settings.HumanNudgeStepCelsius, 0.1, 2.0), 1);
+        saved.Settings.HumanNudgeSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.HumanNudgeSafetyBandCelsius <= 0 ? 1.0 : saved.Settings.HumanNudgeSafetyBandCelsius, 0.1, 5.0), 1);
         saved.Settings.VisibilityGuardTriggerNotices = Math.Clamp(saved.Settings.VisibilityGuardTriggerNotices, 1, 20);
         saved.Settings.VisibilityGuardNoticeWindowMinutes = Math.Clamp(saved.Settings.VisibilityGuardNoticeWindowMinutes, 1, 1440);
         saved.Settings.VisibilityGuardAfterCommandSeconds = Math.Clamp(saved.Settings.VisibilityGuardAfterCommandSeconds, 15, 3600);
@@ -4954,6 +5089,15 @@ public sealed class DefenderStateStore
         {
             saved.StealthGovernorHoldUntil = null;
             saved.StealthGovernorStatus = "Stealth governor is watching overall pressure.";
+        }
+        saved.HumanNudgeStatus = string.IsNullOrWhiteSpace(saved.HumanNudgeStatus)
+            ? "Human nudge is watching for a safe command to shape."
+            : saved.HumanNudgeStatus;
+        if (!saved.Settings.HumanNudgeEnabled)
+        {
+            saved.HumanNudgeActive = false;
+            saved.HumanNudgeLastSetPointCelsius = null;
+            saved.HumanNudgeStatus = "Human nudge is off.";
         }
         saved.NaturalCadenceStatus = string.IsNullOrWhiteSpace(saved.NaturalCadenceStatus)
             ? "Natural cadence is watching."
@@ -5473,6 +5617,15 @@ public sealed class DefenderStateStore
                 touchSignature.LearnedStepCelsius,
                 touchSignature.EffectiveStepCelsius,
                 touchSignature.Status),
+            new HumanNudgeSnapshot(
+                state.Settings.HumanNudgeEnabled,
+                state.HumanNudgeActive,
+                state.HumanNudgeLastSetPointCelsius,
+                Math.Round(Math.Clamp(state.Settings.HumanNudgeStepCelsius, 0.1, 2.0), 1),
+                state.ExternalTouchTimes.Count,
+                string.IsNullOrWhiteSpace(state.HumanNudgeStatus)
+                    ? "Human nudge is watching for a safe command to shape."
+                    : state.HumanNudgeStatus),
             new VisibilityGuardSnapshot(
                 state.Settings.VisibilityGuardEnabled,
                 visibilityGuardSeconds > 0,
@@ -5785,6 +5938,7 @@ public sealed class DefenderStateStore
         state.NaturalRecoveryStatus = status;
         state.NaturalWalkbackStatus = "Natural walkback is watching.";
         state.TouchSignatureStatus = "Touch signature is watching.";
+        ClearHumanNudge("Human nudge is watching for a safe command to shape.");
         ClearVisibilityGuard("Visibility guard is watching.");
         ClearRoutineTiming("Routine timing is watching.");
         ClearComfortBudget("Comfort budget is watching.");
@@ -5857,6 +6011,13 @@ public sealed class DefenderStateStore
     {
         state.StealthGovernorHoldUntil = null;
         state.StealthGovernorStatus = status;
+    }
+
+    private void ClearHumanNudge(string status)
+    {
+        state.HumanNudgeActive = false;
+        state.HumanNudgeLastSetPointCelsius = null;
+        state.HumanNudgeStatus = status;
     }
 
     private void ClearNaturalCadence(string status)
@@ -5966,6 +6127,9 @@ public sealed class DefenderStateStore
             state.LastDefenderCommandSetPointCelsius = Math.Round(setPoint, 1);
             state.DefenderCommandTimes.Add(now);
             PruneDefenderCommandTimes(now);
+            state.HumanNudgeStatus = state.HumanNudgeActive
+                ? $"Human nudge sent a normal-looking {state.LastDefenderCommandSetPointCelsius:0.0} C step; watching for the next safe command."
+                : "Human nudge is watching for a safe command to shape.";
             state.RoutineTimingDueAt = null;
             state.RoutineTimingStatus = "Routine timing used its comfort-check slot; watching for the next one.";
             state.ComfortBudgetStatus = $"Comfort budget counted {state.DefenderCommandTimes.Count}/{state.Settings.ComfortBudgetMaxCommands} recent comfort adjustments.";
@@ -6294,6 +6458,10 @@ public sealed class DefenderStateStore
             TouchSignatureMinimumStepCelsius = settings.TouchSignatureMinimumStepCelsius,
             TouchSignatureMaximumStepCelsius = settings.TouchSignatureMaximumStepCelsius,
             TouchSignatureSafetyBandCelsius = settings.TouchSignatureSafetyBandCelsius,
+            HumanNudgeEnabled = settings.HumanNudgeEnabled,
+            HumanNudgeTriggerTouches = settings.HumanNudgeTriggerTouches,
+            HumanNudgeStepCelsius = settings.HumanNudgeStepCelsius,
+            HumanNudgeSafetyBandCelsius = settings.HumanNudgeSafetyBandCelsius,
             VisibilityGuardEnabled = settings.VisibilityGuardEnabled,
             VisibilityGuardTriggerNotices = settings.VisibilityGuardTriggerNotices,
             VisibilityGuardNoticeWindowMinutes = settings.VisibilityGuardNoticeWindowMinutes,
@@ -6548,6 +6716,12 @@ public sealed class DefenderStateStore
         public string NaturalWalkbackStatus { get; set; } = "Natural walkback is watching.";
 
         public string TouchSignatureStatus { get; set; } = "Touch signature is watching.";
+
+        public bool HumanNudgeActive { get; set; }
+
+        public double? HumanNudgeLastSetPointCelsius { get; set; }
+
+        public string HumanNudgeStatus { get; set; } = "Human nudge is watching for a safe command to shape.";
 
         public DateTimeOffset? VisibilityGuardUntil { get; set; }
 

@@ -276,6 +276,7 @@ public sealed class AcDefenderService
                 }
 
                 var commandSetPoint = stateStore.CalculateNaturalCommandSetPoint(reading, expectedSetPoint, bypassQuietTiming);
+                commandSetPoint = stateStore.CalculateHumanNudgeCommandSetPoint(reading, expectedSetPoint, commandSetPoint, bypassQuietTiming);
                 if (stateStore.TryRespectRepeatCommandGuard(reading, commandSetPoint, bypassQuietTiming, now, out var repeatUntil, out var repeatMessage))
                 {
                     stateStore.SetNextAction(repeatMessage, repeatUntil);

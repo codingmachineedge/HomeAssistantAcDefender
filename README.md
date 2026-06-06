@@ -24,6 +24,7 @@ The app is designed for Docker hosting on Linux and is currently published by `d
 - Adds a Front-door Guard Post kill switch that pauses the defender and can turn the thermostat off when a real front-door person detector trips.
 - Adds Natural Walkback so safe-band recovery moves get smaller and less predictable after repeated wall thermostat touches.
 - Adds Touch Signature so safe nudges can match the size of recent real wall thermostat steps.
+- Adds Human Nudge so safe commands are snapped to normal thermostat-looking step values instead of suspicious precise numbers.
 - Adds Visibility Guard so safe nudges slow down when a wall touch happens soon after a defender command.
 - Adds Routine Timing so safe corrections after repeated touches wait for normal-looking comfort-check intervals.
 - Adds Comfort Budget so repeated safe corrections can rest before another adjustment.
@@ -110,25 +111,26 @@ Every cycle:
 13. Apply Comfort Sync quiet recovery timing unless the room or upstairs is too warm.
 14. Shape safe-band recovery commands through Natural Walkback when repeated wall touches make obvious corrections risky.
 15. Shape safe-band nudge size through Touch Signature when recent wall changes show a common step size.
-16. Respect Visibility Guard when a wall touch happens soon after a defender command.
-17. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
-18. Respect Comfort Budget when too many safe adjustments happened recently.
-19. Respect Command Camouflage when a recent helper command needs a believable gap before another safe correction.
-20. Respect Stealth Governor when the overall activity pressure score is high.
-21. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
-22. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
-23. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
-24. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
-25. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
-26. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
-27. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
-28. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
-29. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
-30. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
-31. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
-30. Optionally set fan saver mode when near target.
-31. Correct the thermostat setpoint when it does not match the defender decision.
-32. Update the real-time dashboard status.
+16. Shape the final safe command through Human Nudge so it looks like a normal thermostat step.
+17. Respect Visibility Guard when a wall touch happens soon after a defender command.
+18. Hold safe corrections for Routine Timing when repeated wall changes make an immediate correction too obvious.
+19. Respect Comfort Budget when too many safe adjustments happened recently.
+20. Respect Command Camouflage when a recent helper command needs a believable gap before another safe correction.
+21. Respect Stealth Governor when the overall activity pressure score is high.
+22. Respect Natural Cadence when repeated touches need a less exact safe-correction slot.
+23. Respect Comfort Pace when frequent wall changes need a calmer weather, sensor, or clock-aligned climate slot.
+24. Respect Comfort Envelope when a repeated wall setpoint is still inside the safe accepted range.
+25. Apply bounded Comfort Memory for the current time window when room comfort is still safe.
+26. Blend repeated safe wall choices through Comfort Compromise and fade them back toward the website target.
+27. Extend safe wall-change grace through Touch Intent when recent wall choices clearly ask for warmer air.
+28. Activate Cooler Intent Fast Lane when repeated cooler wall choices show the person wants cooling sooner.
+29. Activate Super Defender when repeated Home Assistant user/phone or automation changes happen inside the configured window.
+30. Respect Weather Drift Timing when outdoor temperature is stable or cooling and the room is still safe.
+31. Respect Alectra Peak Power Saver when Alectra Hui reports On-peak, high current price, or high current power and the room is still safe.
+32. Respect Front-door Guard Post when a real front-door person detector reports a person; pause the defender and turn the thermostat off if enabled.
+33. Optionally set fan saver mode when near target.
+34. Correct the thermostat setpoint when it does not match the defender decision.
+35. Update the real-time dashboard status.
 
 When the room is above the target, a new defender correction starts by commanding a setpoint exactly 1 C below the current room temperature to force cooling. If Home Assistant reports that cooling is idle/off while the room remains above target, it lowers the setpoint one additional degree per cycle. Normal defender cooling will not go below the website target, and when the room reaches target, the setpoint returns to the exact website target.
 
@@ -201,6 +203,10 @@ Comfort Sync is the natural-change algorithm. It affects timing, command spacing
 - `TouchSignatureMinimumStepCelsius`: smallest learned safe nudge size.
 - `TouchSignatureMaximumStepCelsius`: biggest learned safe nudge size.
 - `TouchSignatureSafetyBandCelsius`: extra room warmth allowed before touch signature stops.
+- `HumanNudgeEnabled`: snaps safe commands to normal thermostat-looking step values.
+- `HumanNudgeTriggerTouches`: recent wall touches needed before human nudge starts.
+- `HumanNudgeStepCelsius`: step size to imitate for the final safe command.
+- `HumanNudgeSafetyBandCelsius`: extra room warmth allowed before human nudge stops shaping.
 - `VisibilityGuardEnabled`: holds safe corrections when a wall touch happens soon after a defender command.
 - `VisibilityGuardTriggerNotices`: noticed correction signals needed before visibility hold starts.
 - `VisibilityGuardNoticeWindowMinutes`: how long noticed signals remain useful.
@@ -356,6 +362,8 @@ Comfort Envelope accepts tiny safe wall preferences for a short time. When repea
 Comfort Compromise is a temporary effective target. If wall changes repeat and the room is still inside the compromise safe band, the latest wall setpoint can influence the defender target up to the configured maximum offset. After the hold time, that influence fades back to the website target over the decay window. If the room gets too warm, the compromise clears immediately and normal warm-room defense resumes.
 
 Comfort Memory is slower than Comfort Compromise. It learns a small offset for the current hour after repeated safe wall choices, then applies that offset on later checks in the same time window. Learned memory expires after the configured retention hours and is skipped when the room is warm, the safety override is crossed, or upstairs is already hot and the memory would relax cooling.
+
+Human Nudge is the last safe command shaper before duplicate-command protection. If repeated wall touches are present and the room is still inside the safe band, it turns an odd-looking safe candidate such as `22.8 C` into a normal one-step thermostat move such as `23.5 C`. Direct warm-room cooling, upstairs heat, and quiet-timing bypasses skip it, so the current-room-minus-1 C cooling rule still wins when comfort needs help.
 
 Manual Comfort Grace is different from cooldown. Cooldown waits after a manual touch. Manual Comfort Grace can keep waiting after cooldown if the room is still within the comfort band. If the room rises above the band, the HVAC mode changes away from `cool`, or upstairs becomes severely hot, grace ends and the real thermostat correction path resumes.
 

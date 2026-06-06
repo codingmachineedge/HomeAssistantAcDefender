@@ -94,6 +94,24 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Human Nudge", GuardCategory.WallTouch,
+            "Makes the final safe setpoint command look like a normal thermostat step instead of a precise bot number.",
+            "Recent wall touches, the candidate defender command, the current thermostat setpoint, and room temperature.",
+            "After repeated touches and while the room is inside the safe band, it snaps only safe follow-up commands to the configured human step size. Direct warm-room cooling, upstairs heat, or quiet-timing bypasses skip this shaper.",
+            "Rewrites the outgoing safe setpoint to a normal one-step-looking value.",
+            ["HumanNudgeEnabled", "HumanNudgeTriggerTouches", "HumanNudgeStepCelsius", "HumanNudgeSafetyBandCelsius"],
+            s =>
+            {
+                var h = s.HumanNudge;
+                return GuardLiveView.Standard(h.Enabled, h.Active, "Shaping", h.Status,
+                [
+                    new("Step", h.Enabled ? $"{h.StepCelsius:0.0} C" : "Off", "Normal thermostat step size to imitate."),
+                    new("Touches", h.Enabled ? h.RecentTouchCount.ToString() : "Off", "Recent external thermostat changes."),
+                    new("Last nudge", h.LastSetPointCelsius is { } sp ? $"{sp:0.0} C" : h.Enabled ? "Ready" : "Off", "Last command after human nudge shaping."),
+                ], busyTone: GuardTone.Active);
+            }),
+
+        new GuardInfo(
             "Visibility Guard", GuardCategory.WallTouch,
             "Slows the next safe nudge when a wall touch lands right after a defender command (someone likely noticed).",
             "Wall touches that occur within the after-command window, counted as 'notices' over the notice window.",

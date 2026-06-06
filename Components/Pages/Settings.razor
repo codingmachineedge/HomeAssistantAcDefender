@@ -159,6 +159,16 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("human nudge normal thermostat step less suspicious")) {
+                <MudExpansionPanel Text="Human nudge" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Human nudge" Value="_humanNudgeEnabled" ValueChanged="@(v => SetDirty(v, x => _humanNudgeEnabled = x))" Help="Snap safe commands to normal thermostat-looking steps." />
+                        <SettingInt Label="Nudge touches" Value="_humanNudgeTriggerTouches" ValueChanged="@(v => SetDirty(v, x => _humanNudgeTriggerTouches = x))" Min="1" Max="20" />
+                        <SettingDouble Label="Step" Value="_humanNudgeStepCelsius" ValueChanged="@(v => SetDirty(v, x => _humanNudgeStepCelsius = x))" Min="0.1" Max="2" />
+                        <SettingDouble Label="Safe band" Value="_humanNudgeSafetyBandCelsius" ValueChanged="@(v => SetDirty(v, x => _humanNudgeSafetyBandCelsius = x))" Min="0.1" Max="5" />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("visibility guard noticed")) {
                 <MudExpansionPanel Text="Visibility guard" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -592,6 +602,10 @@
     private double _touchSignatureMinimumStepCelsius = 0.3;
     private double _touchSignatureMaximumStepCelsius = 1.0;
     private double _touchSignatureSafetyBandCelsius = 1.0;
+    private bool _humanNudgeEnabled = true;
+    private int _humanNudgeTriggerTouches = 2;
+    private double _humanNudgeStepCelsius = 0.5;
+    private double _humanNudgeSafetyBandCelsius = 1.0;
     private bool _visibilityGuardEnabled = true;
     private int _visibilityGuardTriggerNotices = 1;
     private int _visibilityGuardNoticeWindowMinutes = 45;
@@ -801,6 +815,10 @@
         _touchSignatureMinimumStepCelsius = settings.TouchSignatureMinimumStepCelsius;
         _touchSignatureMaximumStepCelsius = settings.TouchSignatureMaximumStepCelsius;
         _touchSignatureSafetyBandCelsius = settings.TouchSignatureSafetyBandCelsius;
+        _humanNudgeEnabled = settings.HumanNudgeEnabled;
+        _humanNudgeTriggerTouches = settings.HumanNudgeTriggerTouches;
+        _humanNudgeStepCelsius = settings.HumanNudgeStepCelsius;
+        _humanNudgeSafetyBandCelsius = settings.HumanNudgeSafetyBandCelsius;
         _visibilityGuardEnabled = settings.VisibilityGuardEnabled;
         _visibilityGuardTriggerNotices = settings.VisibilityGuardTriggerNotices;
         _visibilityGuardNoticeWindowMinutes = settings.VisibilityGuardNoticeWindowMinutes;
@@ -1047,6 +1065,10 @@
             _touchSignatureMinimumStepCelsius,
             _touchSignatureMaximumStepCelsius,
             _touchSignatureSafetyBandCelsius,
+            _humanNudgeEnabled,
+            _humanNudgeTriggerTouches,
+            _humanNudgeStepCelsius,
+            _humanNudgeSafetyBandCelsius,
             _visibilityGuardEnabled,
             _visibilityGuardTriggerNotices,
             _visibilityGuardNoticeWindowMinutes,

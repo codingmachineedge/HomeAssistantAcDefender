@@ -72,6 +72,10 @@ The MudBlazor settings page controls defender behavior without editing configura
 - Camouflage min gap seconds: shortest cover gap after a helper command.
 - Camouflage pressure extra seconds: extra gap added as recent touches or helper commands rise.
 - Camouflage safe band C: extra warmth allowed before camouflage stops waiting.
+- Human nudge: snaps safe commands to normal thermostat-looking steps.
+- Nudge touches: recent wall touches needed before human nudge starts.
+- Step C: normal step size to imitate for the final safe command.
+- Nudge safe band C: extra warmth allowed before human nudge stops shaping.
 - Stealth governor: holds safe corrections when the overall activity pressure score gets too high.
 - Stealth trigger score: 0-100 pressure score that starts the low-profile hold.
 - Stealth min hold minutes: shortest low-profile hold.

@@ -22,6 +22,7 @@ public sealed record DefenderSnapshot(
     NaturalRecoverySnapshot NaturalRecovery,
     NaturalWalkbackSnapshot NaturalWalkback,
     TouchSignatureSnapshot TouchSignature,
+    HumanNudgeSnapshot HumanNudge,
     VisibilityGuardSnapshot VisibilityGuard,
     RoutineTimingSnapshot RoutineTiming,
     ComfortBudgetSnapshot ComfortBudget,
@@ -181,6 +182,14 @@ public sealed record TouchSignatureSnapshot(
     int SampleCount,
     double? LearnedStepCelsius,
     double EffectiveStepCelsius,
+    string Status);
+
+public sealed record HumanNudgeSnapshot(
+    bool Enabled,
+    bool Active,
+    double? LastSetPointCelsius,
+    double StepCelsius,
+    int RecentTouchCount,
     string Status);
 
 public sealed record VisibilityGuardSnapshot(
@@ -538,6 +547,14 @@ public sealed class DefenderSettings
     public double TouchSignatureMaximumStepCelsius { get; set; } = 1.0;
 
     public double TouchSignatureSafetyBandCelsius { get; set; } = 1.0;
+
+    public bool HumanNudgeEnabled { get; set; } = true;
+
+    public int HumanNudgeTriggerTouches { get; set; } = 2;
+
+    public double HumanNudgeStepCelsius { get; set; } = 0.5;
+
+    public double HumanNudgeSafetyBandCelsius { get; set; } = 1.0;
 
     public bool VisibilityGuardEnabled { get; set; } = true;
 

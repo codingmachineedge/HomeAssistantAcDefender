@@ -16,6 +16,7 @@ tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
 tests.CommandCamouflageSpacesSafeFollowUpButBypassesHotRoom();
 tests.StealthGovernorHoldsSafeHighPressureButBypassesHotRoom();
+tests.HumanNudgeShapesOnlySafeCommandsAndBypassesHotRoom();
 tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
 tests.WebsiteCommandDebounceCanBypassNonThermostatButtons();
 tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
@@ -401,7 +402,7 @@ internal sealed class DefenderSetPointRegressionTests
 
         var safeReading = new ThermostatReading(
             "climate.dining_room",
-            22.4,
+            22.1,
             24.0,
             "cool",
             "idle",
@@ -450,6 +451,61 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.StealthGovernor.Holding)
         {
             throw new InvalidOperationException("Stealth Governor should clear its hold after comfort safety takes over.");
+        }
+    }
+
+    public void HumanNudgeShapesOnlySafeCommandsAndBypassesHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.HumanNudgeEnabled = true;
+        settings.HumanNudgeTriggerTouches = 2;
+        settings.HumanNudgeStepCelsius = 0.5;
+        settings.HumanNudgeSafetyBandCelsius = 1.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var safeReading = new ThermostatReading(
+            "climate.dining_room",
+            22.1,
+            24.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        store.RecordHomeAssistantReading(safeReading);
+        store.RecordHomeAssistantReading(safeReading with { SetPointCelsius = 25.0 });
+        store.RecordHomeAssistantReading(safeReading);
+
+        var shaped = store.CalculateHumanNudgeCommandSetPoint(
+            safeReading,
+            expectedSetPointCelsius: 22.0,
+            candidateSetPointCelsius: 22.8,
+            bypassHumanNudge: false);
+
+        AssertEqual(23.5, shaped, "Human Nudge should turn a safe odd command into one normal thermostat step.");
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.HumanNudge.Active
+            || snapshot.HumanNudge.LastSetPointCelsius is not 23.5
+            || snapshot.HumanNudge.RecentTouchCount < 2)
+        {
+            throw new InvalidOperationException("Human Nudge snapshot should show the shaped setpoint and touch evidence.");
+        }
+
+        var hotRoom = store.CalculateHumanNudgeCommandSetPoint(
+            safeReading with { CurrentTemperatureCelsius = 24.2 },
+            expectedSetPointCelsius: 22.0,
+            candidateSetPointCelsius: 22.8,
+            bypassHumanNudge: false);
+
+        AssertEqual(22.8, hotRoom, "Human Nudge must leave direct warm-room cooling commands alone.");
+
+        snapshot = store.GetSnapshot();
+        if (snapshot.HumanNudge.Active)
+        {
+            throw new InvalidOperationException("Human Nudge should clear after a comfort bypass.");
         }
     }
 

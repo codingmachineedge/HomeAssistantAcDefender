@@ -23,6 +23,7 @@ The status snapshot includes:
 - `naturalRecovery`: quiet recovery status, quiet level, wait seconds, recent touch count, base/effective nudge size, base/effective hold chance, and effective command gap.
 - `naturalWalkback`: safe-band walkback status, active flag, touch score, and current walkback step.
 - `touchSignature`: safe nudge signature status, active flag, sample count, learned step, and effective step.
+- `humanNudge`: safe command shaper status, active flag, normal step size, recent touch count, and last shaped setpoint.
 - `visibilityGuard`: safe correction visibility status, active flag, noticed signal count, pressure score, remaining seconds, and hold expiry.
 - `routineTiming`: safe correction rhythm status, wait seconds, interval, jitter, and due time.
 - `comfortBudget`: safe correction budget status, wait seconds, recent command count, max commands, and due time.
@@ -72,7 +73,7 @@ POST /api/defender
 POST /api/settings
 ```
 
-`POST /api/settings` accepts the automation, Comfort Sync, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
+`POST /api/settings` accepts the automation, Comfort Sync, Human Nudge, Command Camouflage, Stealth Governor, Comfort Pace, Comfort Envelope, Alectra Peak Power Saver, Front-door Guard Post, Super Defender, fan saver, upstairs comfort, presence, and schedule settings used by the MudBlazor settings page.
 
 ## Real Thermostat Commands
 

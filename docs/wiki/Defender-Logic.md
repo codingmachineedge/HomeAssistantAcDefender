@@ -28,7 +28,7 @@ sequence. The first guard that wants to wait stops the cycle and reports its nex
 13. **Fan Energy Saver** moves the fan to a saver mode when near target.
 14. Compute the **expected setpoint**: 1 C below room when the room is warm.
 15. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver -> Comfort Envelope -> Room Trend -> Thermal Momentum -> Weather Drift -> Setpoint Echo -> Cooling Runway -> Sensor Rhythm -> Comfort Sync -> Comfort Pace -> Routine Timing -> Comfort Budget -> Command Camouflage -> Stealth Governor -> Visibility Guard -> Natural Cadence**.
-16. Shape the command size with **Natural Walkback** and **Touch Signature**, then **Repeat Quiet**.
+16. Shape the command size with **Natural Walkback**, **Touch Signature**, and **Human Nudge**, then **Repeat Quiet**.
 17. Send the corrected setpoint to Home Assistant.
 18. **Cooling Failure Watch** runs alongside and raises a mega-alert if cooling is demanded but not real.
 
@@ -86,6 +86,12 @@ Matches safe nudges to the size of steps people actually use on the wall thermos
 - **Watches:** recent real wall steps (their median size) inside the retention window.
 - **Logic:** with enough recent steps and a room inside the signature safety band, it learns the median wall-step size, clamps it between the min and max signature step, and caps safe nudges to that size.
 - **Settings:** `TouchSignatureEnabled`, `TouchSignatureTriggerTouches`, `TouchSignatureRetentionMinutes`, `TouchSignatureMinimumStepCelsius`, `TouchSignatureMaximumStepCelsius`, `TouchSignatureSafetyBandCelsius`.
+
+### Human Nudge
+Makes the final safe setpoint command look like a normal thermostat step instead of a precise bot number.
+- **Watches:** recent wall touches, the candidate defender command, the current thermostat setpoint, and room temperature.
+- **Logic:** after repeated touches and while the room is inside the safe band, it snaps only safe follow-up commands to the configured human step size. Direct warm-room cooling, upstairs heat, or quiet-timing bypasses skip this shaper.
+- **Settings:** `HumanNudgeEnabled`, `HumanNudgeTriggerTouches`, `HumanNudgeStepCelsius`, `HumanNudgeSafetyBandCelsius`.
 
 ### Visibility Guard
 Slows the next safe nudge when a wall touch lands right after a defender command (someone likely noticed).
