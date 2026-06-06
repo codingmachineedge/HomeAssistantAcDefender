@@ -81,9 +81,15 @@ app.MapGet("/logout", async (HttpContext context) =>
     context.Response.Redirect("/login");
 });
 
-app.MapGet("/api/status", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
-app.MapGet("/api/settings", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
-app.MapGet("/api/usage/live", async (HomeAssistantClient homeAssistantClient, CancellationToken cancellationToken) =>
+// Every /api/* endpoint requires an authenticated session. The Blazor UI reads state
+// server-side via DefenderStateProvider (not these endpoints), so locking them down does
+// not affect the dashboard. It does stop an unauthenticated visitor from reading the whole
+// defender state (which names every stealth/camouflage guard) or controlling the thermostat.
+var api = app.MapGroup("/api").RequireAuthorization();
+
+api.MapGet("/status", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
+api.MapGet("/settings", (DefenderStateStore store) => Results.Ok(store.GetSnapshot()));
+api.MapGet("/usage/live", async (HomeAssistantClient homeAssistantClient, CancellationToken cancellationToken) =>
 {
     try
     {
@@ -94,7 +100,7 @@ app.MapGet("/api/usage/live", async (HomeAssistantClient homeAssistantClient, Ca
         return Results.BadRequest(new { error = ex.Message });
     }
 });
-app.MapGet("/api/usage/alectra-hui", async (HomeAssistantClient homeAssistantClient, CancellationToken cancellationToken) =>
+api.MapGet("/usage/alectra-hui", async (HomeAssistantClient homeAssistantClient, CancellationToken cancellationToken) =>
 {
     try
     {
@@ -105,7 +111,7 @@ app.MapGet("/api/usage/alectra-hui", async (HomeAssistantClient homeAssistantCli
         return Results.BadRequest(new { error = ex.Message });
     }
 });
-app.MapGet("/api/usage/history", async (
+api.MapGet("/usage/history", async (
     string? entityId,
     DateTimeOffset? from,
     DateTimeOffset? to,
@@ -125,7 +131,7 @@ app.MapGet("/api/usage/history", async (
     }
 });
 
-app.MapGet("/api/status/stream", async (HttpContext context, DefenderStateStore store, CancellationToken cancellationToken) =>
+api.MapGet("/status/stream", async (HttpContext context, DefenderStateStore store, CancellationToken cancellationToken) =>
 {
     context.Response.Headers.CacheControl = "no-cache";
     context.Response.Headers.Connection = "keep-alive";
@@ -140,7 +146,7 @@ app.MapGet("/api/status/stream", async (HttpContext context, DefenderStateStore 
     }
 });
 
-app.MapPost("/api/target/generate", (DefenderStateStore store) =>
+api.MapPost("/target/generate", (DefenderStateStore store) =>
 {
     var gate = store.TryBeginWebsiteCommand("generate target");
     if (!gate.Accepted)
@@ -152,7 +158,7 @@ app.MapPost("/api/target/generate", (DefenderStateStore store) =>
     return Results.Ok(snapshot);
 });
 
-app.MapPost("/api/target", (TargetTemperatureRequest request, DefenderStateStore store) =>
+api.MapPost("/target", (TargetTemperatureRequest request, DefenderStateStore store) =>
 {
     var gate = store.TryBeginWebsiteCommand("set target");
     if (!gate.Accepted)
@@ -164,7 +170,7 @@ app.MapPost("/api/target", (TargetTemperatureRequest request, DefenderStateStore
     return Results.Ok(snapshot);
 });
 
-app.MapPost("/api/defender", (DefenderEnabledRequest request, DefenderStateStore store) =>
+api.MapPost("/defender", (DefenderEnabledRequest request, DefenderStateStore store) =>
 {
     var gate = store.TryBeginWebsiteCommand(request.Enabled ? "turn defender on" : "pause defender", bypassDebounce: true);
     if (!gate.Accepted)
@@ -176,7 +182,7 @@ app.MapPost("/api/defender", (DefenderEnabledRequest request, DefenderStateStore
     return Results.Ok(snapshot);
 });
 
-app.MapPost("/api/settings", (SettingsRequest request, DefenderStateStore store) =>
+api.MapPost("/settings", (SettingsRequest request, DefenderStateStore store) =>
 {
     var gate = store.TryBeginWebsiteCommand("save settings", bypassDebounce: true);
     if (!gate.Accepted)
@@ -188,7 +194,7 @@ app.MapPost("/api/settings", (SettingsRequest request, DefenderStateStore store)
     return Results.Ok(snapshot);
 });
 
-app.MapPost("/api/thermostat/refresh", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+api.MapPost("/thermostat/refresh", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
 {
     try
     {
@@ -208,7 +214,7 @@ app.MapPost("/api/thermostat/refresh", async (AcDefenderService defender, Defend
     }
 });
 
-app.MapPost("/api/thermostat/force-target", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+api.MapPost("/thermostat/force-target", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
 {
     try
     {
@@ -228,7 +234,7 @@ app.MapPost("/api/thermostat/force-target", async (AcDefenderService defender, D
     }
 });
 
-app.MapPost("/api/thermostat/force-boost", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+api.MapPost("/thermostat/force-boost", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
 {
     try
     {
@@ -248,7 +254,7 @@ app.MapPost("/api/thermostat/force-boost", async (AcDefenderService defender, De
     }
 });
 
-app.MapPost("/api/thermostat/fan", async (FanModeRequest request, AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+api.MapPost("/thermostat/fan", async (FanModeRequest request, AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
 {
     try
     {
@@ -268,7 +274,7 @@ app.MapPost("/api/thermostat/fan", async (FanModeRequest request, AcDefenderServ
     }
 });
 
-app.MapPost("/api/thermostat/off", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+api.MapPost("/thermostat/off", async (AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
 {
     try
     {
@@ -288,7 +294,7 @@ app.MapPost("/api/thermostat/off", async (AcDefenderService defender, DefenderSt
     }
 });
 
-app.MapPost("/api/emergency", async (EmergencyProtocolRequest request, AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
+api.MapPost("/emergency", async (EmergencyProtocolRequest request, AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
 {
     try
     {
