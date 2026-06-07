@@ -9,11 +9,21 @@ namespace HomeAssistantAcDefender.Services;
 public sealed class DefenderStateStore
 {
     private const int WebsiteCommandDebounceSeconds = 120;
-    private const int CoolingFailureIdleSeconds = 360;
+    // A normal AC rests its compressor for several minutes between cycles (anti-short-cycle / minimum
+    // off-time), so 10 min of "not cooling" must pass before the mega alert can even arm.
+    private const int CoolingFailureIdleSeconds = 600;
     private const int CoolingFailureNoDropSeconds = 1200;
     private const int CoolingFailureRepeatAlertSeconds = 60;
+    // Cooling "demand" for failure detection is measured against BOTH the wall setpoint AND the user's
+    // real target (state.TargetTemperatureCelsius). The defender pins the setpoint to ~room-1 C, so
+    // comparing against the setpoint alone made demand perpetually true; the target term fixes that.
     private const double CoolingFailureDemandBandCelsius = 0.6;
     private const double CoolingFailureMinimumDropCelsius = 0.2;
+    // Hard ceiling on benign mega-alert suppression: once the room is this far above the user's target
+    // we always alert, even if it is slowly drifting down. A unit reporting idle/off cannot be the
+    // thing cooling the room, so a falling room must never mask a dead unit that another zone or
+    // ambient drift happens to be cooling.
+    private const double CoolingFailureFarAboveTargetCelsius = 2.0;
 
     // OMEGA: a confirmed cooling failure. The mega alert only proves the AC is not cooling; OMEGA adds
     // proof that the room is actually getting WARMER over a sustained window, which is what a dead
@@ -4661,10 +4671,12 @@ public sealed class DefenderStateStore
             var seconds = (int)Math.Ceiling((now - state.CoolingFailureSuspectedAt.Value).TotalSeconds);
             if (seconds >= CoolingFailureIdleSeconds)
             {
-                // The mega alert is armed (cooling demanded, action idle). Check whether the room is
-                // actually rising over the confirmation window before escalating to OMEGA.
+                // The mega alert is armed (cooling demanded, action not cooling). Check the real room
+                // trend over the confirmation window before alerting.
                 var rise = TryGetRoomRiseCelsius(reading.CurrentTemperatureCelsius, now);
                 state.OmegaRoomRiseCelsius = rise;
+
+                // OMEGA: a sustained rise while not cooling is what a dead breaker looks like.
                 if (rise is { } confirmedRise && confirmedRise >= OmegaMinimumRiseCelsius)
                 {
                     state.OmegaConfirmedAt ??= now;
@@ -4675,6 +4687,29 @@ public sealed class DefenderStateStore
                 }
 
                 state.OmegaConfirmedAt = null;
+
+                // Hold off the mega alert for benign non-cooling windows — but ONLY while the room is
+                // not dangerously far above the user's real target. Because a unit reporting idle/off
+                // cannot itself be cooling the room, a falling room does NOT prove it works (another
+                // zone or ambient drift can mask a dead unit), so the "far above target" ceiling always
+                // wins. Two benign signals while inside the ceiling: the room is actively improving, or
+                // the action telemetry is inconclusive (null/unknown) and the room is not rising.
+                if (reading.CurrentTemperatureCelsius < state.TargetTemperatureCelsius + CoolingFailureFarAboveTargetCelsius)
+                {
+                    var roomIsImproving = rise is { } drop && drop <= -CoolingFailureMinimumDropCelsius;
+                    var actionIsInconclusive = !IsConclusiveNonCoolingAction(reading.HvacAction);
+                    if (roomIsImproving || actionIsInconclusive)
+                    {
+                        var reason = roomIsImproving
+                            ? $"the room is still cooling ({(rise is { } r ? -r : 0):0.0} C down over {OmegaRiseWindowSeconds / 60} min)"
+                            : "Home Assistant's action telemetry is inconclusive and the room is not rising";
+                        state.CoolingFailureMegaActive = false;
+                        state.CoolingFailureStatus =
+                            $"Cooling demand active (action '{NormalizeHvacAction(reading.HvacAction)}') for {seconds}s; no failure flagged because {reason}.";
+                        return;
+                    }
+                }
+
                 RaiseCoolingFailure(
                     now,
                     $"MEGA ALERT: Cooling is demanded but Home Assistant still reports '{reading.HvacAction}' after {seconds}s. Breaker or equipment failure may be possible.");
@@ -4683,7 +4718,8 @@ public sealed class DefenderStateStore
 
             state.OmegaConfirmedAt = null;
             state.OmegaRoomRiseCelsius = null;
-            state.CoolingFailureStatus = $"Cooling demand is active but action is '{reading.HvacAction}'; mega alert arms in {CoolingFailureIdleSeconds - seconds}s if it stays idle.";
+            state.CoolingFailureMegaActive = false;
+            state.CoolingFailureStatus = $"Cooling demand is active but action is '{reading.HvacAction}'; failure alert arms in {CoolingFailureIdleSeconds - seconds}s if it stays idle.";
             return;
         }
 
@@ -4712,14 +4748,20 @@ public sealed class DefenderStateStore
 
     private bool CoolingIsDemanded(ThermostatReading reading)
     {
+        // Demand requires BOTH that the unit is genuinely being asked to cool (room above the wall
+        // setpoint) AND that the room genuinely exceeds the user's real comfort target. The second
+        // term is what stops the defender's own "room-1 C" pinned setpoint from making demand
+        // perpetually true (the root cause of the false MEGA ALERTs).
         return string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase)
-            && reading.CurrentTemperatureCelsius >= reading.SetPointCelsius + CoolingFailureDemandBandCelsius;
+            && reading.CurrentTemperatureCelsius >= reading.SetPointCelsius + CoolingFailureDemandBandCelsius
+            && reading.CurrentTemperatureCelsius >= state.TargetTemperatureCelsius + CoolingFailureDemandBandCelsius;
     }
 
     private void RaiseCoolingFailure(DateTimeOffset now, string message)
     {
         var firstAlert = state.CoolingFailureSuspectedAt is null;
         state.CoolingFailureSuspectedAt ??= now;
+        state.CoolingFailureMegaActive = true;
         state.CoolingFailureStatus = message;
         if (firstAlert || state.CoolingFailureNextAlertAt is null || state.CoolingFailureNextAlertAt <= now)
         {
@@ -4732,6 +4774,18 @@ public sealed class DefenderStateStore
     private static bool IsCoolingAction(string? hvacAction)
     {
         return (hvacAction ?? string.Empty).Trim().ToLowerInvariant() is "cooling" or "cool";
+    }
+
+    /// <summary>
+    /// True only for explicit Home Assistant run-states that conclusively mean "not cooling right now".
+    /// null/empty/"unknown"/"unavailable" are deliberately excluded: a missing/inconclusive action must
+    /// not be treated as proof of failure on its own — it needs corroborating room-temperature evidence.
+    /// </summary>
+    private static bool IsConclusiveNonCoolingAction(string? hvacAction)
+    {
+        return (hvacAction ?? string.Empty).Trim().ToLowerInvariant() is
+            "idle" or "off" or "fan" or "fan_only" or "heating" or "drying" or "dry"
+            or "defrosting" or "defrost" or "preheating";
     }
 
     private static string NormalizeHvacAction(string? hvacAction)
@@ -6309,8 +6363,7 @@ public sealed class DefenderStateStore
             && state.Settings.SuperDefenderBypassQuietTiming
             && superDefenderSeconds > 0
             && state.HomeAssistantThermostat?.CurrentTemperatureCelsius > state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius;
-        var coolingFailureAlerting = state.CoolingFailureSuspectedAt is not null
-            && state.CoolingFailureStatus.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase);
+        var coolingFailureAlerting = state.CoolingFailureMegaActive && state.CoolingFailureSuspectedAt is not null;
         var coolingFailureSeconds = coolingFailureAlerting && state.CoolingFailureSuspectedAt is { } failureSince
             ? (int)Math.Ceiling((now - failureSince).TotalSeconds)
             : 0;
@@ -7085,6 +7138,7 @@ public sealed class DefenderStateStore
     {
         state.CoolingDemandStartedAt = null;
         state.CoolingFailureSuspectedAt = null;
+        state.CoolingFailureMegaActive = false;
         state.CoolingFailureNextAlertAt = null;
         state.CoolingFailureStatus = status;
         state.OmegaConfirmedAt = null;
@@ -7937,6 +7991,11 @@ public sealed class DefenderStateStore
         public DateTimeOffset? CoolingDemandStartedAt { get; set; }
 
         public DateTimeOffset? CoolingFailureSuspectedAt { get; set; }
+
+        // True ONLY while a real MEGA/OMEGA alert is being raised. The snapshot's Alerting flag reads
+        // this explicit state instead of substring-matching the status text, so the pre-arm countdown
+        // and benign-suppression statuses can no longer accidentally read as an active alert.
+        public bool CoolingFailureMegaActive { get; set; }
 
         public DateTimeOffset? CoolingFailureNextAlertAt { get; set; }
 

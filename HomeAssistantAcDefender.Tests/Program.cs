@@ -22,6 +22,12 @@ tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
 tests.WebsiteCommandDebounceCanBypassNonThermostatButtons();
 tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
 tests.OmegaAlertEscalatesOnlyWhenRoomRisesDuringIdleCoolingFailure();
+tests.CoolingFailureStaysQuietWhenRoomIsAtUserTarget();
+tests.CoolingFailureStaysQuietWhileRoomStillCoolingDown();
+tests.CoolingFailureStaysQuietWhenActionInconclusiveAndRoomNotRising();
+tests.CoolingFailureMegaAndOmegaWhenBreakerOffAndRoomRising();
+tests.CoolingFailureMegaWhenFarAboveTargetEvenIfRoomDrifsDown();
+tests.CoolingFailureMegaWhenCoolingActionButRoomNotDropping();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
@@ -875,7 +881,7 @@ internal sealed class DefenderSetPointRegressionTests
             []);
 
         store.RecordHomeAssistantReading(reading);
-        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-7));
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
         var snapshot = store.RecordHomeAssistantReading(reading);
         if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
         {
@@ -899,7 +905,7 @@ internal sealed class DefenderSetPointRegressionTests
             var store = fixture.Store;
             store.SetTarget(22.0);
             SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 23.4);
-            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-7));
+            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
 
             var snapshot = store.RecordHomeAssistantReading(idleWarm);
             if (!snapshot.CoolingFailure.Alerting)
@@ -920,7 +926,7 @@ internal sealed class DefenderSetPointRegressionTests
             var store = fixture.Store;
             store.SetTarget(22.0);
             SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 24.0);
-            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-7));
+            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
 
             var snapshot = store.RecordHomeAssistantReading(idleWarm);
             if (!snapshot.CoolingFailure.Alerting)
@@ -932,6 +938,130 @@ internal sealed class DefenderSetPointRegressionTests
             {
                 throw new InvalidOperationException("A flat room (no sustained rise) must NOT escalate to OMEGA.");
             }
+        }
+    }
+
+    public void CoolingFailureStaysQuietWhenRoomIsAtUserTarget()
+    {
+        // False positive root cause: the defender pins the wall setpoint to ~room-1 C, so the old
+        // setpoint-only demand check was perpetually true. Here the room is essentially AT the user's
+        // target, so the target-aware demand must read FALSE and no mega alert may fire even with a
+        // stale armed timer.
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        // current-setPoint = 1.3 (old demand TRUE) but current-target = 0.3 < 0.6 (new demand FALSE).
+        var reading = new ThermostatReading("climate.dining_room", 22.3, 21.0, "cool", "idle", null, []);
+        store.RecordHomeAssistantReading(reading);
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        var snapshot = store.RecordHomeAssistantReading(reading);
+
+        if (snapshot.CoolingFailure.Alerting || snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("No mega alert may fire while the room is at the user's comfort target.");
+        }
+    }
+
+    public void CoolingFailureStaysQuietWhileRoomStillCoolingDown()
+    {
+        // Normal compressor cycling: the unit cut out (idle) but the room is still coasting down from
+        // residual cooling. While the room is improving and not far above target, no mega alert.
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 24.0);
+
+        var reading = new ThermostatReading("climate.dining_room", 23.0, 22.0, "cool", "idle", null, []);
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        var snapshot = store.RecordHomeAssistantReading(reading); // rise = 23.0-24.0 = -1.0 (improving), 23.0 < 22+2.0
+
+        if (snapshot.CoolingFailure.Alerting)
+        {
+            throw new InvalidOperationException("No mega alert while the room is still cooling down within the safe band.");
+        }
+    }
+
+    public void CoolingFailureStaysQuietWhenActionInconclusiveAndRoomNotRising()
+    {
+        // Flaky integration: hvac_action is 'unknown'. With a flat room inside the safe band that is
+        // inconclusive (not proof of failure), so no alert.
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 23.0);
+
+        var reading = new ThermostatReading("climate.dining_room", 23.0, 22.0, "cool", "unknown", null, []);
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        var snapshot = store.RecordHomeAssistantReading(reading); // rise = 0.0, action inconclusive, 23.0 < 24.0
+
+        if (snapshot.CoolingFailure.Alerting)
+        {
+            throw new InvalidOperationException("Inconclusive action with a non-rising room inside the safe band must not mega-alert.");
+        }
+    }
+
+    public void CoolingFailureMegaAndOmegaWhenBreakerOffAndRoomRising()
+    {
+        // Real failure (dead breaker): idle while demanded AND the room is rising above target -> OMEGA.
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 24.0);
+
+        var reading = new ThermostatReading("climate.dining_room", 24.8, 23.8, "cool", "idle", null, []);
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        var snapshot = store.RecordHomeAssistantReading(reading); // rise = +0.8 >= 0.4
+
+        if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("A dead breaker with a rising room must still mega-alert.");
+        }
+        if (!snapshot.CoolingFailure.OmegaAlerting || !snapshot.CoolingFailure.Status.Contains("OMEGA ALERT", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("A sustained rise above target while idle must escalate to OMEGA.");
+        }
+    }
+
+    public void CoolingFailureMegaWhenFarAboveTargetEvenIfRoomDrifsDown()
+    {
+        // Adversarial regression: a dead dining-room unit (idle) whose room is being slowly cooled by a
+        // DIFFERENT source (another zone / ambient drift). The room is drifting DOWN, but it is far above
+        // the user's real target, so the "room improving" suppression must NOT mask the dead unit.
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 25.8);
+
+        var reading = new ThermostatReading("climate.dining_room", 25.5, 24.5, "cool", "idle", null, []);
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        var snapshot = store.RecordHomeAssistantReading(reading); // rise = -0.3 (improving) BUT 25.5 >= 22+2.0
+
+        if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("A dead unit holding the room far above target must mega-alert even while it slowly drifts down.");
+        }
+        if (snapshot.CoolingFailure.OmegaAlerting)
+        {
+            throw new InvalidOperationException("A drifting-down room must not escalate to OMEGA (no rise).");
+        }
+    }
+
+    public void CoolingFailureMegaWhenCoolingActionButRoomNotDropping()
+    {
+        // Frozen coil / stuck compressor: action reports 'cooling' but the room barely moves over 20 min
+        // while above target. This branch is unchanged by the fix and must still mega-alert.
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        SeedRoomSample(store, DateTimeOffset.UtcNow.AddSeconds(-1230), 25.0);
+
+        var reading = new ThermostatReading("climate.dining_room", 24.95, 23.95, "cool", "cooling", null, []);
+        var snapshot = store.RecordHomeAssistantReading(reading); // drop = 25.0-24.95 = 0.05 < 0.2 over 20 min
+
+        if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Cooling action with no real room drop over 20 min must still mega-alert (frozen coil).");
         }
     }
 
