@@ -743,6 +743,19 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>Stores the latest adjustment-statistics context (refreshed each cycle, read by RecordCommand).</summary>
+    public void RecordTrackedContext(TrackedContextReading context)
+    {
+        lock (gate)
+        {
+            state.TrackedPersonConfigured = context.PersonConfigured;
+            state.TrackedPersonLabel = context.PersonLabel;
+            state.TrackedPersonHome = context.PersonHome;
+            state.MasterBedroomConfigured = context.BedroomConfigured;
+            state.MasterBedroomOccupied = context.BedroomOccupied;
+        }
+    }
+
     public DefenderSnapshot RecordHomeAssistantReading(ThermostatReading reading)
     {
         lock (gate)
@@ -831,10 +844,98 @@ public sealed class DefenderStateStore
                     commandSourceDetail);
             }
 
+            // Adjustment statistics: log each setpoint command with its real context.
+            if (commandedSetPointCelsius is { } adjustmentSetPoint)
+            {
+                state.AdjustmentContextSamples.Add(new AdjustmentContextSample
+                {
+                    At = state.UpdatedAt,
+                    SetPointCelsius = adjustmentSetPoint,
+                    RoomTemperatureCelsius = state.HomeAssistantThermostat?.CurrentTemperatureCelsius,
+                    OutdoorTemperatureCelsius = state.Weather?.OutdoorTemperatureCelsius,
+                    TrackedPersonHome = state.TrackedPersonHome,
+                    MasterBedroomOccupied = state.MasterBedroomOccupied,
+                    Source = commandSourceLabel
+                });
+                PruneAdjustmentContextSamples(state.UpdatedAt);
+            }
+
             AddEvent("info", message);
             SaveState();
             return CreateSnapshot();
         }
+    }
+
+    private void PruneAdjustmentContextSamples(DateTimeOffset now)
+    {
+        state.AdjustmentContextSamples.RemoveAll(item => now - item.At > TimeSpan.FromDays(90));
+        if (state.AdjustmentContextSamples.Count > 2000)
+        {
+            state.AdjustmentContextSamples.RemoveRange(0, state.AdjustmentContextSamples.Count - 2000);
+        }
+    }
+
+    private AdjustmentStatisticsSnapshot BuildAdjustmentStatistics()
+    {
+        var label = string.IsNullOrWhiteSpace(state.TrackedPersonLabel)
+            ? "Tracked person"
+            : state.TrackedPersonLabel;
+        var samples = state.AdjustmentContextSamples;
+
+        static double? Avg(IEnumerable<double?> values)
+        {
+            var present = values.Where(v => v is not null).Select(v => v!.Value).ToList();
+            return present.Count > 0 ? Math.Round(present.Average(), 2) : null;
+        }
+
+        AdjustmentSplitSnapshot Split(string splitLabel, List<AdjustmentContextSample> items) => new(
+            splitLabel,
+            items.Count,
+            items.Count > 0 ? Math.Round(items.Average(i => i.SetPointCelsius), 2) : null,
+            Avg(items.Select(i => i.RoomTemperatureCelsius)),
+            Avg(items.Select(i => i.OutdoorTemperatureCelsius)));
+
+        var personHome = samples.Where(s => s.TrackedPersonHome).ToList();
+        var personAway = samples.Where(s => !s.TrackedPersonHome).ToList();
+        var bedroomOccupied = samples.Where(s => s.MasterBedroomOccupied).ToList();
+        var bedroomEmpty = samples.Where(s => !s.MasterBedroomOccupied).ToList();
+
+        string insight;
+        if (samples.Count == 0)
+        {
+            insight = "No thermostat adjustments recorded yet.";
+        }
+        else if (bedroomOccupied.Count > 0 && bedroomEmpty.Count > 0)
+        {
+            var delta = Math.Round(bedroomOccupied.Average(i => i.SetPointCelsius) - bedroomEmpty.Average(i => i.SetPointCelsius), 1);
+            insight = delta < 0
+                ? $"Setpoint averages {Math.Abs(delta):0.0} C cooler when the master bedroom is occupied."
+                : delta > 0
+                    ? $"Setpoint averages {delta:0.0} C warmer when the master bedroom is occupied."
+                    : "Bedroom occupancy shows no average setpoint difference yet.";
+        }
+        else if (!state.MasterBedroomConfigured)
+        {
+            insight = "Set MasterBedroomEntityIds to correlate adjustments with bedroom occupancy.";
+        }
+        else
+        {
+            insight = "Collecting bedroom-occupancy correlation data.";
+        }
+
+        return new AdjustmentStatisticsSnapshot(
+            label,
+            samples.Count,
+            samples.Count > 0 ? Math.Round(samples.Average(i => i.SetPointCelsius), 2) : null,
+            Avg(samples.Select(i => i.RoomTemperatureCelsius)),
+            Avg(samples.Select(i => i.OutdoorTemperatureCelsius)),
+            Split($"{label} home", personHome),
+            Split($"{label} away", personAway),
+            Split("Bedroom occupied", bedroomOccupied),
+            Split("Bedroom empty", bedroomEmpty),
+            insight,
+            samples.Count > 0 ? samples[0].At : null,
+            samples.Count > 0 ? samples[^1].At : null);
     }
 
     public DefenderSnapshot SetNextAction(string message, DateTimeOffset? when = null)
@@ -6390,6 +6491,7 @@ public sealed class DefenderStateStore
         saved.HistoryComfortSlots ??= [];
         saved.BenignContextSamples ??= [];
         saved.ComfortTrainingSamples ??= [];
+        saved.AdjustmentContextSamples ??= [];
         saved.LearningModel ??= new LearningModelState();
         saved.DefenderCommandTimes ??= [];
         saved.VisibilityNoticeTimes ??= [];
@@ -7224,6 +7326,7 @@ public sealed class DefenderStateStore
                     : state.AngerLearningStatus),
             BuildHistoryLearningSnapshot(now),
             BuildLearningModelSnapshot(),
+            BuildAdjustmentStatistics(),
             new ConflictQuietSnapshot(
                 state.Settings.ConflictQuietModeEnabled,
                 conflictQuietSeconds > 0,
@@ -8438,6 +8541,21 @@ public sealed class DefenderStateStore
 
         public DateTimeOffset? LastBenignSampleAt { get; set; }
 
+        // Adjustment-statistics context: live flags refreshed each cycle, plus the per-adjustment log
+        // correlating each thermostat command with room temp, outdoor temp, tracked-person presence,
+        // and master-bedroom occupancy.
+        public bool TrackedPersonConfigured { get; set; }
+
+        public string TrackedPersonLabel { get; set; } = "Taylor Swift";
+
+        public bool TrackedPersonHome { get; set; }
+
+        public bool MasterBedroomConfigured { get; set; }
+
+        public bool MasterBedroomOccupied { get; set; }
+
+        public List<AdjustmentContextSample> AdjustmentContextSamples { get; set; } = [];
+
         public string HistoryLearningStatus { get; set; } = "Thermostat-history learning has not run yet.";
 
         public DateTimeOffset? CoolModeRestoreDueAt { get; set; }
@@ -8788,6 +8906,23 @@ public sealed class DefenderStateStore
         public int HourOfDay { get; set; }
 
         public double PreferredSetPointCelsius { get; set; }
+    }
+
+    private sealed class AdjustmentContextSample
+    {
+        public DateTimeOffset At { get; set; }
+
+        public double SetPointCelsius { get; set; }
+
+        public double? RoomTemperatureCelsius { get; set; }
+
+        public double? OutdoorTemperatureCelsius { get; set; }
+
+        public bool TrackedPersonHome { get; set; }
+
+        public bool MasterBedroomOccupied { get; set; }
+
+        public string Source { get; set; } = "";
     }
 
     private sealed class ThermostatRuntimeState

@@ -31,4 +31,13 @@ public sealed class HomeAssistantOptions
     public string? Username { get; set; }
 
     public string? Password { get; set; }
+
+    // Adjustment-statistics context entities (all optional). The tracked person is a nickname-labelled
+    // presence/person/device_tracker entity; the master-bedroom triggers are any motion/occupancy
+    // sensors and/or lights whose "on" means the (hottest) bedroom is occupied.
+    public string TrackedPersonLabel { get; set; } = "Taylor Swift";
+
+    public string TrackedPersonEntityIds { get; set; } = "";
+
+    public string MasterBedroomEntityIds { get; set; } = "";
 }

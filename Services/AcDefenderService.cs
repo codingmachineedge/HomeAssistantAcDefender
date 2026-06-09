@@ -526,6 +526,10 @@ public sealed class AcDefenderService
         var presence = await homeAssistantClient.GetPresenceAsync(settings.PresenceEntityIds, cancellationToken);
         stateStore.RecordComfortReadings(upstairsSensors, presence);
 
+        // Adjustment-statistics context: is the tracked person home, is the master bedroom occupied.
+        var trackedContext = await homeAssistantClient.GetTrackedContextAsync(cancellationToken);
+        stateStore.RecordTrackedContext(trackedContext);
+
         var reading = await homeAssistantClient.GetDiningRoomClimateAsync(cancellationToken);
         if (reading is null)
         {

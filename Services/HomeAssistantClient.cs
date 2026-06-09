@@ -170,6 +170,78 @@ public sealed class HomeAssistantClient
             .ToArray();
     }
 
+    /// <summary>Reads an explicit list of HA entities and reports which are "active" (on/home/detected/
+    /// occupied/motion/numeric&gt;0), reusing the same truthiness oracle as the front-door detector.</summary>
+    public async Task<IReadOnlyList<EntityActivation>> GetActiveEntitiesAsync(string configuredEntityIds, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return Array.Empty<EntityActivation>();
+        }
+
+        var configured = SplitEntityIds(configuredEntityIds).ToArray();
+        if (configured.Length == 0)
+        {
+            return Array.Empty<EntityActivation>();
+        }
+
+        var readings = new List<EntityActivation>();
+        foreach (var entityId in configured)
+        {
+            var reading = await TryGetEntityActivationAsync(entityId, cancellationToken);
+            if (reading is not null)
+            {
+                readings.Add(reading);
+            }
+        }
+
+        return readings;
+    }
+
+    /// <summary>Resolves the adjustment-statistics context: whether the tracked person is home and whether
+    /// any master-bedroom trigger is active. Empty config returns "not configured" so stats can say so.</summary>
+    public async Task<TrackedContextReading> GetTrackedContextAsync(CancellationToken cancellationToken)
+    {
+        var current = options.CurrentValue;
+        var personConfigured = !string.IsNullOrWhiteSpace(current.TrackedPersonEntityIds);
+        var bedroomConfigured = !string.IsNullOrWhiteSpace(current.MasterBedroomEntityIds);
+
+        var personActivations = personConfigured
+            ? await GetActiveEntitiesAsync(current.TrackedPersonEntityIds, cancellationToken)
+            : Array.Empty<EntityActivation>();
+        var bedroomActivations = bedroomConfigured
+            ? await GetActiveEntitiesAsync(current.MasterBedroomEntityIds, cancellationToken)
+            : Array.Empty<EntityActivation>();
+
+        return new TrackedContextReading(
+            string.IsNullOrWhiteSpace(current.TrackedPersonLabel) ? "Tracked person" : current.TrackedPersonLabel.Trim(),
+            personConfigured,
+            personActivations.Any(activation => activation.Active),
+            bedroomConfigured,
+            bedroomActivations.Any(activation => activation.Active));
+    }
+
+    private async Task<EntityActivation?> TryGetEntityActivationAsync(string entityId, CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(HttpMethod.Get, $"api/states/{Uri.EscapeDataString(entityId)}", null, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            logger.LogWarning("Home Assistant entity {EntityId} was not found for adjustment-statistics context", entityId);
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var root = document.RootElement;
+        var state = TryGetState(root);
+        return new EntityActivation(
+            GetEntityId(root),
+            TryGetAttributeString(root, "friendly_name") ?? entityId,
+            state,
+            IsDetectedState(state));
+    }
+
     public async Task<UsageLiveSnapshot> GetLiveUsageAsync(CancellationToken cancellationToken)
     {
         if (!IsConfigured)

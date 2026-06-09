@@ -36,6 +36,7 @@ public sealed record DefenderSnapshot(
     AngerLearningSnapshot AngerLearning,
     HistoryLearningSnapshot HistoryLearning,
     LearningModelSnapshot LearningModel,
+    AdjustmentStatisticsSnapshot AdjustmentStatistics,
     ConflictQuietSnapshot ConflictQuiet,
     TugOfWarTruceSnapshot TugOfWarTruce,
     WallSettlingSnapshot WallSettling,
@@ -345,6 +346,33 @@ public sealed record LearningModelSnapshot(
     double AngerLogLoss,
     double ComfortRmse,
     DateTimeOffset? TrainedAt);
+
+/// <summary>One Home Assistant entity's on/off-style state and whether it counts as "active".</summary>
+public sealed record EntityActivation(string EntityId, string Name, string State, bool Active);
+
+/// <summary>Per-cycle context for the adjustment statistics: is the tracked person home, is the master bedroom occupied.</summary>
+public sealed record TrackedContextReading(string PersonLabel, bool PersonConfigured, bool PersonHome, bool BedroomConfigured, bool BedroomOccupied);
+
+public sealed record AdjustmentSplitSnapshot(
+    string Label,
+    int Count,
+    double? AverageSetPointCelsius,
+    double? AverageRoomTemperatureCelsius,
+    double? AverageOutdoorTemperatureCelsius);
+
+public sealed record AdjustmentStatisticsSnapshot(
+    string TrackedPersonLabel,
+    int TotalAdjustments,
+    double? AverageSetPointCelsius,
+    double? AverageRoomTemperatureCelsius,
+    double? AverageOutdoorTemperatureCelsius,
+    AdjustmentSplitSnapshot PersonHome,
+    AdjustmentSplitSnapshot PersonAway,
+    AdjustmentSplitSnapshot BedroomOccupied,
+    AdjustmentSplitSnapshot BedroomEmpty,
+    string Insight,
+    DateTimeOffset? FirstSampleAt,
+    DateTimeOffset? LastSampleAt);
 
 public sealed record ConflictQuietSnapshot(
     bool Enabled,

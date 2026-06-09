@@ -31,6 +31,7 @@ tests.CoolingFailureMegaWhenCoolingActionButRoomNotDropping();
 tests.AngerButtonLearnsUpsetAndRaisesThisHourSensitivity();
 tests.HistoryLearningBuildsHumanComfortProfileAndCadence();
 tests.MachineLearningTrainerLearnsAngerAndComfortPatterns();
+tests.AdjustmentStatisticsSplitByPresenceAndBedroomOccupancy();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
@@ -1178,6 +1179,48 @@ internal sealed class DefenderSetPointRegressionTests
         if (Math.Abs(n - 20.0) > 1.0 || Math.Abs(m - 23.0) > 1.0 || n >= m)
         {
             throw new InvalidOperationException($"Comfort model should fit ~20 C at night and ~23 C midday, got {n:0.0}/{m:0.0}.");
+        }
+    }
+
+    public void AdjustmentStatisticsSplitByPresenceAndBedroomOccupancy()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        store.RecordWeatherReading(new WeatherReading("weather.home", 30.0, "sunny"));
+        store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 24.0, "cool", "idle", null, []));
+
+        // Bedroom occupied + tracked person home → two hard cooling commands (20 C).
+        store.RecordTrackedContext(new TrackedContextReading("Taylor Swift", true, true, true, true));
+        store.RecordCommand("seed", 20.0);
+        store.RecordCommand("seed", 20.0);
+
+        // Bedroom empty + person away → one gentler command (23 C).
+        store.RecordTrackedContext(new TrackedContextReading("Taylor Swift", true, false, true, false));
+        store.RecordCommand("seed", 23.0);
+
+        var stats = store.GetSnapshot().AdjustmentStatistics;
+        if (stats.TrackedPersonLabel != "Taylor Swift")
+        {
+            throw new InvalidOperationException("Statistics should carry the tracked-person label.");
+        }
+        if (stats.TotalAdjustments != 3 || stats.BedroomOccupied.Count != 2 || stats.BedroomEmpty.Count != 1
+            || stats.PersonHome.Count != 2 || stats.PersonAway.Count != 1)
+        {
+            throw new InvalidOperationException($"Adjustment splits are wrong: total={stats.TotalAdjustments}, occ={stats.BedroomOccupied.Count}, empty={stats.BedroomEmpty.Count}, home={stats.PersonHome.Count}, away={stats.PersonAway.Count}.");
+        }
+        if (stats.BedroomOccupied.AverageSetPointCelsius is not { } occ || Math.Abs(occ - 20.0) > 0.01
+            || stats.BedroomEmpty.AverageSetPointCelsius is not { } empty || Math.Abs(empty - 23.0) > 0.01)
+        {
+            throw new InvalidOperationException("Average setpoints per split are wrong.");
+        }
+        if (stats.AverageOutdoorTemperatureCelsius is not { } outdoor || Math.Abs(outdoor - 30.0) > 0.01)
+        {
+            throw new InvalidOperationException("Outdoor temperature should be captured per adjustment.");
+        }
+        if (!stats.Insight.Contains("cooler", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Insight should note cooler-when-occupied, got: {stats.Insight}");
         }
     }
 
