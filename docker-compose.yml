@@ -14,6 +14,8 @@ services:
       Defender__PollIntervalSeconds: 5
     volumes:
       - ac-defender-data:/data
+      - ac-defender-authdata:/app/App_Data
 
 volumes:
   ac-defender-data:
+  ac-defender-authdata:
