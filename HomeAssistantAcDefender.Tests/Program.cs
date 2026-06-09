@@ -4,6 +4,7 @@ using HomeAssistantAcDefender.Options;
 using HomeAssistantAcDefender.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -33,6 +34,7 @@ tests.HistoryLearningBuildsHumanComfortProfileAndCadence();
 tests.MachineLearningTrainerLearnsAngerAndComfortPatterns();
 tests.AdjustmentStatisticsSplitByPresenceAndBedroomOccupancy();
 tests.OutdoorPowerRuleSilencesWhenColdLiteWhenMildButYieldsToHotRoom();
+tests.AccountSignupOwnerThenCodeGatedAndValidates();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
@@ -1270,6 +1272,75 @@ internal sealed class DefenderSetPointRegressionTests
         if (store.TryRespectOutdoorPowerRule(comfyReading, bypassForComfort: false, now, out _, out _))
         {
             throw new InvalidOperationException("The outdoor power rule must not engage at or above 22 C outside.");
+        }
+    }
+
+    public void AccountSignupOwnerThenCodeGatedAndValidates()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "acd_acct_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var env = new TestWebHostEnvironment(dir);
+            var auth = new TwoFactorAuth(new ConfigurationBuilder().Build(), env, NullLogger<TwoFactorAuth>.Instance);
+
+            if (auth.HasAnyAccount)
+            {
+                throw new InvalidOperationException("No accounts should exist initially.");
+            }
+
+            // First account becomes the owner with no code required.
+            if (!auth.TryCreateAccount("owner", "secret123", null, out var e1))
+            {
+                throw new InvalidOperationException($"Owner signup should succeed: {e1}");
+            }
+            if (!auth.HasAnyAccount)
+            {
+                throw new InvalidOperationException("Owner account should now exist.");
+            }
+
+            // Second account blocked until the owner sets a registration code.
+            if (auth.TryCreateAccount("guest", "secret123", null, out _))
+            {
+                throw new InvalidOperationException("Additional signup must be blocked without a registration code.");
+            }
+
+            auth.SetRegistrationCode("letmein");
+            if (auth.TryCreateAccount("guest", "secret123", "wrong", out _))
+            {
+                throw new InvalidOperationException("Wrong registration code must be rejected.");
+            }
+            if (!auth.TryCreateAccount("guest", "secret123", "letmein", out var e3))
+            {
+                throw new InvalidOperationException($"Correct registration code should allow signup: {e3}");
+            }
+
+            // Duplicate username (case-insensitive) and short password are rejected.
+            if (auth.TryCreateAccount("OWNER", "secret123", "letmein", out _))
+            {
+                throw new InvalidOperationException("Duplicate username must be rejected.");
+            }
+            if (auth.TryCreateAccount("newbie", "abc", "letmein", out _))
+            {
+                throw new InvalidOperationException("Short password must be rejected.");
+            }
+
+            // Login validation.
+            if (!auth.ValidateAccount("owner", "secret123") || auth.ValidateAccount("owner", "wrong") || auth.ValidateAccount("ghost", "secret123"))
+            {
+                throw new InvalidOperationException("Account validation is wrong.");
+            }
+
+            // Accounts persist and reload from disk.
+            var reloaded = new TwoFactorAuth(new ConfigurationBuilder().Build(), env, NullLogger<TwoFactorAuth>.Instance);
+            if (reloaded.AccountCount != 2 || !reloaded.ValidateAccount("guest", "secret123"))
+            {
+                throw new InvalidOperationException("Accounts should persist and reload from disk.");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
         }
     }
 

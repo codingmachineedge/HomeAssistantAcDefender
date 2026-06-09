@@ -21,6 +21,25 @@ public class TwoFactorAuth
     private byte[]? _passwordSalt;
     private readonly string? _configPassword;
 
+    // Multi-user accounts (username + password). The first account created is the owner; later sign-ups
+    // require the owner-set registration code.
+    private readonly List<Account> _accounts = new();
+    private string? _registrationCode;
+
+    private sealed class Account
+    {
+        public string Username { get; set; } = "";
+        public string PasswordHash { get; set; } = "";
+        public string PasswordSalt { get; set; } = "";
+        public bool IsOwner { get; set; }
+        public DateTimeOffset CreatedAt { get; set; }
+    }
+
+    public bool HasAnyAccount => _accounts.Count > 0;
+    public bool HasRegistrationCode => !string.IsNullOrEmpty(_registrationCode);
+    public int AccountCount => _accounts.Count;
+    public IReadOnlyList<string> AccountUsernames => _accounts.Select(a => a.IsOwner ? $"{a.Username} (owner)" : a.Username).ToList();
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_secret);
     public string? ManualKey => _secret;
 
@@ -103,7 +122,36 @@ public class TwoFactorAuth
                 }
             }
 
-            _logger.LogInformation("Login password configuration loaded from file");
+            if (root.TryGetProperty("registrationCode", out var codeProp) && codeProp.ValueKind == JsonValueKind.String)
+            {
+                _registrationCode = codeProp.GetString();
+            }
+
+            if (root.TryGetProperty("accounts", out var accountsProp) && accountsProp.ValueKind == JsonValueKind.Array)
+            {
+                _accounts.Clear();
+                foreach (var element in accountsProp.EnumerateArray())
+                {
+                    var username = element.TryGetProperty("username", out var up) ? up.GetString() : null;
+                    var hash = element.TryGetProperty("passwordHash", out var hp) ? hp.GetString() : null;
+                    var salt = element.TryGetProperty("passwordSalt", out var sp) ? sp.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(hash) || string.IsNullOrWhiteSpace(salt))
+                    {
+                        continue;
+                    }
+
+                    _accounts.Add(new Account
+                    {
+                        Username = username,
+                        PasswordHash = hash,
+                        PasswordSalt = salt,
+                        IsOwner = element.TryGetProperty("isOwner", out var io) && io.ValueKind == JsonValueKind.True,
+                        CreatedAt = element.TryGetProperty("createdAt", out var ca) && ca.TryGetDateTimeOffset(out var dt) ? dt : DateTimeOffset.UtcNow
+                    });
+                }
+            }
+
+            _logger.LogInformation("Auth config loaded from file ({Accounts} account(s))", _accounts.Count);
         }
         catch (Exception ex)
         {
@@ -124,10 +172,19 @@ public class TwoFactorAuth
             passwordEnabled = _passwordEnabled,
             passwordHash = _passwordHash is null ? null : Convert.ToBase64String(_passwordHash),
             passwordSalt = _passwordSalt is null ? null : Convert.ToBase64String(_passwordSalt),
+            registrationCode = _registrationCode,
+            accounts = _accounts.Select(a => new
+            {
+                username = a.Username,
+                passwordHash = a.PasswordHash,
+                passwordSalt = a.PasswordSalt,
+                isOwner = a.IsOwner,
+                createdAt = a.CreatedAt
+            }).ToArray(),
             updatedAt = DateTimeOffset.UtcNow
         });
         File.WriteAllText(_authConfigFilePath, content);
-        _logger.LogInformation("Login password configuration saved to file");
+        _logger.LogInformation("Auth config saved to file");
     }
 
     /// <summary>Sets (or replaces) the login password and turns password login on.</summary>
@@ -183,6 +240,101 @@ public class TwoFactorAuth
             HashAlgorithmName.SHA256,
             PasswordHashBytes);
         return CryptographicOperations.FixedTimeEquals(candidate, _passwordHash);
+    }
+
+    // ───────────────────────── Accounts ─────────────────────────
+
+    /// <summary>Creates an account. The first account is the owner (no code needed); later sign-ups
+    /// require the owner-set registration code. Returns false with a user-facing <paramref name="error"/>.</summary>
+    public bool TryCreateAccount(string? username, string? password, string? registrationCode, out string error)
+    {
+        error = string.Empty;
+        username = (username ?? string.Empty).Trim();
+        password ??= string.Empty;
+
+        if (string.IsNullOrWhiteSpace(username) || username.Length > 64)
+        {
+            error = "Enter a username.";
+            return false;
+        }
+
+        if (password.Length < 6)
+        {
+            error = "Password must be at least 6 characters.";
+            return false;
+        }
+
+        if (_accounts.Any(a => string.Equals(a.Username, username, StringComparison.OrdinalIgnoreCase)))
+        {
+            error = "That username is already taken.";
+            return false;
+        }
+
+        var isOwner = _accounts.Count == 0;
+        if (!isOwner)
+        {
+            if (!HasRegistrationCode)
+            {
+                error = "Sign-ups are closed until the owner sets a registration code.";
+                return false;
+            }
+
+            if (!CryptographicOperations.FixedTimeEquals(
+                    Encoding.UTF8.GetBytes((registrationCode ?? string.Empty).Trim()),
+                    Encoding.UTF8.GetBytes(_registrationCode!)))
+            {
+                error = "Incorrect registration code.";
+                return false;
+            }
+        }
+
+        var salt = RandomNumberGenerator.GetBytes(PasswordSaltBytes);
+        var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, PasswordIterations, HashAlgorithmName.SHA256, PasswordHashBytes);
+        _accounts.Add(new Account
+        {
+            Username = username,
+            PasswordHash = Convert.ToBase64String(hash),
+            PasswordSalt = Convert.ToBase64String(salt),
+            IsOwner = isOwner,
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        SaveAuthConfig();
+        _logger.LogInformation("Account created '{Username}' (owner={Owner})", username, isOwner);
+        return true;
+    }
+
+    /// <summary>Validates a username + password against the stored accounts.</summary>
+    public bool ValidateAccount(string? username, string? password)
+    {
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
+        {
+            return false;
+        }
+
+        var account = _accounts.FirstOrDefault(a => string.Equals(a.Username, username.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (account is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var salt = Convert.FromBase64String(account.PasswordSalt);
+            var expected = Convert.FromBase64String(account.PasswordHash);
+            var candidate = Rfc2898DeriveBytes.Pbkdf2(password, salt, PasswordIterations, HashAlgorithmName.SHA256, PasswordHashBytes);
+            return CryptographicOperations.FixedTimeEquals(candidate, expected);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Owner-set code required for additional sign-ups. Empty/null closes sign-ups.</summary>
+    public void SetRegistrationCode(string? code)
+    {
+        _registrationCode = string.IsNullOrWhiteSpace(code) ? null : code.Trim();
+        SaveAuthConfig();
     }
 
     public string GenerateNewSecret()

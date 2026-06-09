@@ -21,56 +21,53 @@
     </div>
 }
 
-@if (_onboarding)
+@if (_formMode == "owner")
 {
-    <div class="login-page onboarding">
+    <div class="login-page">
         <div class="login-card">
             <div class="login-header">
                 <svg class="login-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                <h1 class="login-title">Set Up Two-Factor Authentication</h1>
-                <p class="login-subtitle">Scan the QR code with your authenticator app, or enter the key manually.</p>
+                <h1 class="login-title">Create the owner account</h1>
+                <p class="login-subtitle">This first account is the owner. Later sign-ups need a registration code you set in Settings.</p>
             </div>
 
-            <form method="post" class="login-form" data-enhance="false" @formname="onboarding">
+            <form method="post" class="login-form" data-enhance="false" @formname="ownersignup">
                 <AntiforgeryToken />
-                <input type="hidden" name="pendingSecret" value="@_pendingSecret" />
-                <input type="hidden" name="onboarding" value="true" />
-
-                <div class="qr-container">
-                    @((MarkupString)_qrSvg)
-                </div>
-
-                <div class="manual-key">
-                    <p class="manual-key-label">Manual entry key</p>
-                    <p class="manual-key-value">@_pendingSecret</p>
-                </div>
-
-                <div class="input-group">
-                    <input type="text" name="code" class="code-input" placeholder="000000" maxlength="6"
-                           inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required />
-                </div>
-
-                <div class="password-setup">
-                    <p class="password-setup-label">Optional password — log in with this instead of a code</p>
-                    <input type="password" name="newPassword" class="text-input" placeholder="Set a password (optional)"
-                           autocomplete="new-password" minlength="6" />
-                    <input type="password" name="confirmPassword" class="text-input" placeholder="Confirm password"
-                           autocomplete="new-password" minlength="6" />
-                </div>
-
+                <input type="hidden" name="action" value="ownersignup" />
+                <div class="input-group"><input type="text" name="username" class="text-input" placeholder="Username" autocomplete="username" required autofocus /></div>
+                <div class="input-group"><input type="password" name="password" class="text-input" placeholder="Password (at least 6 characters)" autocomplete="new-password" minlength="6" required /></div>
+                <div class="input-group"><input type="password" name="confirmPassword" class="text-input" placeholder="Confirm password" autocomplete="new-password" minlength="6" required /></div>
                 <div class="login-options">
-                    <label class="option-label">
-                        <input type="checkbox" name="keepSignedIn" value="true" checked />
-                        <span>Keep me signed in</span>
-                    </label>
-                    <label class="option-label">
-                        <input type="checkbox" name="rememberIp" value="true" checked />
-                        <span>Remember this IP</span>
-                    </label>
+                    <label class="option-label"><input type="checkbox" name="keepSignedIn" value="true" checked /><span>Keep me signed in</span></label>
                 </div>
-
-                <button type="submit" class="login-submit">Verify &amp; Activate</button>
+                <button type="submit" class="login-submit">Create owner account</button>
             </form>
+        </div>
+    </div>
+}
+else if (_formMode == "signup")
+{
+    <div class="login-page">
+        <div class="login-card">
+            <div class="login-header">
+                <svg class="login-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                <h1 class="login-title">Create an account</h1>
+                <p class="login-subtitle">Ask the owner for the registration code.</p>
+            </div>
+
+            <form method="post" class="login-form" data-enhance="false" @formname="signup">
+                <AntiforgeryToken />
+                <input type="hidden" name="action" value="signup" />
+                <div class="input-group"><input type="text" name="username" class="text-input" placeholder="Username" autocomplete="username" required autofocus /></div>
+                <div class="input-group"><input type="password" name="password" class="text-input" placeholder="Password (at least 6 characters)" autocomplete="new-password" minlength="6" required /></div>
+                <div class="input-group"><input type="password" name="confirmPassword" class="text-input" placeholder="Confirm password" autocomplete="new-password" minlength="6" required /></div>
+                <div class="input-group"><input type="text" name="registrationCode" class="text-input" placeholder="Registration code" required /></div>
+                <div class="login-options">
+                    <label class="option-label"><input type="checkbox" name="keepSignedIn" value="true" checked /><span>Keep me signed in</span></label>
+                </div>
+                <button type="submit" class="login-submit">Create account</button>
+            </form>
+            <a href="/login" style="display:block;text-align:center;margin-top:14px;color:#46c1a7;font-size:0.85rem;text-decoration:none;">Back to sign in</a>
         </div>
     </div>
 }
@@ -81,40 +78,20 @@ else
             <div class="login-header">
                 <svg class="login-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                 <h1 class="login-title">AC Defender Guard Post</h1>
-                <p class="login-subtitle">Enter the code from your authenticator app.</p>
+                <p class="login-subtitle">Sign in to continue.</p>
             </div>
 
             <form method="post" class="login-form" data-enhance="false" @formname="login">
                 <AntiforgeryToken />
-
-                <div class="input-group">
-                    <input type="text" name="code" class="code-input" placeholder="000000" maxlength="6"
-                           inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code"
-                           required="@(!TwoFactorAuth.IsPasswordEnabled)" autofocus />
-                </div>
-
-                @if (TwoFactorAuth.IsPasswordEnabled)
-                {
-                    <div class="login-divider"><span>or</span></div>
-                    <div class="input-group">
-                        <input type="password" name="password" class="text-input" placeholder="Password"
-                               autocomplete="current-password" />
-                    </div>
-                }
-
+                <input type="hidden" name="action" value="login" />
+                <div class="input-group"><input type="text" name="username" class="text-input" placeholder="Username" autocomplete="username" required autofocus /></div>
+                <div class="input-group"><input type="password" name="password" class="text-input" placeholder="Password" autocomplete="current-password" required /></div>
                 <div class="login-options">
-                    <label class="option-label">
-                        <input type="checkbox" name="keepSignedIn" value="true" checked />
-                        <span>Keep me signed in</span>
-                    </label>
-                    <label class="option-label">
-                        <input type="checkbox" name="rememberIp" value="true" checked />
-                        <span>Remember this IP</span>
-                    </label>
+                    <label class="option-label"><input type="checkbox" name="keepSignedIn" value="true" checked /><span>Keep me signed in</span></label>
                 </div>
-
-                <button type="submit" class="login-submit">Verify</button>
+                <button type="submit" class="login-submit">Sign in</button>
             </form>
+            <a href="/login?signup=1" style="display:block;text-align:center;margin-top:14px;color:#46c1a7;font-size:0.85rem;text-decoration:none;">Create an account</a>
         </div>
     </div>
 }
@@ -366,40 +343,24 @@ else
 </style>
 
 @code {
-    [SupplyParameterFromForm(Name = "code")]
-    public string? Code { get; set; }
+    [SupplyParameterFromForm(Name = "action")] public string? ActionForm { get; set; }
+    [SupplyParameterFromForm(Name = "username")] public string? UsernameForm { get; set; }
+    [SupplyParameterFromForm(Name = "password")] public string? PasswordForm { get; set; }
+    [SupplyParameterFromForm(Name = "confirmPassword")] public string? ConfirmPasswordForm { get; set; }
+    [SupplyParameterFromForm(Name = "registrationCode")] public string? RegistrationCodeForm { get; set; }
+    [SupplyParameterFromForm(Name = "keepSignedIn")] public bool KeepSignedInForm { get; set; }
+    [SupplyParameterFromQuery(Name = "signup")] public string? SignupQuery { get; set; }
 
-    [SupplyParameterFromForm(Name = "password")]
-    public string? PasswordForm { get; set; }
-
-    [SupplyParameterFromForm(Name = "newPassword")]
-    public string? NewPasswordForm { get; set; }
-
-    [SupplyParameterFromForm(Name = "confirmPassword")]
-    public string? ConfirmPasswordForm { get; set; }
-
-    [SupplyParameterFromForm(Name = "keepSignedIn")]
-    public bool KeepSignedInForm { get; set; }
-
-    [SupplyParameterFromForm(Name = "rememberIp")]
-    public bool RememberIpForm { get; set; }
-
-    [SupplyParameterFromForm(Name = "pendingSecret")]
-    public string? PendingSecretForm { get; set; }
-
-    [SupplyParameterFromForm(Name = "onboarding")]
-    public bool OnboardingForm { get; set; }
-
-    private string? _pendingSecret;
-    private string _qrSvg = "";
-    private bool _onboarding;
+    // "owner" (first-run owner signup) | "signup" (registration-code signup) | "login"
+    private string _formMode = "login";
     private string? _error;
 
     protected override async Task OnInitializedAsync()
     {
         var httpContext = HttpContextAccessor.HttpContext!;
 
-        if (httpContext.User.Identity?.IsAuthenticated == true && !httpContext.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+        if (httpContext.User.Identity?.IsAuthenticated == true
+            && !httpContext.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
         {
             httpContext.Response.Redirect("/");
             return;
@@ -411,141 +372,72 @@ else
             return;
         }
 
-        if (await TryAutoLoginAsync(httpContext))
-            return;
-
-        _onboarding = !TwoFactorAuth.IsConfigured;
-
-        if (_onboarding)
-        {
-            _pendingSecret = TwoFactorAuth.GenerateNewSecret();
-            var url = TwoFactorAuth.GetOtpAuthUrl(_pendingSecret);
-            _qrSvg = TwoFactorAuth.GenerateQrSvg(url);
-        }
-    }
-
-    private void ShowOnboarding(string pendingSecret, string error)
-    {
-        _error = error;
-        _pendingSecret = pendingSecret;
-        var url = TwoFactorAuth.GetOtpAuthUrl(_pendingSecret);
-        _qrSvg = TwoFactorAuth.GenerateQrSvg(url);
-        _onboarding = true;
-    }
-
-    private async Task<bool> TryAutoLoginAsync(HttpContext httpContext)
-    {
-        var clientIp = GetClientIp(httpContext);
-        var trustedIpHash = httpContext.Request.Cookies["AC_Defender_TrustedIP"];
-
-        if (!string.IsNullOrWhiteSpace(trustedIpHash) && !string.IsNullOrWhiteSpace(clientIp))
-        {
-            var currentHash = HashIp(clientIp);
-            if (string.Equals(currentHash, trustedIpHash, StringComparison.Ordinal))
-            {
-                await SignInAsync(httpContext, persistent: true);
-                httpContext.Response.Redirect("/");
-                return true;
-            }
-        }
-
-        return false;
+        _formMode = !TwoFactorAuth.HasAnyAccount
+            ? "owner"
+            : (string.Equals(SignupQuery, "1", StringComparison.Ordinal) ? "signup" : "login");
     }
 
     private async Task HandlePostAsync(HttpContext httpContext)
     {
-        var code = Code?.Trim() ?? "";
+        var action = (ActionForm ?? "login").Trim().ToLowerInvariant();
+        var username = UsernameForm?.Trim() ?? "";
+        var password = PasswordForm ?? "";
+        var confirm = ConfirmPasswordForm ?? "";
 
-        if (OnboardingForm)
+        // Keep the rendered form matching the submitted form name (Blazor SSR re-renders after the
+        // handler and 400s if the submitted form no longer exists); the redirect below then wins.
+        if (action is "ownersignup")
         {
-            var pendingSecret = PendingSecretForm?.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(pendingSecret))
+            _formMode = "owner";
+            if (TwoFactorAuth.HasAnyAccount)
             {
-                _error = "Session expired. Please reload the page.";
+                _error = "An owner account already exists — please sign in.";
                 return;
             }
-
-            if (!TwoFactorAuth.ValidateCode(pendingSecret, code))
+            if (!string.Equals(password, confirm, StringComparison.Ordinal))
             {
-                ShowOnboarding(pendingSecret, "Incorrect verification code. Please try again.");
+                _error = "Passwords do not match.";
                 return;
             }
-
-            // Password is optional during onboarding (2FA still works on its own).
-            var newPassword = NewPasswordForm ?? "";
-            var confirmPassword = ConfirmPasswordForm ?? "";
-            var wantsPassword = !string.IsNullOrEmpty(newPassword) || !string.IsNullOrEmpty(confirmPassword);
-            if (wantsPassword)
+            if (!TwoFactorAuth.TryCreateAccount(username, password, null, out var ownerError))
             {
-                if (newPassword.Length < 6)
-                {
-                    ShowOnboarding(pendingSecret, "Password must be at least 6 characters.");
-                    return;
-                }
-                if (!string.Equals(newPassword, confirmPassword, StringComparison.Ordinal))
-                {
-                    ShowOnboarding(pendingSecret, "Passwords do not match.");
-                    return;
-                }
+                _error = ownerError;
+                return;
             }
-
-            TwoFactorAuth.SaveSecret(pendingSecret);
-            if (wantsPassword)
-                TwoFactorAuth.SetPassword(newPassword);
-
-            // Blazor SSR re-renders this component after the form handler and requires the
-            // submitted form ("onboarding") to still be present, or it replaces the redirect
-            // with a 400. Keep it rendered; the redirect below wins and the body is discarded.
-            _onboarding = true;
+        }
+        else if (action is "signup")
+        {
+            _formMode = "signup";
+            if (!string.Equals(password, confirm, StringComparison.Ordinal))
+            {
+                _error = "Passwords do not match.";
+                return;
+            }
+            if (!TwoFactorAuth.TryCreateAccount(username, password, RegistrationCodeForm, out var signupError))
+            {
+                _error = signupError;
+                return;
+            }
         }
         else
         {
-            if (!TwoFactorAuth.IsConfigured && !TwoFactorAuth.IsPasswordEnabled)
+            _formMode = "login";
+            if (!TwoFactorAuth.ValidateAccount(username, password))
             {
-                _error = "Login is not configured. Please reload the page.";
-                return;
-            }
-
-            var passwordOk = TwoFactorAuth.IsPasswordEnabled && TwoFactorAuth.ValidatePassword(PasswordForm);
-            var codeOk = TwoFactorAuth.IsConfigured
-                         && !string.IsNullOrWhiteSpace(code)
-                         && TwoFactorAuth.ValidateCurrentCode(code);
-
-            if (!passwordOk && !codeOk)
-            {
-                _error = TwoFactorAuth.IsPasswordEnabled
-                    ? "Incorrect code or password. Please try again."
-                    : "Incorrect code. Please try again.";
+                _error = "Incorrect username or password.";
                 return;
             }
         }
 
-        var keepSignedIn = KeepSignedInForm;
-        var rememberIp = RememberIpForm;
-
-        var clientIp = GetClientIp(httpContext);
-        if (rememberIp && !string.IsNullOrWhiteSpace(clientIp))
-        {
-            httpContext.Response.Cookies.Append("AC_Defender_TrustedIP", HashIp(clientIp), new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = false,
-                SameSite = SameSiteMode.Lax,
-                Expires = DateTimeOffset.UtcNow.AddDays(365),
-                Path = "/"
-            });
-        }
-
-        await SignInAsync(httpContext, keepSignedIn);
+        await SignInAsync(httpContext, username, KeepSignedInForm);
         httpContext.Response.Redirect("/");
     }
 
-    private async Task SignInAsync(HttpContext httpContext, bool persistent)
+    private static async Task SignInAsync(HttpContext httpContext, string username, bool persistent)
     {
         var claims = new List<Claim>
         {
-            new(ClaimTypes.Name, "guard"),
-            new(ClaimTypes.Role, "admin"),
+            new(ClaimTypes.Name, username),
             new("auth_time", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString())
         };
 
@@ -561,22 +453,5 @@ else
                 ExpiresUtc = persistent ? DateTimeOffset.UtcNow.AddDays(30) : null,
                 AllowRefresh = true
             });
-    }
-
-    private static string GetClientIp(HttpContext httpContext)
-    {
-        var forwarded = httpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(forwarded))
-        {
-            return forwarded.Split(',')[0].Trim();
-        }
-
-        return httpContext.Connection.RemoteIpAddress?.ToString() ?? "";
-    }
-
-    private static string HashIp(string ip)
-    {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(ip));
-        return Convert.ToBase64String(hash);
     }
 }

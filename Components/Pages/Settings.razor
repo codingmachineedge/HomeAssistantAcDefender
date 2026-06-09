@@ -20,31 +20,30 @@
         </ChildContent>
     </SectionCard>
 
-    @* ───────────── Security ───────────── *@
-    <SectionCard Title="Security" Help="Password login works alongside the authenticator app — either the 6-digit code or this password signs you in. Leave it off to require the code only.">
+    @* ───────────── Accounts ───────────── *@
+    <SectionCard Title="Accounts" Help="Login is account-based: the first sign-up becomes the owner, and everyone else needs the registration code you set here.">
         <MudGrid Spacing="2">
-            <SettingSwitch Label="Enable password login" Value="_passwordEnabled" ValueChanged="@(v => _passwordEnabled = v)"
-                           Help="Allow signing in with a password as an alternative to the authenticator code." />
             <MudItem xs="12">
-                <MudAlert Severity="@(TwoFactorAuth.HasPassword ? Severity.Success : Severity.Info)" Variant="Variant.Outlined" Dense="true">
-                    @(TwoFactorAuth.HasPassword
-                        ? "A password is currently set. Enter a new one below to change it."
-                        : "No password is set yet. Enter one below, then save, to enable password login.")
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                    @TwoFactorAuth.AccountCount account(s)@(TwoFactorAuth.AccountCount > 0 ? $": {string.Join(", ", TwoFactorAuth.AccountUsernames)}" : "")
                 </MudAlert>
             </MudItem>
-            <MudItem xs="12" sm="6">
-                <MudTextField @bind-Value="_newPassword" Label="New password" InputType="InputType.Password"
-                              Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" Placeholder="At least 6 characters" />
+            <MudItem xs="12">
+                <MudAlert Severity="@(TwoFactorAuth.HasRegistrationCode ? Severity.Success : Severity.Warning)" Variant="Variant.Outlined" Dense="true">
+                    @(TwoFactorAuth.HasRegistrationCode
+                        ? "A registration code is set — share it with people you want to let sign up."
+                        : "No registration code set, so additional sign-ups are closed. Set one below to let others register.")
+                </MudAlert>
             </MudItem>
-            <MudItem xs="12" sm="6">
-                <MudTextField @bind-Value="_confirmPassword" Label="Confirm password" InputType="InputType.Password"
-                              Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" />
+            <MudItem xs="12" sm="8">
+                <MudTextField @bind-Value="_registrationCode" Label="Registration code" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" Immediate="true" Placeholder="A code you give to people you want to allow" />
             </MudItem>
             <MudItem xs="12" Class="d-flex flex-wrap gap-2">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SavePassword" StartIcon="@Icons.Material.Filled.Lock">Save password settings</MudButton>
-                @if (TwoFactorAuth.HasPassword)
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveRegistrationCode" StartIcon="@Icons.Material.Filled.Key">Save registration code</MudButton>
+                @if (TwoFactorAuth.HasRegistrationCode)
                 {
-                    <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="RemovePassword" StartIcon="@Icons.Material.Filled.LockOpen">Remove password</MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="CloseSignups" StartIcon="@Icons.Material.Filled.Block">Close sign-ups</MudButton>
                 }
             </MudItem>
         </MudGrid>
@@ -649,9 +648,7 @@
     private static readonly TimeZoneInfo TorontoTimeZone = ResolveTorontoTimeZone();
 
     private string _settingsSearch = "";
-    private bool _passwordEnabled;
-    private string _newPassword = "";
-    private string _confirmPassword = "";
+    private string _registrationCode = "";
     private bool _scheduleEnabled;
     private string _weatherActivationMode = "always";
     private int _baseCooldownSeconds = 45;
@@ -889,53 +886,26 @@
     protected override void OnInitialized()
     {
         LoadFromSnapshot(StateStore.GetSnapshot());
-        _passwordEnabled = TwoFactorAuth.IsPasswordEnabled;
     }
 
-    private void SavePassword()
+    private void SaveRegistrationCode()
     {
-        var hasNew = !string.IsNullOrEmpty(_newPassword) || !string.IsNullOrEmpty(_confirmPassword);
-
-        if (hasNew)
+        if (string.IsNullOrWhiteSpace(_registrationCode) || _registrationCode.Trim().Length < 4)
         {
-            if (_newPassword.Length < 6)
-            {
-                Snackbar.Add("Password must be at least 6 characters.", Severity.Error);
-                return;
-            }
-            if (!string.Equals(_newPassword, _confirmPassword, StringComparison.Ordinal))
-            {
-                Snackbar.Add("Passwords do not match.", Severity.Error);
-                return;
-            }
-
-            TwoFactorAuth.SetPassword(_newPassword);
-            _newPassword = "";
-            _confirmPassword = "";
-            _passwordEnabled = true;
-            Snackbar.Add("Password saved. Password login is enabled.", Severity.Success);
+            Snackbar.Add("Enter a registration code of at least 4 characters.", Severity.Error);
             return;
         }
 
-        // No new password entered — just toggling enable/disable on the existing one.
-        if (_passwordEnabled && !TwoFactorAuth.HasPassword)
-        {
-            Snackbar.Add("Set a password before enabling password login.", Severity.Warning);
-            _passwordEnabled = false;
-            return;
-        }
-
-        TwoFactorAuth.SetPasswordEnabled(_passwordEnabled);
-        Snackbar.Add(_passwordEnabled ? "Password login enabled." : "Password login disabled.", Severity.Success);
+        TwoFactorAuth.SetRegistrationCode(_registrationCode.Trim());
+        _registrationCode = "";
+        Snackbar.Add("Registration code saved. Share it with people you want to let sign up.", Severity.Success);
     }
 
-    private void RemovePassword()
+    private void CloseSignups()
     {
-        TwoFactorAuth.ClearPassword();
-        _passwordEnabled = false;
-        _newPassword = "";
-        _confirmPassword = "";
-        Snackbar.Add("Password removed. Login now requires the authenticator code.", Severity.Success);
+        TwoFactorAuth.SetRegistrationCode(null);
+        _registrationCode = "";
+        Snackbar.Add("Sign-ups closed. Only existing accounts can sign in.", Severity.Success);
     }
 
     private void LoadFromSnapshot(DefenderSnapshot snapshot)
