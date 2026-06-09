@@ -469,6 +469,22 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>True when the ML models should be retrained from already-accumulated data (no network).
+    /// Runs shortly after startup and about hourly, independent of the slower history fetch, so the
+    /// trained models populate promptly instead of waiting for the next 6 h history run.</summary>
+    public bool ShouldTrainModels(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (!state.Settings.HistoryLearningEnabled && !state.Settings.AngerLearningEnabled)
+            {
+                return false;
+            }
+
+            return state.LearningModel.TrainedAt is not { } last || now - last >= TimeSpan.FromHours(1);
+        }
+    }
+
     public bool ShouldRefreshPeakPowerSaver(DateTimeOffset now)
     {
         lock (gate)

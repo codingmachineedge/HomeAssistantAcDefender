@@ -340,19 +340,23 @@ public sealed class AcDefenderService
     private async Task RefreshLearningIfDueAsync(CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
-        if (!stateStore.ShouldRunHistoryLearning(now))
+        if (stateStore.ShouldRunHistoryLearning(now))
         {
-            return;
+            stateStore.ScheduleNextHistoryLearning(now);
+            try
+            {
+                await LearnFromHistoryAsync(cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Automatic thermostat-history learning failed");
+            }
         }
-
-        stateStore.ScheduleNextHistoryLearning(now);
-        try
+        else if (stateStore.ShouldTrainModels(now))
         {
-            await LearnFromHistoryAsync(cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(ex, "Automatic thermostat-history learning failed");
+            // Retrain the ML models from already-accumulated data without a fresh history fetch, so the
+            // trained models stay current (and populate promptly after a restart) between history runs.
+            stateStore.TrainLearningModels(now);
         }
     }
 
