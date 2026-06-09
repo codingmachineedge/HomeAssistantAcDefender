@@ -156,14 +156,25 @@
         }
     </SectionCard>
 
-    <SectionCard Title="Learning" Help="The defender learns from the someone-upset button and from your real Home Assistant thermostat history.">
+    <SectionCard Title="Learning" Help="A machine-learning trainer learns automatically from the someone-upset button and your real Home Assistant thermostat history (retrains in the background; no action needed).">
         <MudStack Spacing="2">
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LearnFromHistory" Disabled="_learningHistory" StartIcon="@Icons.Material.Filled.History">
-                @(_learningHistory ? "Learning from history…" : "Learn from thermostat history")
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="LearnFromHistory" Disabled="_learningHistory" StartIcon="@Icons.Material.Filled.ModelTraining">
+                @(_learningHistory ? "Retraining…" : "Retrain from history now")
             </MudButton>
             @if (Snapshot is { } learnSnapshot)
             {
                 <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">@learnSnapshot.HistoryLearning.Status</MudAlert>
+                @if (learnSnapshot.LearningModel is { } ml)
+                {
+                    <MudAlert Severity="@(ml.AngerModelTrained || ml.ComfortModelTrained ? Severity.Success : Severity.Normal)" Variant="Variant.Outlined" Dense="true">
+                        ML trainer — anger model: @(ml.AngerModelTrained ? $"trained ({ml.AngerPositiveSamples} upset / {ml.AngerNegativeSamples} benign, log-loss {ml.AngerLogLoss:0.00})" : "gathering data");
+                        comfort model: @(ml.ComfortModelTrained ? $"trained ({ml.ComfortSamples} samples, RMSE {ml.ComfortRmse:0.0} C)" : "gathering data").
+                        @if (ml.TrainedAt is { } trainedAt)
+                        {
+                            <text> Last trained @trainedAt.ToLocalTime().ToString("MMM d HH:mm").</text>
+                        }
+                    </MudAlert>
+                }
                 <MudAlert Severity="@(learnSnapshot.AngerLearning.CurrentHourSensitivity > 0 ? Severity.Warning : Severity.Normal)" Variant="Variant.Outlined" Dense="true">
                     Anger learning: @learnSnapshot.AngerLearning.EventCount upset press(es) recorded.
                     @if (learnSnapshot.AngerLearning.CurrentHourSensitivity > 0)

@@ -35,6 +35,7 @@ public sealed record DefenderSnapshot(
     ComfortMemorySnapshot ComfortMemory,
     AngerLearningSnapshot AngerLearning,
     HistoryLearningSnapshot HistoryLearning,
+    LearningModelSnapshot LearningModel,
     ConflictQuietSnapshot ConflictQuiet,
     TugOfWarTruceSnapshot TugOfWarTruce,
     WallSettlingSnapshot WallSettling,
@@ -319,6 +320,31 @@ public sealed record ClimateHistorySample(
     string? HvacMode,
     string? HvacAction,
     string? ContextUserId);
+
+/// <summary>Persisted weights of the online ML models trained by <c>LearningTrainer</c>.</summary>
+public sealed class LearningModelState
+{
+    public double[] AngerWeights { get; set; } = [];
+    public double AngerBias { get; set; }
+    public double[] ComfortWeights { get; set; } = [];
+    public double ComfortBias { get; set; }
+    public int AngerPositiveSamples { get; set; }
+    public int AngerNegativeSamples { get; set; }
+    public int ComfortSamples { get; set; }
+    public double AngerLogLoss { get; set; }
+    public double ComfortRmse { get; set; }
+    public DateTimeOffset? TrainedAt { get; set; }
+}
+
+public sealed record LearningModelSnapshot(
+    bool AngerModelTrained,
+    bool ComfortModelTrained,
+    int AngerPositiveSamples,
+    int AngerNegativeSamples,
+    int ComfortSamples,
+    double AngerLogLoss,
+    double ComfortRmse,
+    DateTimeOffset? TrainedAt);
 
 public sealed record ConflictQuietSnapshot(
     bool Enabled,

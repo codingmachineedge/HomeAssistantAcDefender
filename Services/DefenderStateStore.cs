@@ -33,6 +33,7 @@ public sealed class DefenderStateStore
     private const double OmegaMinimumRiseCelsius = 0.4;
 
     private readonly object gate = new();
+    private readonly LearningTrainer learningTrainer = new();
     private readonly DefenderOptions options;
     private readonly ILogger<DefenderStateStore> logger;
     private readonly string stateFilePath;
@@ -755,6 +756,7 @@ public sealed class DefenderStateStore
             TrackHvacActionAlibiTransition(reading, previousHvacAction, now);
             TrackCoolingRunway(reading, previousHvacAction, now);
             UpdateCoolingFailureDetection(reading, now);
+            RecordBenignContextSampleIfDue(reading, now);
             state.LastObservedSetPointCelsius = reading.SetPointCelsius;
             if (string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
             {
@@ -4588,6 +4590,9 @@ public sealed class DefenderStateStore
         slot.Samples = Math.Min(24, slot.Samples + 1);
         slot.UpdatedAt = now;
         state.ComfortMemoryStatus = $"Comfort memory learned {slot.OffsetCelsius:+0.0;-0.0;0.0} C for this time window from {slot.Samples} wall choices.";
+
+        // Feed the live human wall choice to the comfort regressor's training set.
+        RecordComfortTrainingSample(now, reading.SetPointCelsius);
     }
 
     // ───────────────────────── Anger learning ─────────────────────────
@@ -4629,6 +4634,9 @@ public sealed class DefenderStateStore
         BumpAngerSlot((hour + 23) % 24, 0.4, now);
         BumpAngerSlot((hour + 1) % 24, 0.4, now);
         PruneAngerMemory(now);
+
+        // Retrain immediately so the new upset example shapes behaviour right away.
+        TrainLearningModelsLocked(now);
 
         var sensitivity = CalculateAngerSensitivity(now);
         state.AngerLearningStatus =
@@ -4674,6 +4682,23 @@ public sealed class DefenderStateStore
         }
 
         var hour = now.ToLocalTime().Hour;
+
+        // Prefer the trained ML classifier (P(upset | current context)) once it has both upset and benign
+        // examples. Until then, fall back to the per-hour exponential-moving-average sensitivity.
+        var model = state.LearningModel;
+        if (model.AngerPositiveSamples > 0 && model.AngerNegativeSamples > 0)
+        {
+            var thermostat = state.HomeAssistantThermostat;
+            var room = thermostat?.CurrentTemperatureCelsius ?? state.TargetTemperatureCelsius;
+            var setPoint = thermostat?.SetPointCelsius ?? state.TargetTemperatureCelsius;
+            var features = LearningTrainer.AngerFeatures(
+                hour,
+                room - setPoint,
+                state.ExternalTouchTimes.Count,
+                room - state.TargetTemperatureCelsius);
+            return Math.Clamp(learningTrainer.PredictAngerProbability(model, features), 0, 1);
+        }
+
         var slot = state.AngerMemorySlots.FirstOrDefault(item => item.HourOfDay == hour);
         if (slot is null)
         {
@@ -4806,47 +4831,180 @@ public sealed class DefenderStateStore
             state.HistoryComfortSlots = learned;
             state.HistoryLearnedAt = now;
 
-            // Bootstrap Comfort Memory from the learned profile for hours it has not already learned live,
-            // so the existing comfort-target path immediately benefits without clobbering live learning.
-            var seeded = 0;
-            if (state.Settings.ComfortMemoryEnabled)
-            {
-                var maxOffset = Math.Max(0.1, state.Settings.ComfortMemoryMaxOffsetCelsius);
-                foreach (var slot in learned)
-                {
-                    if (state.ComfortMemorySlots.Any(existing => existing.HourOfDay == slot.HourOfDay))
-                    {
-                        continue;
-                    }
-
-                    var offset = Math.Round(Math.Clamp(slot.PreferredSetPointCelsius - state.TargetTemperatureCelsius, -maxOffset, maxOffset), 1);
-                    if (Math.Abs(offset) <= 0.05)
-                    {
-                        continue;
-                    }
-
-                    state.ComfortMemorySlots.Add(new ComfortMemorySlot
-                    {
-                        HourOfDay = slot.HourOfDay,
-                        OffsetCelsius = offset,
-                        Samples = 1,
-                        UpdatedAt = now
-                    });
-                    seeded++;
-                }
-            }
-
             var cadence = state.HistoryMedianTouchIntervalMinutes is { } median
                 ? $", typical touch every {median:0} min"
                 : string.Empty;
             state.HistoryLearningStatus = learned.Count > 0
-                ? $"Learned a comfort profile for {learned.Count} hour(s) from {ordered.Count} history points ({seeded} seeded into comfort memory){cadence}."
+                ? $"Learned a comfort profile for {learned.Count} hour(s) from {ordered.Count} history points{cadence}."
                 : $"Scanned {ordered.Count} history points but found no clear human comfort pattern yet{cadence}.";
 
             AddEvent("info", state.HistoryLearningStatus);
+
+            // Retrain the ML models on the refreshed data; the trained comfort model (not raw medians)
+            // is what seeds Comfort Memory, so sparse hours are smoothed over the daily curve.
+            TrainLearningModelsLocked(now);
+
             SaveState();
             return BuildHistoryLearningSnapshot(now);
         }
+    }
+
+    /// <summary>Public entry point to retrain the ML models from the accumulated real samples.</summary>
+    public LearningModelSnapshot TrainLearningModels(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            var snapshot = TrainLearningModelsLocked(now);
+            SaveState();
+            return snapshot;
+        }
+    }
+
+    private LearningModelSnapshot TrainLearningModelsLocked(DateTimeOffset now)
+    {
+        PruneAngerMemory(now);
+        PruneLearningSamples(now);
+
+        // Anger dataset: someone-upset events are positives, benign downsampled contexts are negatives.
+        var angerSamples = new List<(double[] Features, int Label)>();
+        foreach (var anger in state.AngerEvents)
+        {
+            angerSamples.Add((
+                LearningTrainer.AngerFeatures(anger.HourOfDay, anger.DefenderPushCelsius, anger.RecentTouchCount, anger.RoomTemperatureCelsius - anger.TargetCelsius),
+                1));
+        }
+
+        foreach (var benign in state.BenignContextSamples)
+        {
+            angerSamples.Add((
+                LearningTrainer.AngerFeatures(benign.HourOfDay, benign.DefenderPushCelsius, benign.RecentTouchCount, benign.RoomAboveTargetCelsius),
+                0));
+        }
+
+        // Comfort dataset: the per-hour history medians plus the live human wall choices.
+        var comfortSamples = new List<(double[] Features, double Target)>();
+        foreach (var slot in state.HistoryComfortSlots)
+        {
+            comfortSamples.Add((LearningTrainer.ComfortFeatures(slot.HourOfDay), slot.PreferredSetPointCelsius));
+        }
+
+        foreach (var sample in state.ComfortTrainingSamples)
+        {
+            comfortSamples.Add((LearningTrainer.ComfortFeatures(sample.HourOfDay), sample.PreferredSetPointCelsius));
+        }
+
+        state.LearningModel = learningTrainer.Train(angerSamples, comfortSamples, state.LearningModel);
+        state.LearningModel.TrainedAt = now;
+
+        SeedComfortMemoryFromModel(now);
+        return BuildLearningModelSnapshot();
+    }
+
+    /// <summary>Seeds Comfort Memory from the trained comfort model for hours that have no live slot, so
+    /// the learned daily curve biases the target through the existing safety-bounded comfort path.</summary>
+    private void SeedComfortMemoryFromModel(DateTimeOffset now)
+    {
+        if (!state.Settings.ComfortMemoryEnabled || state.LearningModel.ComfortSamples < 4)
+        {
+            return;
+        }
+
+        var maxOffset = Math.Max(0.1, state.Settings.ComfortMemoryMaxOffsetCelsius);
+        for (var hour = 0; hour < 24; hour++)
+        {
+            if (state.ComfortMemorySlots.Any(existing => existing.HourOfDay == hour))
+            {
+                continue;
+            }
+
+            var predicted = learningTrainer.PredictPreferredSetPoint(state.LearningModel, LearningTrainer.ComfortFeatures(hour));
+            if (predicted is not { } preferred)
+            {
+                continue;
+            }
+
+            var offset = Math.Round(Math.Clamp(preferred - state.TargetTemperatureCelsius, -maxOffset, maxOffset), 1);
+            if (Math.Abs(offset) <= 0.05)
+            {
+                continue;
+            }
+
+            state.ComfortMemorySlots.Add(new ComfortMemorySlot
+            {
+                HourOfDay = hour,
+                OffsetCelsius = offset,
+                Samples = 1,
+                UpdatedAt = now
+            });
+        }
+    }
+
+    private void PruneLearningSamples(DateTimeOffset now)
+    {
+        var retention = TimeSpan.FromDays(Math.Max(1, state.Settings.AngerMemoryRetentionDays));
+        state.BenignContextSamples.RemoveAll(item => now - item.At > retention);
+        if (state.BenignContextSamples.Count > 800)
+        {
+            state.BenignContextSamples.RemoveRange(0, state.BenignContextSamples.Count - 800);
+        }
+
+        var comfortRetention = TimeSpan.FromDays(Math.Max(state.Settings.HistoryLearningDays, 30));
+        state.ComfortTrainingSamples.RemoveAll(item => now - item.At > comfortRetention);
+        if (state.ComfortTrainingSamples.Count > 800)
+        {
+            state.ComfortTrainingSamples.RemoveRange(0, state.ComfortTrainingSamples.Count - 800);
+        }
+    }
+
+    private void RecordBenignContextSampleIfDue(ThermostatReading reading, DateTimeOffset now)
+    {
+        // Negatives for the anger classifier: ordinary operating contexts, downsampled to ~10 min and
+        // skipped while an emergency/quiet window is active (that context is not "benign").
+        if (state.EmergencyQuietUntil is { } until && until > now)
+        {
+            return;
+        }
+
+        if (state.LastBenignSampleAt is { } last && now - last < TimeSpan.FromMinutes(10))
+        {
+            return;
+        }
+
+        state.LastBenignSampleAt = now;
+        state.BenignContextSamples.Add(new BenignContextSample
+        {
+            At = now,
+            HourOfDay = now.ToLocalTime().Hour,
+            DefenderPushCelsius = Math.Round(reading.CurrentTemperatureCelsius - reading.SetPointCelsius, 2),
+            RecentTouchCount = state.ExternalTouchTimes.Count,
+            RoomAboveTargetCelsius = Math.Round(reading.CurrentTemperatureCelsius - state.TargetTemperatureCelsius, 2)
+        });
+        PruneLearningSamples(now);
+    }
+
+    private void RecordComfortTrainingSample(DateTimeOffset now, double setPointCelsius)
+    {
+        state.ComfortTrainingSamples.Add(new ComfortTrainingSample
+        {
+            At = now,
+            HourOfDay = now.ToLocalTime().Hour,
+            PreferredSetPointCelsius = Math.Round(setPointCelsius, 2)
+        });
+        PruneLearningSamples(now);
+    }
+
+    private LearningModelSnapshot BuildLearningModelSnapshot()
+    {
+        var model = state.LearningModel;
+        return new LearningModelSnapshot(
+            model.AngerPositiveSamples > 0 && model.AngerNegativeSamples > 0,
+            model.ComfortSamples >= 4,
+            model.AngerPositiveSamples,
+            model.AngerNegativeSamples,
+            model.ComfortSamples,
+            model.AngerLogLoss,
+            model.ComfortRmse,
+            model.TrainedAt);
     }
 
     private HistoryLearningSnapshot BuildHistoryLearningSnapshot(DateTimeOffset now)
@@ -6214,6 +6372,9 @@ public sealed class DefenderStateStore
         saved.AngerMemorySlots ??= [];
         saved.AngerEvents ??= [];
         saved.HistoryComfortSlots ??= [];
+        saved.BenignContextSamples ??= [];
+        saved.ComfortTrainingSamples ??= [];
+        saved.LearningModel ??= new LearningModelState();
         saved.DefenderCommandTimes ??= [];
         saved.VisibilityNoticeTimes ??= [];
         saved.RemoteChangeTimes ??= [];
@@ -7046,6 +7207,7 @@ public sealed class DefenderStateStore
                     ? "Anger learning is ready; press someone-upset to teach it."
                     : state.AngerLearningStatus),
             BuildHistoryLearningSnapshot(now),
+            BuildLearningModelSnapshot(),
             new ConflictQuietSnapshot(
                 state.Settings.ConflictQuietModeEnabled,
                 conflictQuietSeconds > 0,
@@ -8249,6 +8411,17 @@ public sealed class DefenderStateStore
 
         public DateTimeOffset? HistoryLearningNextRunAt { get; set; }
 
+        // Machine-learning trainer state: persisted model weights plus the training samples it learns
+        // from (someone-upset events are positives, benign downsampled contexts are negatives, and the
+        // human comfort choices feed the setpoint regressor).
+        public LearningModelState LearningModel { get; set; } = new();
+
+        public List<BenignContextSample> BenignContextSamples { get; set; } = [];
+
+        public List<ComfortTrainingSample> ComfortTrainingSamples { get; set; } = [];
+
+        public DateTimeOffset? LastBenignSampleAt { get; set; }
+
         public string HistoryLearningStatus { get; set; } = "Thermostat-history learning has not run yet.";
 
         public DateTimeOffset? CoolModeRestoreDueAt { get; set; }
@@ -8577,6 +8750,28 @@ public sealed class DefenderStateStore
         public double PreferredSetPointCelsius { get; set; }
 
         public int Samples { get; set; }
+    }
+
+    private sealed class BenignContextSample
+    {
+        public DateTimeOffset At { get; set; }
+
+        public int HourOfDay { get; set; }
+
+        public double DefenderPushCelsius { get; set; }
+
+        public int RecentTouchCount { get; set; }
+
+        public double RoomAboveTargetCelsius { get; set; }
+    }
+
+    private sealed class ComfortTrainingSample
+    {
+        public DateTimeOffset At { get; set; }
+
+        public int HourOfDay { get; set; }
+
+        public double PreferredSetPointCelsius { get; set; }
     }
 
     private sealed class ThermostatRuntimeState

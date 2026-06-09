@@ -30,6 +30,7 @@ tests.CoolingFailureMegaWhenFarAboveTargetEvenIfRoomDrifsDown();
 tests.CoolingFailureMegaWhenCoolingActionButRoomNotDropping();
 tests.AngerButtonLearnsUpsetAndRaisesThisHourSensitivity();
 tests.HistoryLearningBuildsHumanComfortProfileAndCadence();
+tests.MachineLearningTrainerLearnsAngerAndComfortPatterns();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
@@ -1132,14 +1133,51 @@ internal sealed class DefenderSetPointRegressionTests
             throw new InvalidOperationException("History learning should compute a human touch cadence.");
         }
 
-        // The learned hour profile must come from the HUMAN setpoints (20.0, 20.5), not the defender's 23.0.
-        var learnedHour = hourStart.ToLocalTime().Hour;
-        var snapshot = store.GetSnapshot();
-        if (snapshot.ComfortMemory.SampleCount == 0 && snapshot.ComfortMemory.LearnedOffsetCelsius is null)
+        // The learned profile must come from the HUMAN setpoints (~20 C), not the defender's 23.5 command.
+        if (result.CurrentHourPreferredSetPointCelsius is not { } preferred || preferred > 21.0)
         {
-            // Comfort memory should have been seeded from the learned profile for an hour with no live data.
-            // (Seeding only happens when ComfortMemoryEnabled — true by default.)
-            throw new InvalidOperationException("Learned history profile should seed comfort memory for unlearned hours.");
+            throw new InvalidOperationException($"Learned preferred setpoint should reflect the human ~20 C choices, got {result.CurrentHourPreferredSetPointCelsius}.");
+        }
+    }
+
+    public void MachineLearningTrainerLearnsAngerAndComfortPatterns()
+    {
+        var trainer = new LearningTrainer();
+
+        // Anger classifier: late-evening + hard defender push = upset; daytime + gentle = benign.
+        var angerSamples = new List<(double[] Features, int Label)>();
+        for (var i = 0; i < 8; i++)
+        {
+            angerSamples.Add((LearningTrainer.AngerFeatures(23, 2.5, 4, 1.5), 1)); // 23:00, pushing hard
+            angerSamples.Add((LearningTrainer.AngerFeatures(13, 0.4, 0, 0.2), 0)); // 13:00, gentle
+        }
+
+        // Comfort regressor: people like it cooler at night (20 C) and warmer midday (23 C).
+        var comfortSamples = new List<(double[] Features, double Target)>();
+        for (var i = 0; i < 6; i++)
+        {
+            comfortSamples.Add((LearningTrainer.ComfortFeatures(2), 20.0));
+            comfortSamples.Add((LearningTrainer.ComfortFeatures(14), 23.0));
+        }
+
+        var model = trainer.Train(angerSamples, comfortSamples, null);
+
+        var upset = trainer.PredictAngerProbability(model, LearningTrainer.AngerFeatures(23, 2.5, 4, 1.5));
+        var calm = trainer.PredictAngerProbability(model, LearningTrainer.AngerFeatures(13, 0.4, 0, 0.2));
+        if (upset <= 0.5 || calm >= 0.5 || upset <= calm)
+        {
+            throw new InvalidOperationException($"Anger model should separate upset ({upset:0.00}) from benign ({calm:0.00}) contexts.");
+        }
+
+        var night = trainer.PredictPreferredSetPoint(model, LearningTrainer.ComfortFeatures(2));
+        var midday = trainer.PredictPreferredSetPoint(model, LearningTrainer.ComfortFeatures(14));
+        if (night is not { } n || midday is not { } m)
+        {
+            throw new InvalidOperationException("Comfort model should predict a setpoint once trained.");
+        }
+        if (Math.Abs(n - 20.0) > 1.0 || Math.Abs(m - 23.0) > 1.0 || n >= m)
+        {
+            throw new InvalidOperationException($"Comfort model should fit ~20 C at night and ~23 C midday, got {n:0.0}/{m:0.0}.");
         }
     }
 
