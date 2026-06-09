@@ -30,4 +30,19 @@ public sealed class DefenderOptions
     /// just under the room so the cooling is far less noticeable to other people than a full 1 C gap.
     /// </summary>
     public double WarmRoomApproachCelsius { get; set; } = 0.5;
+
+    /// <summary>
+    /// Outdoor-temperature power rule. When it is cool outside, cooling is rarely needed, so the
+    /// defender stands down below <see cref="OutdoorSilenceBelowCelsius"/> (default 20 C) and runs in a
+    /// gentler "lite mode" between that and <see cref="OutdoorLiteBelowCelsius"/> (default 22 C), where it
+    /// only corrects once the room is more than <see cref="OutdoorLiteModeBandCelsius"/> above target.
+    /// All of it yields to the comfort safety bypass, so a genuinely hot room still cools.
+    /// </summary>
+    public bool OutdoorPowerRuleEnabled { get; set; } = true;
+
+    public double OutdoorSilenceBelowCelsius { get; set; } = 20.0;
+
+    public double OutdoorLiteBelowCelsius { get; set; } = 22.0;
+
+    public double OutdoorLiteModeBandCelsius { get; set; } = 1.0;
 }

@@ -1376,6 +1376,61 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>
+    /// Outdoor power rule: stand the defender down when it is cool outside (cooling is rarely needed).
+    /// Below OutdoorSilenceBelowCelsius (default 20 C) it silences entirely; between that and
+    /// OutdoorLiteBelowCelsius (default 22 C) it runs in "lite mode", correcting only once the room is
+    /// more than OutdoorLiteModeBandCelsius above target. Always yields to the comfort safety bypass.
+    /// </summary>
+    public bool TryRespectOutdoorPowerRule(
+        ThermostatReading reading,
+        bool bypassForComfort,
+        DateTimeOffset now,
+        out DateTimeOffset waitUntil,
+        out string message)
+    {
+        lock (gate)
+        {
+            waitUntil = DateTimeOffset.MinValue;
+            message = string.Empty;
+
+            if (!options.OutdoorPowerRuleEnabled || state.Weather?.OutdoorTemperatureCelsius is not { } outdoor)
+            {
+                return false;
+            }
+
+            // Never silence or hold while the room genuinely needs cooling.
+            if (bypassForComfort || ShouldBypassNaturalRecovery(reading))
+            {
+                return false;
+            }
+
+            var recheck = now.AddSeconds(Math.Max(3, options.PollIntervalSeconds));
+            var silenceBelow = options.OutdoorSilenceBelowCelsius;
+            var liteBelow = Math.Max(options.OutdoorLiteBelowCelsius, silenceBelow + 0.1);
+
+            if (outdoor < silenceBelow)
+            {
+                waitUntil = recheck;
+                message = $"Silenced: only {outdoor:0.0} C outside (below {silenceBelow:0.0} C), so cooling is not needed.";
+                return true;
+            }
+
+            if (outdoor < liteBelow)
+            {
+                var liteCeiling = state.TargetTemperatureCelsius + Math.Max(0.1, options.OutdoorLiteModeBandCelsius);
+                if (reading.CurrentTemperatureCelsius <= liteCeiling)
+                {
+                    waitUntil = recheck;
+                    message = $"Lite mode: {outdoor:0.0} C outside; room {reading.CurrentTemperatureCelsius:0.0} C is within {liteCeiling:0.0} C, so holding off.";
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
     /// <summary>Manual Comfort Grace: true while leaving a wall change alone in a still-comfortable room (can be extended by Touch Intent).</summary>
     public bool TryRespectManualComfortGrace(
         ThermostatReading reading,

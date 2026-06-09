@@ -104,6 +104,13 @@ public sealed class AcDefenderService
             var superDefenderBypass = stateStore.ShouldBypassQuietTimingForSuperDefender(reading, quietBypassNow);
             var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass || superDefenderBypass;
 
+            // Outdoor power rule: silence when it is cold outside (<20 C), lite mode between 20-22 C.
+            if (stateStore.TryRespectOutdoorPowerRule(reading, bypassQuietTiming, quietBypassNow, out var outdoorUntil, out var outdoorMessage))
+            {
+                stateStore.SetNextAction(outdoorMessage, outdoorUntil);
+                return;
+            }
+
             if (!bypassQuietTiming
                 && stateStore.TryRespectWallSettlingGuard(reading, false, quietBypassNow, out var settlingUntil, out var settlingMessage))
             {

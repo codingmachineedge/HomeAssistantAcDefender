@@ -32,6 +32,7 @@ tests.AngerButtonLearnsUpsetAndRaisesThisHourSensitivity();
 tests.HistoryLearningBuildsHumanComfortProfileAndCadence();
 tests.MachineLearningTrainerLearnsAngerAndComfortPatterns();
 tests.AdjustmentStatisticsSplitByPresenceAndBedroomOccupancy();
+tests.OutdoorPowerRuleSilencesWhenColdLiteWhenMildButYieldsToHotRoom();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
@@ -1221,6 +1222,54 @@ internal sealed class DefenderSetPointRegressionTests
         if (!stats.Insight.Contains("cooler", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Insight should note cooler-when-occupied, got: {stats.Insight}");
+        }
+    }
+
+    public void OutdoorPowerRuleSilencesWhenColdLiteWhenMildButYieldsToHotRoom()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var now = DateTimeOffset.UtcNow;
+        var comfyReading = new ThermostatReading("climate.dining_room", 22.3, 22.0, "cool", "idle", null, []);
+
+        // Below 20 C outside -> silenced.
+        store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "cloudy"));
+        if (!store.TryRespectOutdoorPowerRule(comfyReading, bypassForComfort: false, now, out _, out var coldMsg)
+            || !coldMsg.Contains("Silenced", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Defender should be silenced when it is below 20 C outside.");
+        }
+
+        // 20-22 C outside, room near target -> lite mode holds.
+        store.RecordWeatherReading(new WeatherReading("weather.home", 21.0, "cloudy"));
+        if (!store.TryRespectOutdoorPowerRule(comfyReading, bypassForComfort: false, now, out _, out var liteMsg)
+            || !liteMsg.Contains("Lite mode", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Defender should run in lite mode between 20 and 22 C outside.");
+        }
+
+        // 20-22 C outside, room above the lite band (but below the comfort-override) -> lets it through.
+        var warmReading = comfyReading with { CurrentTemperatureCelsius = 23.5 };
+        store.RecordWeatherReading(new WeatherReading("weather.home", 21.0, "cloudy"));
+        if (store.TryRespectOutdoorPowerRule(warmReading, bypassForComfort: false, now, out _, out _))
+        {
+            throw new InvalidOperationException("Lite mode must still cool a room more than 1 C above target.");
+        }
+
+        // Below 20 C outside but the room is dangerously hot -> comfort safety wins, not silenced.
+        var hotReading = comfyReading with { CurrentTemperatureCelsius = 24.5 };
+        store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "cloudy"));
+        if (store.TryRespectOutdoorPowerRule(hotReading, bypassForComfort: false, now, out _, out _))
+        {
+            throw new InvalidOperationException("A genuinely hot room must override the cold-outside silence.");
+        }
+
+        // Warm outside (>=22) -> rule does nothing.
+        store.RecordWeatherReading(new WeatherReading("weather.home", 26.0, "sunny"));
+        if (store.TryRespectOutdoorPowerRule(comfyReading, bypassForComfort: false, now, out _, out _))
+        {
+            throw new InvalidOperationException("The outdoor power rule must not engage at or above 22 C outside.");
         }
     }
 
