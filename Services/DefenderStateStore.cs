@@ -446,6 +446,28 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>True when the automatic thermostat-history learner is due to run (on startup, then every
+    /// few hours). Gated so the history fetch + training does not happen on every poll.</summary>
+    public bool ShouldRunHistoryLearning(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            return state.Settings.HistoryLearningEnabled
+                && (state.HistoryLearningNextRunAt is not { } next || now >= next);
+        }
+    }
+
+    /// <summary>Throttles the next automatic learning run (called even when a run fails, so a broken
+    /// history fetch cannot spin every poll).</summary>
+    public void ScheduleNextHistoryLearning(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            state.HistoryLearningNextRunAt = now.AddHours(6);
+            SaveState();
+        }
+    }
+
     public bool ShouldRefreshPeakPowerSaver(DateTimeOffset now)
     {
         lock (gate)
@@ -878,6 +900,13 @@ public sealed class DefenderStateStore
             if (pauseDefender)
             {
                 state.DefenderEnabled = false;
+            }
+
+            // The someone-upset button is a learning signal: capture the context and grow more
+            // hands-off during this time of day in future.
+            if (cleanProtocol.Contains("upset", StringComparison.OrdinalIgnoreCase))
+            {
+                RecordAngerEvent(now, cleanProtocol);
             }
 
             state.NextAction = status;
@@ -3637,7 +3666,7 @@ public sealed class DefenderStateStore
         }
     }
 
-    /// <summary>Computes the defender target: applies Comfort Memory/Compromise modifiers, then the warm-room "1 °C below current room temperature" rule, stepping down a degree per cycle while cooling stalls but never below the website target.</summary>
+    /// <summary>Computes the defender target: applies Comfort Memory/Compromise modifiers, then the warm-room "approach below current room temperature" rule (DefenderOptions.WarmRoomApproachCelsius, default 0.5 C), stepping down by that approach per cycle while cooling stalls but never below the website target.</summary>
     public double CalculateExpectedSetPoint(double currentTemperatureCelsius, string hvacAction)
     {
         lock (gate)
@@ -3654,10 +3683,13 @@ public sealed class DefenderStateStore
             var action = (hvacAction ?? string.Empty).Trim().ToLowerInvariant();
             var isCooling = action is "cooling" or "cool";
             var lowestNormalSetPoint = Math.Max(options.MinimumCoolingSetPointCelsius, target);
+            // How far below the room we sit, and the size of each step-down. Default 0.5 C keeps the wall
+            // setpoint tracking just under the room so the cooling is far less noticeable to other people.
+            var approach = Math.Clamp(options.WarmRoomApproachCelsius, 0.1, 3.0);
             double activeSetPoint;
             if (state.ActiveCoolingSetPointCelsius is not { } previousSetPoint)
             {
-                activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - 1.0);
+                activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - approach);
                 state.ActiveCoolingStartedInSafeBand = activeSetPoint <= lowestNormalSetPoint + 0.05;
             }
             else if (!isCooling
@@ -3665,12 +3697,12 @@ public sealed class DefenderStateStore
                 && previousSetPoint <= lowestNormalSetPoint + 0.05
                 && currentTemperatureCelsius > target + 1.0)
             {
-                activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - 1.0);
+                activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - approach);
                 state.ActiveCoolingStartedInSafeBand = false;
             }
             else if (!isCooling)
             {
-                activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint - 1.0);
+                activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint - approach);
                 if (activeSetPoint > lowestNormalSetPoint + 0.05)
                 {
                     state.ActiveCoolingStartedInSafeBand = false;
@@ -3913,9 +3945,15 @@ public sealed class DefenderStateStore
         state.NaturalHoldCount = 0;
         if (state.Settings.ManualComfortGraceEnabled && state.Settings.ManualComfortGraceMinutes > 0)
         {
-            state.ManualComfortGraceUntil = now.AddMinutes(state.Settings.ManualComfortGraceMinutes);
+            // Anger learning: during hours that have historically made people upset, leave their wall
+            // change alone longer (more hands-off). This extra grace is still cancelled the moment the
+            // room actually needs cooling, because the grace guard honours the comfort safety bypass.
+            var angerExtraGraceMinutes = CalculateAngerExtraGraceMinutes(now);
+            state.ManualComfortGraceUntil = now.AddMinutes(state.Settings.ManualComfortGraceMinutes + angerExtraGraceMinutes);
             state.ManualComfortGraceSetPointCelsius = reading.SetPointCelsius;
-            state.ManualComfortGraceStatus = $"Wall change noticed; room gets a comfort grace window until {state.ManualComfortGraceUntil.Value.ToLocalTime():HH:mm:ss}.";
+            state.ManualComfortGraceStatus = angerExtraGraceMinutes > 0
+                ? $"Wall change noticed; sensitive hour adds {angerExtraGraceMinutes} min, grace until {state.ManualComfortGraceUntil.Value.ToLocalTime():HH:mm:ss}."
+                : $"Wall change noticed; room gets a comfort grace window until {state.ManualComfortGraceUntil.Value.ToLocalTime():HH:mm:ss}.";
         }
         else
         {
@@ -4550,6 +4588,280 @@ public sealed class DefenderStateStore
         slot.Samples = Math.Min(24, slot.Samples + 1);
         slot.UpdatedAt = now;
         state.ComfortMemoryStatus = $"Comfort memory learned {slot.OffsetCelsius:+0.0;-0.0;0.0} C for this time window from {slot.Samples} wall choices.";
+    }
+
+    // ───────────────────────── Anger learning ─────────────────────────
+
+    /// <summary>
+    /// Records a someone-upset press: snapshots the live context and raises the learned anger weight for
+    /// this time of day so the defender grows more hands-off during it. Called under the gate lock.
+    /// </summary>
+    private void RecordAngerEvent(DateTimeOffset now, string protocol)
+    {
+        if (!state.Settings.AngerLearningEnabled)
+        {
+            return;
+        }
+
+        PruneTouchTimes(now);
+        var thermostat = state.HomeAssistantThermostat;
+        var room = thermostat?.CurrentTemperatureCelsius ?? state.TargetTemperatureCelsius;
+        var setPoint = thermostat?.SetPointCelsius ?? state.TargetTemperatureCelsius;
+        var hour = now.ToLocalTime().Hour;
+
+        state.AngerEvents.Add(new AngerEvent
+        {
+            At = now,
+            HourOfDay = hour,
+            RoomTemperatureCelsius = Math.Round(room, 2),
+            SetPointCelsius = Math.Round(setPoint, 2),
+            TargetCelsius = Math.Round(state.TargetTemperatureCelsius, 2),
+            DefenderPushCelsius = Math.Round(room - setPoint, 2),
+            RecentTouchCount = state.ExternalTouchTimes.Count,
+            TouchSuspicionScore = CalculateTouchSuspicionScore(now),
+            Protocol = protocol,
+            Note = state.LastCommand ?? string.Empty
+        });
+
+        // Raise this hour strongly and the neighbouring hours lightly, so the sensitive window is not a
+        // single hard hour boundary.
+        BumpAngerSlot(hour, 1.0, now);
+        BumpAngerSlot((hour + 23) % 24, 0.4, now);
+        BumpAngerSlot((hour + 1) % 24, 0.4, now);
+        PruneAngerMemory(now);
+
+        var sensitivity = CalculateAngerSensitivity(now);
+        state.AngerLearningStatus =
+            $"Learned an upset at {hour:00}:00 (room {room:0.0} C, wall {setPoint:0.0} C, defender push {room - setPoint:+0.0;-0.0;0.0} C). This hour is now {sensitivity:P0} sensitive.";
+    }
+
+    private void BumpAngerSlot(int hourOfDay, double weight, DateTimeOffset now)
+    {
+        var slot = state.AngerMemorySlots.FirstOrDefault(item => item.HourOfDay == hourOfDay);
+        if (slot is null)
+        {
+            slot = new AngerMemorySlot { HourOfDay = hourOfDay, AngerScore = 0, Samples = 0, UpdatedAt = now };
+            state.AngerMemorySlots.Add(slot);
+        }
+
+        // Exponential move toward 1.0 so repeated upsets at the same hour saturate the sensitivity.
+        slot.AngerScore = Math.Round(Math.Clamp(slot.AngerScore + (weight * 0.5 * (1.0 - slot.AngerScore)), 0, 1), 3);
+        slot.Samples = Math.Min(999, slot.Samples + 1);
+        slot.UpdatedAt = now;
+    }
+
+    private void PruneAngerMemory(DateTimeOffset now)
+    {
+        var retention = TimeSpan.FromDays(Math.Max(1, state.Settings.AngerMemoryRetentionDays));
+        state.AngerEvents.RemoveAll(item => now - item.At > retention);
+        if (state.AngerEvents.Count > 500)
+        {
+            state.AngerEvents.RemoveRange(0, state.AngerEvents.Count - 500);
+        }
+
+        state.AngerMemorySlots.RemoveAll(item => now - item.UpdatedAt > retention);
+    }
+
+    /// <summary>
+    /// Learned 0..1 upset sensitivity for the current hour, decayed linearly to zero over the retention
+    /// window. Returns 0 when anger learning is off or nothing has been learned for this hour.
+    /// </summary>
+    private double CalculateAngerSensitivity(DateTimeOffset now)
+    {
+        if (!state.Settings.AngerLearningEnabled)
+        {
+            return 0;
+        }
+
+        var hour = now.ToLocalTime().Hour;
+        var slot = state.AngerMemorySlots.FirstOrDefault(item => item.HourOfDay == hour);
+        if (slot is null)
+        {
+            return 0;
+        }
+
+        var retentionDays = Math.Max(1, state.Settings.AngerMemoryRetentionDays);
+        var ageDays = Math.Max(0, (now - slot.UpdatedAt).TotalDays);
+        var decay = Math.Clamp(1.0 - (ageDays / retentionDays), 0, 1);
+        return Math.Clamp(slot.AngerScore * decay, 0, 1);
+    }
+
+    private int CalculateAngerExtraGraceMinutes(DateTimeOffset now)
+    {
+        var sensitivity = CalculateAngerSensitivity(now);
+        var maxExtra = Math.Max(0, state.Settings.AngerMaxExtraGraceMinutes);
+        return (int)Math.Round(sensitivity * maxExtra);
+    }
+
+    private int PeakAngerHour()
+    {
+        return state.AngerMemorySlots
+            .OrderByDescending(item => item.AngerScore)
+            .ThenByDescending(item => item.UpdatedAt)
+            .FirstOrDefault()?.HourOfDay ?? -1;
+    }
+
+    // ───────────────────────── Thermostat-history learning ─────────────────────────
+
+    /// <summary>
+    /// Mines the real Home Assistant climate history to learn a per-hour human comfort profile (the
+    /// median human-chosen wall setpoint) and the human touch cadence, then bootstraps Comfort Memory
+    /// for any hour it has not already learned live. Returns the resulting snapshot.
+    /// </summary>
+    public HistoryLearningSnapshot LearnFromThermostatHistory(IReadOnlyList<ClimateHistorySample> samples, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (!state.Settings.HistoryLearningEnabled)
+            {
+                state.HistoryLearningStatus = "Thermostat-history learning is off.";
+                SaveState();
+                return BuildHistoryLearningSnapshot(now);
+            }
+
+            var ordered = samples
+                .Where(sample => sample.SetPointCelsius is not null)
+                .OrderBy(sample => sample.Timestamp)
+                .ToList();
+
+            // Touch cadence: minutes between consecutive real setpoint CHANGES (any source).
+            var changeTimes = new List<DateTimeOffset>();
+            double? previousSetPoint = null;
+            foreach (var sample in ordered)
+            {
+                if (previousSetPoint is null || Math.Abs(sample.SetPointCelsius!.Value - previousSetPoint.Value) > 0.05)
+                {
+                    changeTimes.Add(sample.Timestamp);
+                    previousSetPoint = sample.SetPointCelsius;
+                }
+            }
+
+            var intervals = changeTimes
+                .Zip(changeTimes.Skip(1), (a, b) => (b - a).TotalMinutes)
+                .Where(minutes => minutes is >= 0.5 and <= 1440)
+                .OrderBy(minutes => minutes)
+                .ToList();
+            state.HistoryMedianTouchIntervalMinutes = intervals.Count > 0
+                ? Math.Round(intervals[intervals.Count / 2], 1)
+                : null;
+
+            // Human comfort profile: setpoints that are NOT a defender-style "room - 1 C" command, bucketed
+            // by local hour. The defender always pins setpoint to about current-room-minus-1, so anything
+            // meaningfully off that line is a human wall choice.
+            var approach = Math.Clamp(options.WarmRoomApproachCelsius, 0.1, 3.0);
+            var hourly = new Dictionary<int, List<double>>();
+            foreach (var sample in ordered)
+            {
+                var setPoint = sample.SetPointCelsius!.Value;
+
+                // Only trust a sample as a human cooling-season preference when:
+                //  - there is a real room reading (a null room — common right after a set_temperature —
+                //    cannot be checked and was previously misread as a human choice),
+                //  - the room was actually warm enough to want cooling (a warm setpoint set in a cool
+                //    room is not a cooling preference), and
+                //  - it does NOT look like one of the defender's own room-minus-approach commands.
+                if (sample.CurrentTemperatureCelsius is not { } room)
+                {
+                    continue;
+                }
+
+                if (room < state.TargetTemperatureCelsius)
+                {
+                    continue;
+                }
+
+                var looksLikeDefenderCommand = Math.Abs(setPoint - (room - approach)) <= 0.4;
+                if (looksLikeDefenderCommand)
+                {
+                    continue;
+                }
+
+                var hour = sample.Timestamp.ToLocalTime().Hour;
+                if (!hourly.TryGetValue(hour, out var list))
+                {
+                    list = [];
+                    hourly[hour] = list;
+                }
+
+                list.Add(setPoint);
+            }
+
+            var learned = new List<HistoryComfortSlot>();
+            foreach (var (hour, values) in hourly)
+            {
+                if (values.Count < 2)
+                {
+                    continue;
+                }
+
+                values.Sort();
+                learned.Add(new HistoryComfortSlot
+                {
+                    HourOfDay = hour,
+                    PreferredSetPointCelsius = Math.Round(values[values.Count / 2], 1),
+                    Samples = values.Count
+                });
+            }
+
+            state.HistoryComfortSlots = learned;
+            state.HistoryLearnedAt = now;
+
+            // Bootstrap Comfort Memory from the learned profile for hours it has not already learned live,
+            // so the existing comfort-target path immediately benefits without clobbering live learning.
+            var seeded = 0;
+            if (state.Settings.ComfortMemoryEnabled)
+            {
+                var maxOffset = Math.Max(0.1, state.Settings.ComfortMemoryMaxOffsetCelsius);
+                foreach (var slot in learned)
+                {
+                    if (state.ComfortMemorySlots.Any(existing => existing.HourOfDay == slot.HourOfDay))
+                    {
+                        continue;
+                    }
+
+                    var offset = Math.Round(Math.Clamp(slot.PreferredSetPointCelsius - state.TargetTemperatureCelsius, -maxOffset, maxOffset), 1);
+                    if (Math.Abs(offset) <= 0.05)
+                    {
+                        continue;
+                    }
+
+                    state.ComfortMemorySlots.Add(new ComfortMemorySlot
+                    {
+                        HourOfDay = slot.HourOfDay,
+                        OffsetCelsius = offset,
+                        Samples = 1,
+                        UpdatedAt = now
+                    });
+                    seeded++;
+                }
+            }
+
+            var cadence = state.HistoryMedianTouchIntervalMinutes is { } median
+                ? $", typical touch every {median:0} min"
+                : string.Empty;
+            state.HistoryLearningStatus = learned.Count > 0
+                ? $"Learned a comfort profile for {learned.Count} hour(s) from {ordered.Count} history points ({seeded} seeded into comfort memory){cadence}."
+                : $"Scanned {ordered.Count} history points but found no clear human comfort pattern yet{cadence}.";
+
+            AddEvent("info", state.HistoryLearningStatus);
+            SaveState();
+            return BuildHistoryLearningSnapshot(now);
+        }
+    }
+
+    private HistoryLearningSnapshot BuildHistoryLearningSnapshot(DateTimeOffset now)
+    {
+        var hour = now.ToLocalTime().Hour;
+        var slot = state.HistoryComfortSlots.FirstOrDefault(item => item.HourOfDay == hour);
+        return new HistoryLearningSnapshot(
+            state.Settings.HistoryLearningEnabled,
+            state.HistoryComfortSlots.Count,
+            slot?.PreferredSetPointCelsius,
+            state.HistoryMedianTouchIntervalMinutes,
+            state.HistoryLearnedAt,
+            string.IsNullOrWhiteSpace(state.HistoryLearningStatus)
+                ? "Thermostat-history learning has not run yet."
+                : state.HistoryLearningStatus);
     }
 
     private int CalculateDynamicCooldownSeconds(DateTimeOffset now)
@@ -5899,6 +6211,9 @@ public sealed class DefenderStateStore
         saved.HomeAssistantReadingTimes ??= [];
         saved.SetpointStillnessSamples ??= [];
         saved.ComfortMemorySlots ??= [];
+        saved.AngerMemorySlots ??= [];
+        saved.AngerEvents ??= [];
+        saved.HistoryComfortSlots ??= [];
         saved.DefenderCommandTimes ??= [];
         saved.VisibilityNoticeTimes ??= [];
         saved.RemoteChangeTimes ??= [];
@@ -6720,6 +7035,17 @@ public sealed class DefenderStateStore
                 string.IsNullOrWhiteSpace(state.ComfortMemoryStatus)
                     ? "Comfort memory is watching wall choices."
                     : state.ComfortMemoryStatus),
+            new AngerLearningSnapshot(
+                state.Settings.AngerLearningEnabled,
+                state.AngerEvents.Count,
+                Math.Round(CalculateAngerSensitivity(now), 3),
+                CalculateAngerExtraGraceMinutes(now),
+                PeakAngerHour(),
+                state.AngerEvents.Count > 0 ? state.AngerEvents[^1].At : null,
+                string.IsNullOrWhiteSpace(state.AngerLearningStatus)
+                    ? "Anger learning is ready; press someone-upset to teach it."
+                    : state.AngerLearningStatus),
+            BuildHistoryLearningSnapshot(now),
             new ConflictQuietSnapshot(
                 state.Settings.ConflictQuietModeEnabled,
                 conflictQuietSeconds > 0,
@@ -7904,6 +8230,27 @@ public sealed class DefenderStateStore
 
         public string ComfortMemoryStatus { get; set; } = "Comfort memory is watching wall choices.";
 
+        // Anger learning: per-hour learned "upset" sensitivity plus the raw event log, captured when the
+        // user presses the someone-upset button. The defender backs off (more hands-off grace) during
+        // hours that have historically made people mad. Always cleared by the comfort safety bypass.
+        public List<AngerMemorySlot> AngerMemorySlots { get; set; } = [];
+
+        public List<AngerEvent> AngerEvents { get; set; } = [];
+
+        public string AngerLearningStatus { get; set; } = "Anger learning is ready; press someone-upset to teach it.";
+
+        // Learned-from-history human comfort profile: per-hour preferred wall setpoint mined from the real
+        // Home Assistant thermostat history, plus the observed human touch cadence.
+        public List<HistoryComfortSlot> HistoryComfortSlots { get; set; } = [];
+
+        public double? HistoryMedianTouchIntervalMinutes { get; set; }
+
+        public DateTimeOffset? HistoryLearnedAt { get; set; }
+
+        public DateTimeOffset? HistoryLearningNextRunAt { get; set; }
+
+        public string HistoryLearningStatus { get; set; } = "Thermostat-history learning has not run yet.";
+
         public DateTimeOffset? CoolModeRestoreDueAt { get; set; }
 
         public DateTimeOffset? CoolModeRestoreCommandedAt { get; set; }
@@ -8184,6 +8531,52 @@ public sealed class DefenderStateStore
         public int Samples { get; set; }
 
         public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    private sealed class AngerMemorySlot
+    {
+        public int HourOfDay { get; set; }
+
+        // Learned 0..1 "upset" weight for this hour, raised by someone-upset presses and decayed by age.
+        public double AngerScore { get; set; }
+
+        public int Samples { get; set; }
+
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    private sealed class AngerEvent
+    {
+        public DateTimeOffset At { get; set; }
+
+        public int HourOfDay { get; set; }
+
+        public double RoomTemperatureCelsius { get; set; }
+
+        public double SetPointCelsius { get; set; }
+
+        public double TargetCelsius { get; set; }
+
+        // How hard the defender was pushing at the moment of the press (room minus wall setpoint).
+        public double DefenderPushCelsius { get; set; }
+
+        public int RecentTouchCount { get; set; }
+
+        public int TouchSuspicionScore { get; set; }
+
+        public string Protocol { get; set; } = "";
+
+        public string Note { get; set; } = "";
+    }
+
+    private sealed class HistoryComfortSlot
+    {
+        public int HourOfDay { get; set; }
+
+        // Median human-chosen wall setpoint for this hour, mined from real Home Assistant history.
+        public double PreferredSetPointCelsius { get; set; }
+
+        public int Samples { get; set; }
     }
 
     private sealed class ThermostatRuntimeState

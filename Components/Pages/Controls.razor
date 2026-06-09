@@ -155,6 +155,25 @@
             <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined">@Snapshot.Emergency.Status</MudAlert>
         }
     </SectionCard>
+
+    <SectionCard Title="Learning" Help="The defender learns from the someone-upset button and from your real Home Assistant thermostat history.">
+        <MudStack Spacing="2">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LearnFromHistory" Disabled="_learningHistory" StartIcon="@Icons.Material.Filled.History">
+                @(_learningHistory ? "Learning from history…" : "Learn from thermostat history")
+            </MudButton>
+            @if (Snapshot is { } learnSnapshot)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">@learnSnapshot.HistoryLearning.Status</MudAlert>
+                <MudAlert Severity="@(learnSnapshot.AngerLearning.CurrentHourSensitivity > 0 ? Severity.Warning : Severity.Normal)" Variant="Variant.Outlined" Dense="true">
+                    Anger learning: @learnSnapshot.AngerLearning.EventCount upset press(es) recorded.
+                    @if (learnSnapshot.AngerLearning.CurrentHourSensitivity > 0)
+                    {
+                        <text> This hour is @(((int)Math.Round(learnSnapshot.AngerLearning.CurrentHourSensitivity * 100)))% sensitive, adding @learnSnapshot.AngerLearning.ExtraGraceMinutes min of hands-off grace.</text>
+                    }
+                </MudAlert>
+            }
+        </MudStack>
+    </SectionCard>
 </MudStack>
 
 @code {
@@ -276,6 +295,31 @@
         $"emergency {_emergencyProtocol}",
         bypassDebounce: !string.Equals(_emergencyProtocol, "too-cold", StringComparison.OrdinalIgnoreCase));
     private Task TurnThermostatOff(bool bypassDebounce = false) => RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off", bypassDebounce);
+
+    private bool _learningHistory;
+    private async Task LearnFromHistory()
+    {
+        if (_learningHistory)
+        {
+            return;
+        }
+
+        _learningHistory = true;
+        try
+        {
+            var result = await Defender.LearnFromHistoryAsync(CancellationToken.None);
+            State.Refresh();
+            Snackbar.Add(result.Status, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"History learning failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _learningHistory = false;
+        }
+    }
 
     private async Task ApplyFanMode()
     {

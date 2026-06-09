@@ -9,9 +9,9 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Treat `climate.dining_room` as a real device. Any command endpoint should act on Home Assistant or return a real error.
 - Keep the background worker checking 24/7. Paused or weather-blocked defender states should still refresh Home Assistant state.
 - Cool-mode restore delay must still restore HVAC mode to `cool`; delay is allowed only while room comfort remains inside the configured safety band.
-- Natural Walkback may soften only safe-band recovery moves after repeated wall touches. Warm-room defender commands must still start one degree below current room temperature, not one degree below the wall setpoint, and continue toward the website target.
+- Natural Walkback may soften only safe-band recovery moves after repeated wall touches. Warm-room defender commands must still start the configured `WarmRoomApproachCelsius` below current room temperature (default 0.5 °C, kept small so the cooling is less noticeable to others), not below the wall setpoint, and continue toward the website target.
 - Touch Signature may shape only safe-band nudge size from real wall thermostat changes. It must clear immediately when room comfort needs direct cooling.
-- Human Nudge may shape only safe, non-bypass setpoint commands into normal thermostat-looking steps. It must not change direct warm-room current-minus-1 C corrections.
+- Human Nudge may shape only safe, non-bypass setpoint commands into normal thermostat-looking steps. It must not change direct warm-room current-minus-approach corrections.
 - Visibility Guard may hold only safe corrections after wall touches that happen soon after defender commands. It must clear immediately when room comfort needs direct cooling.
 - Routine Timing may delay only safe corrections after repeated wall touches so they land on normal-looking comfort-check intervals. It must clear immediately when room comfort needs direct cooling.
 - Comfort Budget may limit only repeated safe setpoint commands inside its window. It must clear immediately when room comfort needs direct cooling.
@@ -21,7 +21,7 @@ This project controls a real Home Assistant climate entity. Do not add dummy the
 - Comfort Compromise may adjust only the temporary effective target while room comfort is inside the configured safety band. Website target changes, schedule target changes, and upstairs comfort changes must clear it.
 - Comfort Memory may apply only small, expiring time-of-day offsets learned from real wall touches while room comfort is inside the configured safety band. It must skip warmer offsets when upstairs is hot.
 - Touch Intent may extend only safe wall-change grace after a clear warmer wall-touch pattern. It must clear or step aside immediately when room comfort needs direct cooling.
-- Cooler Intent Fast Lane may bypass quiet waits only after repeated real cooler wall touches while the room is above target. It must not lower the website target or change the warm-room current-minus-1 C command rule.
+- Cooler Intent Fast Lane may bypass quiet waits only after repeated real cooler wall touches while the room is above target. It must not lower the website target or change the warm-room current-minus-approach command rule.
 - Tug-of-War Truce may delay only safe answer-back corrections after real external setpoint direction flips. It must use the real thermostat audit log and clear immediately when room comfort needs direct cooling or a quiet-timing bypass is active.
 - Super Defender may bypass quiet waits only after repeated Home Assistant user/phone or automation-sourced changes while the room still needs cooling. It must use real Home Assistant context metadata and must not send automated router, Wi-Fi, or firewall blocking commands.
 - Remote Settling Guard may delay only safe corrections after repeated Home Assistant user/phone or automation-sourced changes. It must use real Home Assistant context metadata and clear immediately when room comfort needs direct cooling.

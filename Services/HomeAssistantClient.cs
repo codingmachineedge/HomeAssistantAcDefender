@@ -276,6 +276,101 @@ public sealed class HomeAssistantClient
         return ParseUsageHistory(document.RootElement, targetEntityId, from, to);
     }
 
+    public async Task<IReadOnlyList<ClimateHistorySample>> GetClimateHistoryAsync(
+        string entityId,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            throw new InvalidOperationException("Home Assistant token is not configured.");
+        }
+
+        if (string.IsNullOrWhiteSpace(entityId))
+        {
+            throw new InvalidOperationException("Climate entity is not configured.");
+        }
+
+        if (to <= from)
+        {
+            throw new InvalidOperationException("History end time must be after start time.");
+        }
+
+        var path = $"api/history/period/{Uri.EscapeDataString(from.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}" +
+            $"?filter_entity_id={Uri.EscapeDataString(entityId.Trim())}" +
+            $"&end_time={Uri.EscapeDataString(to.UtcDateTime.ToString("O", CultureInfo.InvariantCulture))}";
+        using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return ParseClimateHistory(document.RootElement);
+    }
+
+    private static IReadOnlyList<ClimateHistorySample> ParseClimateHistory(JsonElement root)
+    {
+        var samples = new List<ClimateHistorySample>();
+        if (root.ValueKind != JsonValueKind.Array)
+        {
+            return samples;
+        }
+
+        foreach (var series in root.EnumerateArray())
+        {
+            if (series.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var entry in series.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var timestamp = TryGetTimestamp(entry, "last_changed") ?? TryGetTimestamp(entry, "last_updated");
+                if (timestamp is null)
+                {
+                    continue;
+                }
+
+                var hvacMode = entry.TryGetProperty("state", out var stateProp) && stateProp.ValueKind == JsonValueKind.String
+                    ? stateProp.GetString()
+                    : null;
+
+                string? hvacAction = null;
+                if (entry.TryGetProperty("attributes", out var attrs)
+                    && attrs.ValueKind == JsonValueKind.Object
+                    && attrs.TryGetProperty("hvac_action", out var actionProp)
+                    && actionProp.ValueKind == JsonValueKind.String)
+                {
+                    hvacAction = actionProp.GetString();
+                }
+
+                string? contextUserId = null;
+                if (entry.TryGetProperty("context", out var contextElement)
+                    && contextElement.ValueKind == JsonValueKind.Object
+                    && contextElement.TryGetProperty("user_id", out var userProp)
+                    && userProp.ValueKind == JsonValueKind.String)
+                {
+                    contextUserId = userProp.GetString();
+                }
+
+                samples.Add(new ClimateHistorySample(
+                    timestamp.Value,
+                    TryGetAttributeDouble(entry, "temperature"),
+                    TryGetAttributeDouble(entry, "current_temperature"),
+                    hvacMode,
+                    hvacAction,
+                    contextUserId));
+            }
+        }
+
+        return samples;
+    }
+
     public async Task SetCoolingAsync(string entityId, double setPointCelsius, CancellationToken cancellationToken)
     {
         await SetHvacModeAsync(entityId, "cool", cancellationToken);

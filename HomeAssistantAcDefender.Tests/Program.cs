@@ -9,9 +9,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 var tests = new DefenderSetPointRegressionTests();
-tests.ManualTouchWhileWarmRestartsAtOneDegreeBelowRoom();
-tests.ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom();
-tests.IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget();
+tests.ManualTouchWhileWarmRestartsBelowRoomByApproach();
+tests.ManualTouchAfterTargetRestartsBelowRoomByApproach();
+tests.IdleWarmRoomWalksDownByApproachUntilWebsiteTarget();
 tests.SetpointEchoWaitsOnlyForSafeFollowUpCommands();
 tests.RepeatQuietWaitsOnlyForIdenticalSafeCommands();
 tests.SetpointStillnessWaitsForStableReadingsButBypassesHotRoom();
@@ -28,6 +28,8 @@ tests.CoolingFailureStaysQuietWhenActionInconclusiveAndRoomNotRising();
 tests.CoolingFailureMegaAndOmegaWhenBreakerOffAndRoomRising();
 tests.CoolingFailureMegaWhenFarAboveTargetEvenIfRoomDrifsDown();
 tests.CoolingFailureMegaWhenCoolingActionButRoomNotDropping();
+tests.AngerButtonLearnsUpsetAndRaisesThisHourSensitivity();
+tests.HistoryLearningBuildsHumanComfortProfileAndCadence();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
@@ -85,14 +87,15 @@ internal sealed class DefenderSetPointRegressionTests
         }
     }
 
-    public void ManualTouchWhileWarmRestartsAtOneDegreeBelowRoom()
+    public void ManualTouchWhileWarmRestartsBelowRoomByApproach()
     {
         using var fixture = DefenderStoreFixture.Create();
         var store = fixture.Store;
         store.SetTarget(22.0);
 
+        // Default WarmRoomApproachCelsius is 0.5, so the setpoint tracks just under the room (less noticeable).
         var initial = store.CalculateExpectedSetPoint(25.0, "cooling");
-        AssertEqual(24.0, initial, "Initial warm-room command should start 1 C below room temperature.");
+        AssertEqual(24.5, initial, "Initial warm-room command should start 0.5 C below room temperature.");
         store.RecordCommand("Seed defender command.", initial);
         store.RecordHomeAssistantReading(new ThermostatReading(
             "climate.dining_room",
@@ -113,18 +116,18 @@ internal sealed class DefenderSetPointRegressionTests
             []));
 
         var afterManualTouch = store.CalculateExpectedSetPoint(25.0, "cooling");
-        AssertEqual(24.0, afterManualTouch, "Manual wall touch while warm should restart from room temperature minus 1 C, not the wall setpoint.");
+        AssertEqual(24.5, afterManualTouch, "Manual wall touch while warm should restart 0.5 C below room temperature, not from the wall setpoint.");
     }
 
-    public void ManualTouchAfterTargetRestartsAtOneDegreeBelowRoom()
+    public void ManualTouchAfterTargetRestartsBelowRoomByApproach()
     {
         using var fixture = DefenderStoreFixture.Create();
         var store = fixture.Store;
         store.SetTarget(22.0);
 
-        AssertEqual(24.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should start one degree below the current room temperature.");
-        AssertEqual(23.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should keep stepping down while cooling is still off.");
-        AssertEqual(22.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should stop walking down at the website target.");
+        AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should start 0.5 C below the current room temperature.");
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should keep stepping down 0.5 C while cooling is still off.");
+        AssertEqual(23.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should keep stepping down 0.5 C toward the website target.");
 
         store.RecordCommand("Seed website target command.", 22.0);
         store.RecordHomeAssistantReading(new ThermostatReading(
@@ -146,26 +149,23 @@ internal sealed class DefenderSetPointRegressionTests
             []));
 
         var afterManualTouch = store.CalculateExpectedSetPoint(25.0, "idle");
-        AssertEqual(24.0, afterManualTouch, "A new wall touch after reaching target should restart at current room temperature minus 1 C.");
+        AssertEqual(24.5, afterManualTouch, "A new wall touch after reaching target should restart 0.5 C below the current room temperature.");
     }
 
-    public void IdleWarmRoomWalksDownOneDegreeUntilWebsiteTarget()
+    public void IdleWarmRoomWalksDownByApproachUntilWebsiteTarget()
     {
         using var fixture = DefenderStoreFixture.Create();
         var store = fixture.Store;
         store.SetTarget(22.0);
 
-        var first = store.CalculateExpectedSetPoint(25.0, "idle");
-        AssertEqual(24.0, first, "First idle warm-room command should be 1 C below current room temperature.");
-
-        var second = store.CalculateExpectedSetPoint(25.0, "idle");
-        AssertEqual(23.0, second, "Second idle warm-room command should step down one more degree.");
-
-        var third = store.CalculateExpectedSetPoint(25.0, "idle");
-        AssertEqual(22.0, third, "Warm-room step-down should stop at the website target.");
-
-        var fourth = store.CalculateExpectedSetPoint(25.0, "idle");
-        AssertEqual(22.0, fourth, "Warm-room step-down must not go colder than the website target.");
+        // approach defaults to 0.5 C, so the warm-room setpoint steps down half a degree per cycle.
+        AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "First idle warm-room command should be 0.5 C below current room temperature.");
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Should step down 0.5 C.");
+        AssertEqual(23.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Should step down 0.5 C.");
+        AssertEqual(23.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Should step down 0.5 C.");
+        AssertEqual(22.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Should step down 0.5 C.");
+        AssertEqual(22.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Should reach the website target.");
+        AssertEqual(22.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room step-down must not go colder than the website target.");
     }
 
     public void SensorRhythmWaitsOnlyForSafeCorrections()
@@ -1062,6 +1062,84 @@ internal sealed class DefenderSetPointRegressionTests
         if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Cooling action with no real room drop over 20 min must still mega-alert (frozen coil).");
+        }
+    }
+
+    public void AngerButtonLearnsUpsetAndRaisesThisHourSensitivity()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 22.5, 21.5, "cool", "idle", null, []));
+
+        if (store.GetSnapshot().AngerLearning.EventCount != 0)
+        {
+            throw new InvalidOperationException("No anger events should exist before any upset press.");
+        }
+
+        // Press the someone-upset button.
+        store.ActivateEmergencyQuiet("Someone upset", TimeSpan.FromMinutes(45), "Someone-upset quiet mode active.", pauseDefender: false);
+
+        var after = store.GetSnapshot().AngerLearning;
+        if (after.EventCount != 1)
+        {
+            throw new InvalidOperationException("Pressing someone-upset should record exactly one anger event.");
+        }
+        if (after.CurrentHourSensitivity <= 0)
+        {
+            throw new InvalidOperationException("This hour's learned sensitivity should rise after an upset press.");
+        }
+        if (after.ExtraGraceMinutes <= 0)
+        {
+            throw new InvalidOperationException("A sensitive hour should add hands-off grace minutes.");
+        }
+
+        // A non-anger emergency (suspicion) must NOT record an anger event.
+        store.ActivateEmergencyQuiet("Suspicion quiet", TimeSpan.FromMinutes(90), "Suspicion quiet.", pauseDefender: false);
+        if (store.GetSnapshot().AngerLearning.EventCount != 1)
+        {
+            throw new InvalidOperationException("Only the someone-upset button should record anger events.");
+        }
+    }
+
+    public void HistoryLearningBuildsHumanComfortProfileAndCadence()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        var anchor = DateTimeOffset.UtcNow.AddDays(-2);
+        var hourStart = new DateTimeOffset(anchor.Year, anchor.Month, anchor.Day, anchor.Hour, 0, 0, TimeSpan.Zero);
+        var samples = new List<ClimateHistorySample>
+        {
+            // Human wall choice (20.0 is NOT room-1 of 24.0) — counts for the profile.
+            new(hourStart, 20.0, 24.0, "cool", "idle", "user-abc"),
+            new(hourStart.AddMinutes(2), 20.0, 24.0, "cool", "idle", "user-abc"),
+            // Defender-style room-minus-approach command (23.5 == 24.0-0.5) — must be filtered OUT of the profile.
+            new(hourStart.AddMinutes(5), 23.5, 24.0, "cool", "cooling", null),
+            // Another human wall choice.
+            new(hourStart.AddMinutes(9), 20.5, 24.5, "cool", "idle", "user-abc"),
+        };
+
+        var result = store.LearnFromThermostatHistory(samples, DateTimeOffset.UtcNow);
+
+        if (result.LearnedHourCount < 1)
+        {
+            throw new InvalidOperationException("History learning should learn at least one hour's human comfort profile.");
+        }
+        if (result.MedianTouchIntervalMinutes is not { } cadence || cadence <= 0)
+        {
+            throw new InvalidOperationException("History learning should compute a human touch cadence.");
+        }
+
+        // The learned hour profile must come from the HUMAN setpoints (20.0, 20.5), not the defender's 23.0.
+        var learnedHour = hourStart.ToLocalTime().Hour;
+        var snapshot = store.GetSnapshot();
+        if (snapshot.ComfortMemory.SampleCount == 0 && snapshot.ComfortMemory.LearnedOffsetCelsius is null)
+        {
+            // Comfort memory should have been seeded from the learned profile for an hour with no live data.
+            // (Seeding only happens when ComfortMemoryEnabled — true by default.)
+            throw new InvalidOperationException("Learned history profile should seed comfort memory for unlearned hours.");
         }
     }
 

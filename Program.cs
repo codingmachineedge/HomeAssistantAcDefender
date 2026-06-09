@@ -294,6 +294,18 @@ api.MapPost("/thermostat/off", async (AcDefenderService defender, DefenderStateS
     }
 });
 
+api.MapPost("/learn-history", async (AcDefenderService defender, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await defender.LearnFromHistoryAsync(cancellationToken));
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
 api.MapPost("/emergency", async (EmergencyProtocolRequest request, AcDefenderService defender, DefenderStateStore store, CancellationToken cancellationToken) =>
 {
     try

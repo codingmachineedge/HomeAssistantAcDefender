@@ -43,6 +43,7 @@ public sealed class AcDefenderService
             }
             await RefreshPeakPowerStatusIfDueAsync(cancellationToken);
             await RefreshFrontDoorKillSwitchIfDueAsync(cancellationToken);
+            await RefreshLearningIfDueAsync(cancellationToken);
 
             var frontDoorNow = DateTimeOffset.UtcNow;
             if (stateStore.TryRespectFrontDoorKillSwitch(reading, frontDoorNow, out var shouldTurnOff, out var frontDoorUntil, out var frontDoorMessage))
@@ -336,6 +337,25 @@ public sealed class AcDefenderService
         }
     }
 
+    private async Task RefreshLearningIfDueAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (!stateStore.ShouldRunHistoryLearning(now))
+        {
+            return;
+        }
+
+        stateStore.ScheduleNextHistoryLearning(now);
+        try
+        {
+            await LearnFromHistoryAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Automatic thermostat-history learning failed");
+        }
+    }
+
     private async Task RefreshPeakPowerStatusIfDueAsync(CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
@@ -470,6 +490,20 @@ public sealed class AcDefenderService
     public async Task RefreshRealThermostatAsync(CancellationToken cancellationToken)
     {
         await RequireReadingAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Pulls the real Home Assistant thermostat history and learns a human comfort profile + touch
+    /// cadence from it (see <see cref="DefenderStateStore.LearnFromThermostatHistory"/>).
+    /// </summary>
+    public async Task<HistoryLearningSnapshot> LearnFromHistoryAsync(CancellationToken cancellationToken)
+    {
+        var reading = await RequireReadingAsync(cancellationToken);
+        var settings = stateStore.GetSettings();
+        var to = DateTimeOffset.UtcNow;
+        var from = to.AddDays(-Math.Max(1, settings.HistoryLearningDays));
+        var samples = await homeAssistantClient.GetClimateHistoryAsync(reading.EntityId, from, to, cancellationToken);
+        return stateStore.LearnFromThermostatHistory(samples, DateTimeOffset.UtcNow);
     }
 
     private async Task<ThermostatReading?> RefreshReadingAsync(CancellationToken cancellationToken)

@@ -33,6 +33,8 @@ public sealed record DefenderSnapshot(
     ComfortEnvelopeSnapshot ComfortEnvelope,
     ComfortCompromiseSnapshot ComfortCompromise,
     ComfortMemorySnapshot ComfortMemory,
+    AngerLearningSnapshot AngerLearning,
+    HistoryLearningSnapshot HistoryLearning,
     ConflictQuietSnapshot ConflictQuiet,
     TugOfWarTruceSnapshot TugOfWarTruce,
     WallSettlingSnapshot WallSettling,
@@ -291,6 +293,32 @@ public sealed record ComfortMemorySnapshot(
     double? LearnedOffsetCelsius,
     double? EffectiveTargetCelsius,
     string Status);
+
+public sealed record AngerLearningSnapshot(
+    bool Enabled,
+    int EventCount,
+    double CurrentHourSensitivity,
+    int ExtraGraceMinutes,
+    int PeakHourOfDay,
+    DateTimeOffset? LastAngerAt,
+    string Status);
+
+public sealed record HistoryLearningSnapshot(
+    bool Enabled,
+    int LearnedHourCount,
+    double? CurrentHourPreferredSetPointCelsius,
+    double? MedianTouchIntervalMinutes,
+    DateTimeOffset? LearnedAt,
+    string Status);
+
+/// <summary>One real Home Assistant climate state-change pulled from the history API.</summary>
+public sealed record ClimateHistorySample(
+    DateTimeOffset Timestamp,
+    double? SetPointCelsius,
+    double? CurrentTemperatureCelsius,
+    string? HvacMode,
+    string? HvacAction,
+    string? ContextUserId);
 
 public sealed record ConflictQuietSnapshot(
     bool Enabled,
@@ -748,6 +776,23 @@ public sealed class DefenderSettings
     public double ComfortMemoryMaxOffsetCelsius { get; set; } = 0.6;
 
     public double ComfortMemorySafetyBandCelsius { get; set; } = 0.8;
+
+    // Anger learning: when someone presses the someone-upset button, the defender learns that this
+    // time of day is sensitive and grows more hands-off (longer wall-change grace) during it. Always
+    // overridden by the comfort safety bypass, so it never blocks real cooling.
+    public bool AngerLearningEnabled { get; set; } = true;
+
+    public int AngerMemoryRetentionDays { get; set; } = 45;
+
+    public double AngerSafetyBandCelsius { get; set; } = 1.0;
+
+    public int AngerMaxExtraGraceMinutes { get; set; } = 25;
+
+    // Thermostat-history learning: mine the real Home Assistant history to learn a per-hour human
+    // comfort profile and the human touch cadence.
+    public bool HistoryLearningEnabled { get; set; } = true;
+
+    public int HistoryLearningDays { get; set; } = 14;
 
     public bool ManualComfortGraceEnabled { get; set; } = true;
 
