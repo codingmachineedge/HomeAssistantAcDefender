@@ -60,6 +60,7 @@ tests.EnforcerEscalatesAfterRepeatedOverrides();
 tests.EnforcerRateLimitHoldsInsteadOfThrashing();
 tests.EnforcerClampsAssertToDeviceMinMax();
 tests.EnforcerStealthModeLetsNaturalPipelineHandleSetpointRaise();
+tests.EnforcerDoesNotFightOwnWarmRoomCoolingSetpoint();
 tests.EnforcerStealthWaitsLongerDuringHighAngerHours();
 tests.EnforcerInactiveWhenDisabledLeavesStealthPipelineUnchanged();
 tests.EnforcerLearningModelsTrainInterferenceAndCadenceFromOverrides();
@@ -2362,6 +2363,43 @@ internal sealed class DefenderSetPointRegressionTests
 
         // The existing pipeline must still be reachable/working when the enforcer is off.
         AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "The existing warm-room path must remain intact when the enforcer is off.");
+    }
+
+    public void EnforcerDoesNotFightOwnWarmRoomCoolingSetpoint()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        EnforcerSettings(store, s => s.EnforcerStealthShaping = true);
+
+        var now = DateTimeOffset.UtcNow;
+
+        // The defender's own warm-room command parks the setpoint at room - 0.5 (= 25.5 for a 26 C room)
+        // while it cools toward the 22 C target. That is ABOVE the target but is normal cooling, not an
+        // override: the enforcer must not flag it, count it, or escalate.
+        var cooling = store.EvaluateEnforcer(EnforcerReading("cool", 25.5, 26.0, "intruder"), now);
+        if (cooling.Decision != EnforcerDecision.Inactive)
+        {
+            throw new InvalidOperationException($"The defender's own warm-room cooling setpoint must not be treated as an override, got {cooling.Decision}.");
+        }
+
+        if (store.GetSnapshot().Enforcer.RecentOverrideCount != 0)
+        {
+            throw new InvalidOperationException("A normal cooling setpoint must not be counted as an override (false-positive guard).");
+        }
+
+        // A genuine raise above the cooling plan (27 C while the room is 26 C — high enough to stop the AC
+        // cooling) IS an override and must still be caught.
+        var raised = store.EvaluateEnforcer(EnforcerReading("cool", 27.0, 26.0, "intruder"), now.AddSeconds(1));
+        if (raised.Decision == EnforcerDecision.Inactive)
+        {
+            throw new InvalidOperationException("A real setpoint raise above the cooling plan must still be caught.");
+        }
+
+        if (store.GetSnapshot().Enforcer.RecentOverrideCount != 1)
+        {
+            throw new InvalidOperationException("A real raise should count exactly one override.");
+        }
     }
 
     public void EnforcerStealthWaitsLongerDuringHighAngerHours()

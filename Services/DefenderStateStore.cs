@@ -1304,7 +1304,20 @@ public sealed class DefenderStateStore
 
             var desiredTarget = ComputeEnforcerDesiredTarget(s);
             var modeOff = s.EnforcerEnforceMode && !string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase);
-            var setpointAway = s.EnforcerEnforceSetpoint && (reading.SetPointCelsius - desiredTarget) > options.TemperatureToleranceCelsius;
+
+            // A raised setpoint is only an unwanted "override" when it sits ABOVE the defender's own cooling
+            // plan, not merely above the target. The warm-room logic legitimately parks the setpoint at
+            // (room - approach) while a hot room cools down toward the target, so comparing against the
+            // target alone would mis-read every normal cooling step as sabotage and spuriously escalate.
+            // Sabotage = the setpoint is pushed above where cooling would actually happen (room - approach),
+            // i.e. high enough to stop the AC from cooling. A valid room reading is required to use the
+            // room-relative ceiling; without one, fall back to the plain target comparison.
+            var approach = Math.Max(0.1, options.WarmRoomApproachCelsius);
+            var coolingCeiling = reading.CurrentTemperatureCelsius > 1.0
+                ? Math.Max(desiredTarget, reading.CurrentTemperatureCelsius - approach)
+                : desiredTarget;
+            var setpointAway = s.EnforcerEnforceSetpoint
+                && (reading.SetPointCelsius - coolingCeiling) > options.TemperatureToleranceCelsius;
             var deviated = modeOff || setpointAway;
 
             PruneEnforcerOverrideTimes(now, s);
@@ -1359,6 +1372,17 @@ public sealed class DefenderStateStore
                 state.EnforcerStatus = $"Change attributed to the owner ({changeUser}); respecting it.";
                 SaveState();
                 return Gate(EnforcerDecision.RespectOwner, state.EnforcerStatus, now.AddSeconds(Math.Max(3, options.PollIntervalSeconds)));
+            }
+
+            // If we just asserted, the deviation is most likely our own command that Home Assistant has not
+            // reflected yet. Wait out the echo window WITHOUT counting it as a fresh override, so a single
+            // assert can never inflate the escalation count (false-positive guard).
+            var echoCooldown = Math.Max(s.EnforcerCooldownSeconds, Math.Max(15, options.CommandGraceSeconds));
+            if (state.EnforcerLastAssertAt is { } lastAssertEcho && now - lastAssertEcho < TimeSpan.FromSeconds(echoCooldown))
+            {
+                state.EnforcerStatus = "Waiting for Home Assistant to confirm the last enforce before re-evaluating.";
+                SaveState();
+                return Gate(EnforcerDecision.Cooldown, state.EnforcerStatus, lastAssertEcho.AddSeconds(echoCooldown));
             }
 
             // First sighting of this deviation episode: record the override (escalation + ML training data).
