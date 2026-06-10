@@ -34,9 +34,9 @@
             <form method="post" class="login-form" data-enhance="false" @formname="ownersignup">
                 <AntiforgeryToken />
                 <input type="hidden" name="action" value="ownersignup" />
-                <div class="input-group"><input type="text" name="username" class="text-input" placeholder="Username" autocomplete="username" required autofocus /></div>
-                <div class="input-group"><input type="password" name="password" class="text-input" placeholder="Password (at least 6 characters)" autocomplete="new-password" minlength="6" required /></div>
-                <div class="input-group"><input type="password" name="confirmPassword" class="text-input" placeholder="Confirm password" autocomplete="new-password" minlength="6" required /></div>
+                <div class="input-group"><input type="text" name="username" class="text-input" placeholder="Username" aria-label="Username" autocomplete="username" required autofocus /></div>
+                <div class="input-group"><input type="password" name="password" class="text-input" placeholder="Password (at least 6 characters)" aria-label="Password, at least 6 characters" autocomplete="new-password" minlength="6" required /></div>
+                <div class="input-group"><input type="password" name="confirmPassword" class="text-input" placeholder="Confirm password" aria-label="Confirm password" autocomplete="new-password" minlength="6" required /></div>
                 <div class="login-options">
                     <label class="option-label"><input type="checkbox" name="keepSignedIn" value="true" checked /><span>Keep me signed in</span></label>
                 </div>
@@ -58,10 +58,10 @@ else if (_formMode == "signup")
             <form method="post" class="login-form" data-enhance="false" @formname="signup">
                 <AntiforgeryToken />
                 <input type="hidden" name="action" value="signup" />
-                <div class="input-group"><input type="text" name="username" class="text-input" placeholder="Username" autocomplete="username" required autofocus /></div>
-                <div class="input-group"><input type="password" name="password" class="text-input" placeholder="Password (at least 6 characters)" autocomplete="new-password" minlength="6" required /></div>
-                <div class="input-group"><input type="password" name="confirmPassword" class="text-input" placeholder="Confirm password" autocomplete="new-password" minlength="6" required /></div>
-                <div class="input-group"><input type="text" name="registrationCode" class="text-input" placeholder="Registration code" required /></div>
+                <div class="input-group"><input type="text" name="username" class="text-input" placeholder="Username" aria-label="Username" autocomplete="username" required autofocus /></div>
+                <div class="input-group"><input type="password" name="password" class="text-input" placeholder="Password (at least 6 characters)" aria-label="Password, at least 6 characters" autocomplete="new-password" minlength="6" required /></div>
+                <div class="input-group"><input type="password" name="confirmPassword" class="text-input" placeholder="Confirm password" aria-label="Confirm password" autocomplete="new-password" minlength="6" required /></div>
+                <div class="input-group"><input type="text" name="registrationCode" class="text-input" placeholder="Registration code" aria-label="Registration code" required /></div>
                 <div class="login-options">
                     <label class="option-label"><input type="checkbox" name="keepSignedIn" value="true" checked /><span>Keep me signed in</span></label>
                 </div>
@@ -84,8 +84,8 @@ else
             <form method="post" class="login-form" data-enhance="false" @formname="login">
                 <AntiforgeryToken />
                 <input type="hidden" name="action" value="login" />
-                <div class="input-group"><input type="text" name="username" class="text-input" placeholder="Username" autocomplete="username" required autofocus /></div>
-                <div class="input-group"><input type="password" name="password" class="text-input" placeholder="Password" autocomplete="current-password" required /></div>
+                <div class="input-group"><input type="text" name="username" class="text-input" placeholder="Username" aria-label="Username" autocomplete="username" required autofocus /></div>
+                <div class="input-group"><input type="password" name="password" class="text-input" placeholder="Password" aria-label="Password" autocomplete="current-password" required /></div>
                 <div class="login-options">
                     <label class="option-label"><input type="checkbox" name="keepSignedIn" value="true" checked /><span>Keep me signed in</span></label>
                 </div>

@@ -52,6 +52,7 @@
 
     <MudMainContent Class="main-content">
         <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="page-container">
+            <h1 class="sr-only">@PageTitle</h1>
             @Body
         </MudContainer>
     </MudMainContent>
@@ -117,6 +118,22 @@
     private string ThemeIcon => _isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode;
     private string ThemeTooltip => _isDarkMode ? "Switch to light theme" : "Switch to dark theme";
 
+    // A single descriptive <h1> landmark per page for screen readers (the visual headings are MudText).
+    private string PageTitle => new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant() switch
+    {
+        "" or "/" => "Dashboard",
+        "/controls" => "Controls",
+        "/settings" => "Settings",
+        "/defense" => "Defense board",
+        "/energy" => "Energy",
+        "/comfort" => "Comfort",
+        "/logs" => "Logs",
+        "/guide" => "Guide",
+        var other => other.TrimStart('/') is { Length: > 0 } name
+            ? char.ToUpperInvariant(name[0]) + name[1..]
+            : "AC Defender"
+    };
+
     private DefenderSnapshot? Snapshot => State.Snapshot;
 
     private string HeaderStatus => Snapshot switch
@@ -138,7 +155,11 @@
     protected override void OnInitialized()
     {
         State.Changed += OnStateChanged;
+        Nav.LocationChanged += OnLocationChanged;
     }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+        => InvokeAsync(StateHasChanged);
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -228,5 +249,9 @@
         });
     }
 
-    public void Dispose() => State.Changed -= OnStateChanged;
+    public void Dispose()
+    {
+        State.Changed -= OnStateChanged;
+        Nav.LocationChanged -= OnLocationChanged;
+    }
 }

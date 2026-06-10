@@ -2,7 +2,7 @@
 <MudItem xs="@Xs" sm="@Sm" md="@Md" lg="@Lg">
     <MudPaper Class="metric-tile" Elevation="0">
         <MudText Typo="Typo.overline" Class="metric-tile__label">@Label</MudText>
-        <MudText Typo="Typo.h6" Class="metric-tile__value">@Value</MudText>
+        <MudText Typo="Typo.subtitle1" Class="metric-tile__value">@Value</MudText>
         @if (!string.IsNullOrWhiteSpace(Help))
         {
             <MudText Typo="Typo.caption" Class="helper-text">@Help</MudText>
