@@ -9,17 +9,20 @@ public sealed class AcDefenderService
     private readonly DefenderStateStore stateStore;
     private readonly HomeAssistantClient homeAssistantClient;
     private readonly IOptionsMonitor<DefenderOptions> options;
+    private readonly IOptionsMonitor<HomeAssistantOptions> homeAssistantOptions;
     private readonly ILogger<AcDefenderService> logger;
 
     public AcDefenderService(
         DefenderStateStore stateStore,
         HomeAssistantClient homeAssistantClient,
         IOptionsMonitor<DefenderOptions> options,
+        IOptionsMonitor<HomeAssistantOptions> homeAssistantOptions,
         ILogger<AcDefenderService> logger)
     {
         this.stateStore = stateStore;
         this.homeAssistantClient = homeAssistantClient;
         this.options = options;
+        this.homeAssistantOptions = homeAssistantOptions;
         this.logger = logger;
     }
 
@@ -70,6 +73,37 @@ public sealed class AcDefenderService
             {
                 stateStore.SetNextAction("Defender paused; still reading the real thermostat 24/7.", nextCheck);
                 return;
+            }
+
+            // Desired-State Enforcer: the assertive layer that makes the owner's chosen state win. When it
+            // acts (or holds), it short-circuits the cycle; when Inactive it falls through to the stealth
+            // pipeline unchanged.
+            var enforcerNow = DateTimeOffset.UtcNow;
+            var enforcerGate = stateStore.EvaluateEnforcer(reading, enforcerNow);
+            switch (enforcerGate.Decision)
+            {
+                case EnforcerDecision.EnforceMode:
+                case EnforcerDecision.EnforceSetpoint:
+                    await homeAssistantClient.SetCoolingAsync(reading.EntityId, enforcerGate.AssertSetPoint, cancellationToken);
+                    stateStore.RecordCommand(
+                        enforcerGate.Message,
+                        enforcerGate.AssertSetPoint,
+                        commandedHvacMode: "cool",
+                        commandSourceKind: "desired-state-enforcer",
+                        commandSourceLabel: "Desired-State Enforcer",
+                        commandSourceDetail: "The Desired-State Enforcer restored the owner's chosen AC state.");
+                    await TrySendEnforcerNotificationAsync(enforcerGate, cancellationToken);
+                    stateStore.SetNextAction(enforcerGate.Message, enforcerGate.Until);
+                    return;
+                case EnforcerDecision.Cooldown:
+                case EnforcerDecision.Backoff:
+                case EnforcerDecision.RespectOwner:
+                    await TrySendEnforcerNotificationAsync(enforcerGate, cancellationToken);
+                    stateStore.SetNextAction(enforcerGate.Message, enforcerGate.Until);
+                    return;
+                case EnforcerDecision.Inactive:
+                default:
+                    break;
             }
 
             if (!string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
@@ -341,6 +375,27 @@ public sealed class AcDefenderService
         {
             logger.LogWarning(ex, "Defender cycle failed");
             stateStore.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
+        }
+    }
+
+    private async Task TrySendEnforcerNotificationAsync(EnforcerGate gate, CancellationToken cancellationToken)
+    {
+        if (!gate.Notify || string.IsNullOrWhiteSpace(gate.NotifyMessage))
+        {
+            return;
+        }
+
+        try
+        {
+            await homeAssistantClient.SendNotificationAsync(
+                homeAssistantOptions.CurrentValue.NotifyService,
+                "AC Defender",
+                gate.NotifyMessage,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Desired-State Enforcer notification failed");
         }
     }
 

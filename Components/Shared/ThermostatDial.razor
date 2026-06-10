@@ -1,0 +1,130 @@
+@using System.Globalization
+
+<div class="tdial @StateClass">
+    <div class="tdial-face">
+        <svg viewBox="0 0 240 240" class="tdial-svg" role="img" aria-label="Thermostat dial">
+            <defs>
+                <radialGradient id="tdial-glow" cx="50%" cy="50%" r="60%">
+                    <stop offset="0%" stop-color="@GlowColor" stop-opacity="0.55" />
+                    <stop offset="70%" stop-color="@GlowColor" stop-opacity="0.10" />
+                    <stop offset="100%" stop-color="@GlowColor" stop-opacity="0" />
+                </radialGradient>
+            </defs>
+
+            <circle cx="120" cy="120" r="116" class="tdial-bezel" />
+            <circle cx="120" cy="120" r="104" class="tdial-inner" />
+            <circle cx="120" cy="120" r="96" fill="url(#tdial-glow)" />
+
+            @* Tick marks around the 270° arc *@
+            @for (var i = 0; i <= TickCount; i++)
+            {
+                var frac = (double)i / TickCount;
+                var (x1, y1) = Polar(120, 120, 98, StartAngle + SweepAngle * frac);
+                var (x2, y2) = Polar(120, 120, 88, StartAngle + SweepAngle * frac);
+                var active = frac <= TargetFraction + 0.0001;
+                <line x1="@F(x1)" y1="@F(y1)" x2="@F(x2)" y2="@F(y2)"
+                      class="@(active ? "tdial-tick tdial-tick--on" : "tdial-tick")" />
+            }
+
+            @* Background track and filled arc up to the target *@
+            <path d="@Arc(120, 120, 78, StartAngle, StartAngle + SweepAngle)" class="tdial-track" />
+            <path d="@Arc(120, 120, 78, StartAngle, StartAngle + SweepAngle * TargetFraction)" class="tdial-fill" />
+
+            @* Current room temperature marker on the arc *@
+            @if (Current is { } room)
+            {
+                var (mx, my) = Polar(120, 120, 78, StartAngle + SweepAngle * CurrentFraction);
+                <circle cx="@F(mx)" cy="@F(my)" r="5" class="tdial-room-dot" />
+            }
+
+            <text x="120" y="108" text-anchor="middle" class="tdial-target">@Target.ToString("0.#", CultureInfo.InvariantCulture)<tspan class="tdial-unit">°C</tspan></text>
+            <text x="120" y="140" text-anchor="middle" class="tdial-mode">@ModeLabel</text>
+            <text x="120" y="162" text-anchor="middle" class="tdial-room">
+                @(Current is { } c ? $"Room {c.ToString("0.0", CultureInfo.InvariantCulture)}°C" : "Room --")
+            </text>
+        </svg>
+
+        <button type="button" class="tdial-btn tdial-btn--down" @onclick="Decrement" aria-label="Lower target" disabled="@Disabled">−</button>
+        <button type="button" class="tdial-btn tdial-btn--up" @onclick="Increment" aria-label="Raise target" disabled="@Disabled">+</button>
+    </div>
+    @if (Footer is not null)
+    {
+        <div class="tdial-footer">@Footer</div>
+    }
+</div>
+
+@code {
+    [Parameter] public double Target { get; set; } = 22.0;
+    [Parameter] public double? Current { get; set; }
+    [Parameter] public string Mode { get; set; } = "cool";
+    [Parameter] public string Action { get; set; } = "idle";
+    [Parameter] public double Min { get; set; } = 16.0;
+    [Parameter] public double Max { get; set; } = 30.0;
+    [Parameter] public double Step { get; set; } = 0.5;
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<double> TargetChanged { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+
+    private const double StartAngle = 135.0;
+    private const double SweepAngle = 270.0;
+    private const int TickCount = 40;
+
+    private bool IsOff => string.Equals(Mode, "off", StringComparison.OrdinalIgnoreCase);
+    private bool IsCooling => string.Equals(Action, "cooling", StringComparison.OrdinalIgnoreCase);
+
+    private double TargetFraction => Clamp01((Target - Min) / Math.Max(0.1, Max - Min));
+    private double CurrentFraction => Current is { } c ? Clamp01((c - Min) / Math.Max(0.1, Max - Min)) : 0;
+
+    private string StateClass => IsOff ? "tdial--off" : IsCooling ? "tdial--cooling" : "tdial--idle";
+    private string GlowColor => IsOff ? "#6b7280" : IsCooling ? "#38bdf8" : "#a3b1c6";
+
+    private string ModeLabel => IsOff
+        ? "Off"
+        : IsCooling
+            ? "Cooling"
+            : string.Equals(Mode, "cool", StringComparison.OrdinalIgnoreCase) ? "Cool · idle" : Mode;
+
+    private async Task Increment() => await Commit(Target + Step);
+    private async Task Decrement() => await Commit(Target - Step);
+
+    private async Task Commit(double value)
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        var clamped = Math.Round(Math.Clamp(value, Min, Max) / Step) * Step;
+        clamped = Math.Round(clamped, 1);
+        if (Math.Abs(clamped - Target) < 0.001)
+        {
+            return;
+        }
+
+        Target = clamped;
+        await TargetChanged.InvokeAsync(clamped);
+    }
+
+    private static double Clamp01(double v) => Math.Clamp(v, 0.0, 1.0);
+
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private static (double X, double Y) Polar(double cx, double cy, double r, double angleDeg)
+    {
+        var a = angleDeg * Math.PI / 180.0;
+        return (cx + (r * Math.Cos(a)), cy + (r * Math.Sin(a)));
+    }
+
+    private static string Arc(double cx, double cy, double r, double startDeg, double endDeg)
+    {
+        if (endDeg - startDeg < 0.01)
+        {
+            endDeg = startDeg + 0.01;
+        }
+
+        var (sx, sy) = Polar(cx, cy, r, startDeg);
+        var (ex, ey) = Polar(cx, cy, r, endDeg);
+        var large = (endDeg - startDeg) > 180 ? 1 : 0;
+        return $"M {F(sx)} {F(sy)} A {F(r)} {F(r)} 0 {large} 1 {F(ex)} {F(ey)}";
+    }
+}

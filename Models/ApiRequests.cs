@@ -217,4 +217,27 @@ public sealed record SettingsRequest(
     double UpstairsComfortBoostCelsius,
     bool HomePresenceRequired,
     string PresenceEntityIds,
-    IReadOnlyList<ScheduleEntry> Schedule);
+    IReadOnlyList<ScheduleEntry> Schedule,
+    // Desired-State Enforcer. Nullable/defaulted to null so a settings save that does not include them
+    // (older form posts, partial callers) leaves the saved Enforcer config untouched instead of resetting
+    // it. UpdateSettings applies and clamps only the values that are present.
+    bool? EnforcerModeEnabled = null,
+    double? EnforcerTargetTemperatureCelsius = null,
+    bool? EnforcerEnforceMode = null,
+    bool? EnforcerEnforceSetpoint = null,
+    bool? EnforcerStealthShaping = null,
+    bool? EnforcerRespectOwner = null,
+    string? EnforcerOwnerUserIds = null,
+    int? EnforcerDebounceSeconds = null,
+    int? EnforcerCooldownSeconds = null,
+    int? EnforcerRateWindowMinutes = null,
+    int? EnforcerMaxAssertsPerWindow = null,
+    int? EnforcerEscalateAfterOverrides = null,
+    int? EnforcerBackoffBaseSeconds = null,
+    int? EnforcerBackoffMaxSeconds = null,
+    bool? EnforcerScheduleEnabled = null,
+    string? EnforcerStartTime = null,
+    string? EnforcerEndTime = null,
+    bool? EnforcerRequirePresence = null,
+    bool? EnforcerNotifyEnabled = null,
+    bool? EnforcerUseLearning = null);

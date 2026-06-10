@@ -40,4 +40,8 @@ public sealed class HomeAssistantOptions
     public string TrackedPersonEntityIds { get; set; } = "";
 
     public string MasterBedroomEntityIds { get; set; } = "";
+
+    // Home Assistant notify service name (e.g. "mobile_app_owner_phone" → notify.mobile_app_owner_phone)
+    // used by the Desired-State Enforcer. Empty disables notifications even if the Enforcer asks for one.
+    public string NotifyService { get; set; } = "";
 }

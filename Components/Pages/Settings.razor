@@ -133,6 +133,41 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("desired state enforcer owner exact target win automatically off setpoint escalate override interference notify schedule presence stealth")) {
+                <MudExpansionPanel Text="Desired-State Enforcer" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <MudItem xs="12">
+                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">Makes your chosen AC state win automatically. If someone else turns it off or raises the setpoint, it restores your state. Owner changes (by Home Assistant user_id) are respected. Off by default.</MudAlert>
+                        </MudItem>
+                        <SettingSwitch Label="Enforcer mode" Value="_enforcerModeEnabled" ValueChanged="@(v => SetDirty(v, x => _enforcerModeEnabled = x))" Help="Master switch. When off, the existing stealth pipeline runs unchanged." />
+                        <SettingDouble Label="Exact target" Unit="C" Value="_enforcerTargetTemperatureCelsius" ValueChanged="@(v => SetDirty(v, x => _enforcerTargetTemperatureCelsius = x))" Min="0" Max="35" Help="The exact temperature to hold. 0 = follow the website target." />
+                        <SettingSwitch Label="Restore mode (turn back on)" Value="_enforcerEnforceMode" ValueChanged="@(v => SetDirty(v, x => _enforcerEnforceMode = x))" Help="Bring the unit back to cool if someone switches it off/heat/auto." />
+                        <SettingSwitch Label="Restore setpoint" Value="_enforcerEnforceSetpoint" ValueChanged="@(v => SetDirty(v, x => _enforcerEnforceSetpoint = x))" Help="Restore the target when the setpoint is moved away." />
+                        <SettingSwitch Label="Smart-stealth shaping" Value="_enforcerStealthShaping" ValueChanged="@(v => SetDirty(v, x => _enforcerStealthShaping = x))" Help="Ease the setpoint back through the human-like pipeline so it is less noticeable. Off = snap to the exact target." />
+                        <SettingSwitch Label="Respect owner changes" Value="_enforcerRespectOwner" ValueChanged="@(v => SetDirty(v, x => _enforcerRespectOwner = x))" Help="Do not fight changes made by the owner user ids below." />
+                        <MudItem xs="12">
+                            <MudTextField T="string" Value="_enforcerOwnerUserIds" ValueChanged="@(v => SetDirty(v, x => _enforcerOwnerUserIds = x))" Label="Owner Home Assistant user ids" Placeholder="abc123def456, ..." HelperText="Your own Home Assistant user_id(s), comma-separated. Changes from these are respected; everyone else is counteracted." Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <SettingInt Label="Debounce" Unit="s" Value="_enforcerDebounceSeconds" ValueChanged="@(v => SetDirty(v, x => _enforcerDebounceSeconds = x))" Min="2" Max="120" Help="A deviation must persist this long before enforcing." />
+                        <SettingInt Label="Cooldown" Unit="s" Value="_enforcerCooldownSeconds" ValueChanged="@(v => SetDirty(v, x => _enforcerCooldownSeconds = x))" Min="10" Max="600" Help="Minimum gap between re-asserts (also waits out the Home Assistant echo)." />
+                        <SettingInt Label="Rate window" Unit="min" Value="_enforcerRateWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _enforcerRateWindowMinutes = x))" Min="1" Max="240" Help="Window for the rate limit and override counting." />
+                        <SettingInt Label="Max asserts / window" Value="_enforcerMaxAssertsPerWindow" ValueChanged="@(v => SetDirty(v, x => _enforcerMaxAssertsPerWindow = x))" Min="1" Max="60" Help="Hold and escalate instead of thrashing past this many asserts." />
+                        <SettingInt Label="Escalate after overrides" Value="_enforcerEscalateAfterOverrides" ValueChanged="@(v => SetDirty(v, x => _enforcerEscalateAfterOverrides = x))" Min="1" Max="20" Help="Switch to firm mode after this many unwanted overrides in the window." />
+                        <SettingInt Label="Backoff base" Unit="s" Value="_enforcerBackoffBaseSeconds" ValueChanged="@(v => SetDirty(v, x => _enforcerBackoffBaseSeconds = x))" Min="5" Max="300" Help="Exponential backoff base when the device does not confirm commands." />
+                        <SettingInt Label="Backoff max" Unit="s" Value="_enforcerBackoffMaxSeconds" ValueChanged="@(v => SetDirty(v, x => _enforcerBackoffMaxSeconds = x))" Min="30" Max="3600" Help="Cap for the backoff wait." />
+                        <SettingSwitch Label="Schedule window" Value="_enforcerScheduleEnabled" ValueChanged="@(v => SetDirty(v, x => _enforcerScheduleEnabled = x))" Help="Only enforce inside the time window below." />
+                        <MudItem xs="6">
+                            <MudTextField T="string" Value="_enforcerStartTime" ValueChanged="@(v => SetDirty(v, x => _enforcerStartTime = x))" Label="Start (HH:mm)" Placeholder="00:00" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudTextField T="string" Value="_enforcerEndTime" ValueChanged="@(v => SetDirty(v, x => _enforcerEndTime = x))" Label="End (HH:mm)" Placeholder="23:59" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <SettingSwitch Label="Only when home" Value="_enforcerRequirePresence" ValueChanged="@(v => SetDirty(v, x => _enforcerRequirePresence = x))" Help="Only enforce while presence shows someone home." />
+                        <SettingSwitch Label="Notify on defend/interference" Value="_enforcerNotifyEnabled" ValueChanged="@(v => SetDirty(v, x => _enforcerNotifyEnabled = x))" Help="Send a Home Assistant notification (needs HomeAssistant:NotifyService configured)." />
+                        <SettingSwitch Label="Use trained models" Value="_enforcerUseLearning" ValueChanged="@(v => SetDirty(v, x => _enforcerUseLearning = x))" Help="Pace enforcement with the learned interference/cadence models once trained." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
         </MudExpansionPanels>
     </SectionCard>
 
@@ -832,6 +867,26 @@
     private int _remoteSettlingWindowMinutes = 30;
     private int _remoteSettlingHoldMinutes = 12;
     private double _remoteSettlingSafetyBandCelsius = 1.0;
+    private bool _enforcerModeEnabled;
+    private double _enforcerTargetTemperatureCelsius;
+    private bool _enforcerEnforceMode = true;
+    private bool _enforcerEnforceSetpoint = true;
+    private bool _enforcerStealthShaping = true;
+    private bool _enforcerRespectOwner = true;
+    private string _enforcerOwnerUserIds = "";
+    private int _enforcerDebounceSeconds = 8;
+    private int _enforcerCooldownSeconds = 30;
+    private int _enforcerRateWindowMinutes = 15;
+    private int _enforcerMaxAssertsPerWindow = 6;
+    private int _enforcerEscalateAfterOverrides = 3;
+    private int _enforcerBackoffBaseSeconds = 20;
+    private int _enforcerBackoffMaxSeconds = 300;
+    private bool _enforcerScheduleEnabled;
+    private string _enforcerStartTime = "00:00";
+    private string _enforcerEndTime = "23:59";
+    private bool _enforcerRequirePresence;
+    private bool _enforcerNotifyEnabled;
+    private bool _enforcerUseLearning = true;
     private bool _fanEnergySaverEnabled;
     private double _fanEnergySaverThresholdCelsius = 0.6;
     private string _fanEnergySaverMode = "auto";
@@ -1094,6 +1149,26 @@
         _remoteSettlingWindowMinutes = settings.RemoteSettlingWindowMinutes;
         _remoteSettlingHoldMinutes = settings.RemoteSettlingHoldMinutes;
         _remoteSettlingSafetyBandCelsius = settings.RemoteSettlingSafetyBandCelsius;
+        _enforcerModeEnabled = settings.EnforcerModeEnabled;
+        _enforcerTargetTemperatureCelsius = settings.EnforcerTargetTemperatureCelsius;
+        _enforcerEnforceMode = settings.EnforcerEnforceMode;
+        _enforcerEnforceSetpoint = settings.EnforcerEnforceSetpoint;
+        _enforcerStealthShaping = settings.EnforcerStealthShaping;
+        _enforcerRespectOwner = settings.EnforcerRespectOwner;
+        _enforcerOwnerUserIds = settings.EnforcerOwnerUserIds;
+        _enforcerDebounceSeconds = settings.EnforcerDebounceSeconds;
+        _enforcerCooldownSeconds = settings.EnforcerCooldownSeconds;
+        _enforcerRateWindowMinutes = settings.EnforcerRateWindowMinutes;
+        _enforcerMaxAssertsPerWindow = settings.EnforcerMaxAssertsPerWindow;
+        _enforcerEscalateAfterOverrides = settings.EnforcerEscalateAfterOverrides;
+        _enforcerBackoffBaseSeconds = settings.EnforcerBackoffBaseSeconds;
+        _enforcerBackoffMaxSeconds = settings.EnforcerBackoffMaxSeconds;
+        _enforcerScheduleEnabled = settings.EnforcerScheduleEnabled;
+        _enforcerStartTime = settings.EnforcerStartTime;
+        _enforcerEndTime = settings.EnforcerEndTime;
+        _enforcerRequirePresence = settings.EnforcerRequirePresence;
+        _enforcerNotifyEnabled = settings.EnforcerNotifyEnabled;
+        _enforcerUseLearning = settings.EnforcerUseLearning;
         _fanEnergySaverEnabled = settings.FanEnergySaverEnabled;
         _fanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius;
         _fanEnergySaverMode = settings.FanEnergySaverMode;
@@ -1398,7 +1473,27 @@
             _upstairsComfortBoostCelsius,
             _homePresenceRequired,
             _presenceEntityIds,
-            _schedule.Select(CloneScheduleEntry).ToList());
+            _schedule.Select(CloneScheduleEntry).ToList(),
+            _enforcerModeEnabled,
+            _enforcerTargetTemperatureCelsius,
+            _enforcerEnforceMode,
+            _enforcerEnforceSetpoint,
+            _enforcerStealthShaping,
+            _enforcerRespectOwner,
+            _enforcerOwnerUserIds,
+            _enforcerDebounceSeconds,
+            _enforcerCooldownSeconds,
+            _enforcerRateWindowMinutes,
+            _enforcerMaxAssertsPerWindow,
+            _enforcerEscalateAfterOverrides,
+            _enforcerBackoffBaseSeconds,
+            _enforcerBackoffMaxSeconds,
+            _enforcerScheduleEnabled,
+            _enforcerStartTime,
+            _enforcerEndTime,
+            _enforcerRequirePresence,
+            _enforcerNotifyEnabled,
+            _enforcerUseLearning);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

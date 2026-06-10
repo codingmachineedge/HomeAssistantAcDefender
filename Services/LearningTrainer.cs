@@ -18,6 +18,8 @@ public sealed class LearningTrainer
 {
     public const int AngerFeatureCount = 5;
     public const int ComfortFeatureCount = 2;
+    public const int InterferenceFeatureCount = 6;
+    public const int OverrideCadenceFeatureCount = 2;
 
     private const int Epochs = 500;
     private const double LearningRate = 0.2;
@@ -42,11 +44,36 @@ public sealed class LearningTrainer
         return [Math.Sin(angle), Math.Cos(angle)];
     }
 
+    /// <summary>Features for the interference classifier: time of day (cyclic), who is around, whether power
+    /// is expensive, how hot the room is vs target, and recent override pressure.</summary>
+    public static double[] InterferenceFeatures(int hourOfDay, bool ownerHome, bool bedroomOccupied, bool peakPower, double roomAboveTargetCelsius, int recentOverrideCount)
+    {
+        var angle = 2.0 * Math.PI * (((hourOfDay % 24) + 24) % 24) / 24.0;
+        return
+        [
+            Math.Sin(angle),
+            Math.Cos(angle),
+            ownerHome ? 1.0 : 0.0,
+            bedroomOccupied ? 1.0 : 0.0,
+            peakPower ? 1.0 : 0.0,
+            Math.Clamp(recentOverrideCount / 4.0, 0.0, 4.0),
+        ];
+    }
+
+    /// <summary>Features for the override-cadence regressor: time of day (cyclic).</summary>
+    public static double[] OverrideCadenceFeatures(int hourOfDay)
+    {
+        var angle = 2.0 * Math.PI * (((hourOfDay % 24) + 24) % 24) / 24.0;
+        return [Math.Sin(angle), Math.Cos(angle)];
+    }
+
     /// <summary>Fits both models from the supplied real samples, warm-starting from any prior weights.</summary>
     public LearningModelState Train(
         IReadOnlyList<(double[] Features, int Label)> angerSamples,
         IReadOnlyList<(double[] Features, double Target)> comfortSamples,
-        LearningModelState? warmStart)
+        LearningModelState? warmStart,
+        IReadOnlyList<(double[] Features, int Label)>? interferenceSamples = null,
+        IReadOnlyList<(double[] Features, double Target)>? overrideCadenceSamples = null)
     {
         var model = new LearningModelState
         {
@@ -59,26 +86,74 @@ public sealed class LearningTrainer
             ComfortSamples = warmStart?.ComfortSamples ?? 0,
             AngerLogLoss = warmStart?.AngerLogLoss ?? 0,
             ComfortRmse = warmStart?.ComfortRmse ?? 0,
+            InterferenceWeights = ResizeOrZero(warmStart?.InterferenceWeights, InterferenceFeatureCount),
+            InterferenceBias = warmStart?.InterferenceBias ?? 0.0,
+            InterferencePositiveSamples = warmStart?.InterferencePositiveSamples ?? 0,
+            InterferenceNegativeSamples = warmStart?.InterferenceNegativeSamples ?? 0,
+            InterferenceLogLoss = warmStart?.InterferenceLogLoss ?? 0,
+            OverrideCadenceWeights = ResizeOrZero(warmStart?.OverrideCadenceWeights, OverrideCadenceFeatureCount),
+            OverrideCadenceBias = warmStart?.OverrideCadenceBias ?? 0.0,
+            OverrideCadenceSamples = warmStart?.OverrideCadenceSamples ?? 0,
+            OverrideCadenceRmse = warmStart?.OverrideCadenceRmse ?? 0,
         };
 
         var validAnger = angerSamples.Where(s => s.Features.Length == AngerFeatureCount).ToList();
         if (validAnger.Count > 0 && validAnger.Any(s => s.Label == 1) && validAnger.Any(s => s.Label == 0))
         {
-            TrainLogistic(model, validAnger);
+            model.AngerBias = TrainLogistic(model.AngerWeights, model.AngerBias, validAnger);
             model.AngerPositiveSamples = validAnger.Count(s => s.Label == 1);
             model.AngerNegativeSamples = validAnger.Count(s => s.Label == 0);
-            model.AngerLogLoss = Math.Round(LogLoss(model, validAnger), 4);
+            model.AngerLogLoss = Math.Round(LogLoss(model.AngerWeights, model.AngerBias, validAnger), 4);
         }
 
         var validComfort = comfortSamples.Where(s => s.Features.Length == ComfortFeatureCount).ToList();
         if (validComfort.Count > 0)
         {
-            TrainLinear(model, validComfort);
+            model.ComfortBias = TrainLinear(model.ComfortWeights, model.ComfortBias, validComfort);
             model.ComfortSamples = validComfort.Count;
-            model.ComfortRmse = Math.Round(Rmse(model, validComfort), 3);
+            model.ComfortRmse = Math.Round(Rmse(model.ComfortWeights, model.ComfortBias, validComfort), 3);
+        }
+
+        var validInterference = (interferenceSamples ?? []).Where(s => s.Features.Length == InterferenceFeatureCount).ToList();
+        if (validInterference.Count > 0 && validInterference.Any(s => s.Label == 1) && validInterference.Any(s => s.Label == 0))
+        {
+            model.InterferenceBias = TrainLogistic(model.InterferenceWeights, model.InterferenceBias, validInterference);
+            model.InterferencePositiveSamples = validInterference.Count(s => s.Label == 1);
+            model.InterferenceNegativeSamples = validInterference.Count(s => s.Label == 0);
+            model.InterferenceLogLoss = Math.Round(LogLoss(model.InterferenceWeights, model.InterferenceBias, validInterference), 4);
+        }
+
+        var validCadence = (overrideCadenceSamples ?? []).Where(s => s.Features.Length == OverrideCadenceFeatureCount).ToList();
+        if (validCadence.Count > 0)
+        {
+            model.OverrideCadenceBias = TrainLinear(model.OverrideCadenceWeights, model.OverrideCadenceBias, validCadence);
+            model.OverrideCadenceSamples = validCadence.Count;
+            model.OverrideCadenceRmse = Math.Round(Rmse(model.OverrideCadenceWeights, model.OverrideCadenceBias, validCadence), 3);
         }
 
         return model;
+    }
+
+    /// <summary>P(unwanted external override | context) in [0,1]. Returns 0 until both classes are seen.</summary>
+    public double PredictInterferenceProbability(LearningModelState model, double[] features)
+    {
+        if (model.InterferencePositiveSamples <= 0 || model.InterferenceNegativeSamples <= 0 || model.InterferenceWeights.Length != features.Length)
+        {
+            return 0.0;
+        }
+
+        return Sigmoid(Dot(model.InterferenceWeights, features) + model.InterferenceBias);
+    }
+
+    /// <summary>Predicted minutes between consecutive overrides for the hour, or null until enough data.</summary>
+    public double? PredictOverrideCadenceMinutes(LearningModelState model, double[] features)
+    {
+        if (model.OverrideCadenceSamples < 4 || model.OverrideCadenceWeights.Length != features.Length)
+        {
+            return null;
+        }
+
+        return Dot(model.OverrideCadenceWeights, features) + model.OverrideCadenceBias;
     }
 
     /// <summary>P(upset | context) in [0,1]. Returns 0 until the classifier has both classes to learn from.</summary>
@@ -103,10 +178,12 @@ public sealed class LearningTrainer
         return Dot(model.ComfortWeights, features) + model.ComfortBias;
     }
 
-    private static void TrainLogistic(LearningModelState model, IReadOnlyList<(double[] Features, int Label)> samples)
+    // Trains in place: mutates the supplied weights array and returns the fitted bias. Shared by every
+    // logistic model (anger, interference) so one tested implementation backs them all.
+    private static double TrainLogistic(double[] weights, double bias, IReadOnlyList<(double[] Features, int Label)> samples)
     {
-        var w = (double[])model.AngerWeights.Clone();
-        var b = model.AngerBias;
+        var w = weights;
+        var b = bias;
         var n = samples.Count;
         for (var epoch = 0; epoch < Epochs; epoch++)
         {
@@ -131,14 +208,13 @@ public sealed class LearningTrainer
             b -= LearningRate * (gb / n);
         }
 
-        model.AngerWeights = w;
-        model.AngerBias = b;
+        return b;
     }
 
-    private static void TrainLinear(LearningModelState model, IReadOnlyList<(double[] Features, double Target)> samples)
+    private static double TrainLinear(double[] weights, double bias, IReadOnlyList<(double[] Features, double Target)> samples)
     {
-        var w = (double[])model.ComfortWeights.Clone();
-        var b = model.ComfortBias;
+        var w = weights;
+        var b = bias;
         var n = samples.Count;
         for (var epoch = 0; epoch < Epochs; epoch++)
         {
@@ -163,8 +239,7 @@ public sealed class LearningTrainer
             b -= LearningRate * (gb / n);
         }
 
-        model.ComfortWeights = w;
-        model.ComfortBias = b;
+        return b;
     }
 
     private static double Sigmoid(double z) => 1.0 / (1.0 + Math.Exp(-Math.Clamp(z, -30.0, 30.0)));
@@ -180,24 +255,24 @@ public sealed class LearningTrainer
         return sum;
     }
 
-    private static double LogLoss(LearningModelState model, IReadOnlyList<(double[] Features, int Label)> samples)
+    private static double LogLoss(double[] weights, double bias, IReadOnlyList<(double[] Features, int Label)> samples)
     {
         var loss = 0.0;
         foreach (var (x, y) in samples)
         {
-            var p = Math.Clamp(Sigmoid(Dot(model.AngerWeights, x) + model.AngerBias), 1e-9, 1 - 1e-9);
+            var p = Math.Clamp(Sigmoid(Dot(weights, x) + bias), 1e-9, 1 - 1e-9);
             loss += -((y * Math.Log(p)) + ((1 - y) * Math.Log(1 - p)));
         }
 
         return loss / samples.Count;
     }
 
-    private static double Rmse(LearningModelState model, IReadOnlyList<(double[] Features, double Target)> samples)
+    private static double Rmse(double[] weights, double bias, IReadOnlyList<(double[] Features, double Target)> samples)
     {
         var sum = 0.0;
         foreach (var (x, y) in samples)
         {
-            var error = (Dot(model.ComfortWeights, x) + model.ComfortBias) - y;
+            var error = (Dot(weights, x) + bias) - y;
             sum += error * error;
         }
 

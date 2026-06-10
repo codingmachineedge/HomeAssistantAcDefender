@@ -50,6 +50,20 @@ tests.ComfortEnvelopeObservesSmallSafeWallPreferenceButBypassesHotRoom();
 tests.PeakPowerSaverHoldsSafeCoolingDuringAlectraOnPeakButBypassesHotRoom();
 tests.SuperDefenderClassifiesRemoteHomeAssistantChangesAndBypassesQuietTiming();
 tests.RemoteSettlingHoldsSafeRemotePatternButBypassesHotRoom();
+tests.EnforcerRestoresCoolWhenTurnedOffByAnotherPerson();
+tests.EnforcerSnapsToExactTargetWhenSetpointRaisedByAnotherPerson();
+tests.EnforcerRespectsOwnerOwnChange();
+tests.EnforcerDebouncesBeforeEnforcing();
+tests.EnforcerCooldownWaitsForHomeAssistantToConfirm();
+tests.EnforcerBacksOffWhenDeviceRejectsCommands();
+tests.EnforcerEscalatesAfterRepeatedOverrides();
+tests.EnforcerRateLimitHoldsInsteadOfThrashing();
+tests.EnforcerClampsAssertToDeviceMinMax();
+tests.EnforcerStealthModeLetsNaturalPipelineHandleSetpointRaise();
+tests.EnforcerStealthWaitsLongerDuringHighAngerHours();
+tests.EnforcerInactiveWhenDisabledLeavesStealthPipelineUnchanged();
+tests.EnforcerLearningModelsTrainInterferenceAndCadenceFromOverrides();
+tests.EnforcerConsumesTrainedInterferenceModel();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -2052,6 +2066,424 @@ internal sealed class DefenderSetPointRegressionTests
         }
     }
 
+    // ===================== Desired-State Enforcer =====================
+
+    private static DefenderSettings EnforcerSettings(DefenderStateStore store, Action<DefenderSettings> configure)
+    {
+        var s = store.GetSettings();
+        s.EnforcerModeEnabled = true;
+        s.EnforcerEnforceMode = true;
+        s.EnforcerEnforceSetpoint = true;
+        s.EnforcerStealthShaping = false;
+        s.EnforcerRespectOwner = true;
+        s.EnforcerOwnerUserIds = "";
+        s.EnforcerDebounceSeconds = 8;
+        s.EnforcerCooldownSeconds = 30;
+        s.EnforcerRateWindowMinutes = 15;
+        s.EnforcerMaxAssertsPerWindow = 6;
+        s.EnforcerEscalateAfterOverrides = 3;
+        s.EnforcerBackoffBaseSeconds = 20;
+        s.EnforcerBackoffMaxSeconds = 300;
+        s.EnforcerNotifyEnabled = false;
+        s.EnforcerUseLearning = false;
+        s.EnforcerScheduleEnabled = false;
+        s.EnforcerRequirePresence = false;
+        configure(s);
+        SetRuntimeProperty(store, "Settings", s);
+        return s;
+    }
+
+    private static ThermostatReading EnforcerReading(string hvacMode, double setPoint, double room, string? userId, double? min = null, double? max = null)
+        => new(
+            "climate.dining_room",
+            room,
+            setPoint,
+            hvacMode,
+            string.Equals(hvacMode, "cool", StringComparison.OrdinalIgnoreCase) ? "idle" : "off",
+            null,
+            [],
+            new HomeAssistantStateContext("ctx", null, userId),
+            min,
+            max);
+
+    public void EnforcerRestoresCoolWhenTurnedOffByAnotherPerson()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        EnforcerSettings(store, _ => { });
+
+        var now = DateTimeOffset.UtcNow;
+        SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-60));
+        var gate = store.EvaluateEnforcer(EnforcerReading("off", 22.0, 24.0, "intruder"), now);
+
+        if (gate.Decision != EnforcerDecision.EnforceMode)
+        {
+            throw new InvalidOperationException($"Enforcer should restore cool mode when someone else turns the AC off, got {gate.Decision}.");
+        }
+
+        AssertEqual(22.0, gate.AssertSetPoint, "Restoring after an off should command the desired target.");
+
+        var snapshot = store.GetSnapshot();
+        if (snapshot.Enforcer.LastChangeUser != "intruder")
+        {
+            throw new InvalidOperationException("Enforcer snapshot should attribute the off to the external user.");
+        }
+    }
+
+    public void EnforcerSnapsToExactTargetWhenSetpointRaisedByAnotherPerson()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(21.0);
+        EnforcerSettings(store, s => s.EnforcerStealthShaping = false);
+
+        var now = DateTimeOffset.UtcNow;
+        SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-60));
+        var gate = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now);
+
+        if (gate.Decision != EnforcerDecision.EnforceSetpoint)
+        {
+            throw new InvalidOperationException($"Enforcer should restore the setpoint after an external raise, got {gate.Decision}.");
+        }
+
+        AssertEqual(21.0, gate.AssertSetPoint, "Hard mode should snap to the owner's exact target.");
+    }
+
+    public void EnforcerRespectsOwnerOwnChange()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(21.0);
+        EnforcerSettings(store, s =>
+        {
+            s.EnforcerRespectOwner = true;
+            s.EnforcerOwnerUserIds = "owner-123";
+        });
+
+        var now = DateTimeOffset.UtcNow;
+        var gate = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "owner-123"), now);
+
+        if (gate.Decision != EnforcerDecision.RespectOwner)
+        {
+            throw new InvalidOperationException($"A change attributed to the owner must be respected, got {gate.Decision}.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (snapshot.Enforcer.RecentAssertCount != 0)
+        {
+            throw new InvalidOperationException("Respecting the owner must not count an assert.");
+        }
+    }
+
+    public void EnforcerDebouncesBeforeEnforcing()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(21.0);
+        EnforcerSettings(store, s => s.EnforcerDebounceSeconds = 30);
+
+        var now = DateTimeOffset.UtcNow;
+        var first = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now);
+        if (first.Decision != EnforcerDecision.Cooldown || !first.Message.Contains("debounc", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"A fresh deviation should debounce first, got {first.Decision}.");
+        }
+
+        SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-60));
+        var afterDebounce = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now.AddSeconds(1));
+        if (afterDebounce.Decision != EnforcerDecision.EnforceSetpoint)
+        {
+            throw new InvalidOperationException($"After the debounce window the enforcer should assert, got {afterDebounce.Decision}.");
+        }
+    }
+
+    public void EnforcerCooldownWaitsForHomeAssistantToConfirm()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(21.0);
+        EnforcerSettings(store, s => s.EnforcerCooldownSeconds = 30);
+
+        var now = DateTimeOffset.UtcNow;
+        SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-60));
+        SetRuntimeProperty(store, "EnforcerLastAssertAt", now.AddSeconds(-5));
+        var gate = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now);
+
+        if (gate.Decision != EnforcerDecision.Cooldown || !gate.Message.Contains("confirm", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Inside the echo/cooldown window the enforcer must wait, got {gate.Decision}.");
+        }
+    }
+
+    public void EnforcerBacksOffWhenDeviceRejectsCommands()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(21.0);
+        EnforcerSettings(store, s =>
+        {
+            s.EnforcerCooldownSeconds = 30;
+            s.EnforcerBackoffBaseSeconds = 20;
+        });
+
+        var now = DateTimeOffset.UtcNow;
+        // Cooldown is max(EnforcerCooldownSeconds, max(15, CommandGraceSeconds=120)) = 120s. Put the last
+        // assert just past the cooldown so the device-reject backoff (20*2^1 = 40s) is the active gate.
+        SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-200));
+        SetRuntimeProperty(store, "EnforcerLastAssertAt", now.AddSeconds(-130));
+        SetRuntimeProperty(store, "EnforcerConsecutiveRejects", 2);
+        var gate = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now);
+
+        if (gate.Decision != EnforcerDecision.Backoff || !gate.Message.Contains("backing off", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"A non-confirming device should trigger exponential backoff, got {gate.Decision}.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (snapshot.Enforcer.RecentAssertCount != 0)
+        {
+            throw new InvalidOperationException("Backoff must not send a new assert.");
+        }
+    }
+
+    public void EnforcerEscalatesAfterRepeatedOverrides()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(21.0);
+        EnforcerSettings(store, s =>
+        {
+            s.EnforcerStealthShaping = true;
+            s.EnforcerEscalateAfterOverrides = 3;
+            s.EnforcerNotifyEnabled = true;
+        });
+
+        var now = DateTimeOffset.UtcNow;
+        SetRuntimeProperty(store, "EnforcerOverrideTimes", new List<DateTimeOffset>
+        {
+            now.AddMinutes(-3),
+            now.AddMinutes(-2),
+            now.AddMinutes(-1)
+        });
+
+        var gate = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now);
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.Enforcer.Escalated)
+        {
+            throw new InvalidOperationException("Repeated external overrides should escalate the enforcer.");
+        }
+
+        if (!gate.Notify || !gate.NotifyMessage.Contains("interference", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Escalation with notify enabled should raise an interference notification.");
+        }
+    }
+
+    public void EnforcerRateLimitHoldsInsteadOfThrashing()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(21.0);
+        EnforcerSettings(store, s => s.EnforcerMaxAssertsPerWindow = 2);
+
+        var now = DateTimeOffset.UtcNow;
+        SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-60));
+        SetRuntimeProperty(store, "EnforcerAssertTimes", new List<DateTimeOffset>
+        {
+            now.AddMinutes(-2),
+            now.AddMinutes(-1)
+        });
+
+        var gate = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now);
+
+        if (gate.Decision != EnforcerDecision.Backoff || !gate.Message.Contains("Rate limit", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Hitting the rate limit should hold instead of thrashing, got {gate.Decision}.");
+        }
+    }
+
+    public void EnforcerClampsAssertToDeviceMinMax()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        EnforcerSettings(store, s => s.EnforcerTargetTemperatureCelsius = 10.0);
+
+        // Feed a reading that carries the device's real min/max so the store captures them.
+        store.RecordHomeAssistantReading(EnforcerReading("cool", 24.0, 24.0, "intruder", min: 16.0, max: 26.0));
+
+        var now = DateTimeOffset.UtcNow;
+        SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-60));
+        var gate = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 24.0, "intruder", min: 16.0, max: 26.0), now);
+
+        if (gate.Decision != EnforcerDecision.EnforceSetpoint)
+        {
+            throw new InvalidOperationException($"Enforcer should assert when the setpoint is above the (clamped) target, got {gate.Decision}.");
+        }
+
+        AssertEqual(16.0, gate.AssertSetPoint, "A below-min desired target must be clamped up to the device minimum.");
+    }
+
+    public void EnforcerStealthModeLetsNaturalPipelineHandleSetpointRaise()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(21.0);
+        EnforcerSettings(store, s =>
+        {
+            s.EnforcerStealthShaping = true;
+            s.EnforcerEscalateAfterOverrides = 10;
+        });
+
+        var now = DateTimeOffset.UtcNow;
+        SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-60));
+        var gate = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now);
+
+        if (gate.Decision != EnforcerDecision.Inactive || !gate.Message.Contains("Stealth", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Stealth mode should hand a non-escalated setpoint raise to the natural pipeline, got {gate.Decision}.");
+        }
+    }
+
+    public void EnforcerInactiveWhenDisabledLeavesStealthPipelineUnchanged()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(21.0);
+        EnforcerSettings(store, s => s.EnforcerModeEnabled = false);
+
+        var gate = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), DateTimeOffset.UtcNow);
+        if (gate.Decision != EnforcerDecision.Inactive)
+        {
+            throw new InvalidOperationException($"A disabled enforcer must stay inactive so the stealth pipeline runs, got {gate.Decision}.");
+        }
+
+        // The existing pipeline must still be reachable/working when the enforcer is off.
+        AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "The existing warm-room path must remain intact when the enforcer is off.");
+    }
+
+    public void EnforcerStealthWaitsLongerDuringHighAngerHours()
+    {
+        var localHour = DateTimeOffset.UtcNow.ToLocalTime().Hour;
+
+        // Baseline: stealth mode, learning on, no anger history. A deviation pending for 10s clears the 8s
+        // debounce and is handed to the natural pipeline (Inactive).
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(21.0);
+            EnforcerSettings(store, s =>
+            {
+                s.EnforcerStealthShaping = true;
+                s.EnforcerUseLearning = true;
+                s.EnforcerDebounceSeconds = 8;
+                s.EnforcerEscalateAfterOverrides = 50;
+            });
+
+            var now = DateTimeOffset.UtcNow;
+            SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-10));
+            var baseline = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now);
+            if (baseline.Decision != EnforcerDecision.Inactive)
+            {
+                throw new InvalidOperationException($"Without anger history a 10s-old deviation should clear the 8s debounce, got {baseline.Decision}.");
+            }
+        }
+
+        // High-upset hour: the same 10s-old deviation must still be debouncing because the trained-anger
+        // sensitivity stretches the stealth debounce (so the fix is less likely to make anyone mad).
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(21.0);
+            EnforcerSettings(store, s =>
+            {
+                s.EnforcerStealthShaping = true;
+                s.EnforcerUseLearning = true;
+                s.EnforcerDebounceSeconds = 8;
+                s.EnforcerEscalateAfterOverrides = 50;
+            });
+
+            var now = DateTimeOffset.UtcNow;
+            SeedAngerMemorySlot(store, localHour, 0.9, now);
+            SetRuntimeProperty(store, "EnforcerPendingSince", now.AddSeconds(-10));
+            var cautious = store.EvaluateEnforcer(EnforcerReading("cool", 24.0, 21.5, "intruder"), now);
+            if (cautious.Decision != EnforcerDecision.Cooldown)
+            {
+                throw new InvalidOperationException($"A high-upset hour should stretch the stealth debounce so the deviation is still waiting, got {cautious.Decision}.");
+            }
+        }
+    }
+
+    public void EnforcerLearningModelsTrainInterferenceAndCadenceFromOverrides()
+    {
+        var trainer = new LearningTrainer();
+
+        var interferenceSamples = new List<(double[] Features, int Label)>();
+        var cadenceSamples = new List<(double[] Features, double Target)>();
+        for (var i = 0; i < 8; i++)
+        {
+            // Evening, owner home, bedroom occupied, room hot -> interference.
+            interferenceSamples.Add((LearningTrainer.InterferenceFeatures(21, true, true, false, 3.0, 3), 1));
+            // Pre-dawn, away, cool room -> benign.
+            interferenceSamples.Add((LearningTrainer.InterferenceFeatures(4, false, false, false, -1.0, 0), 0));
+            // People fight roughly every 8 min in the evening, ~45 min midday.
+            cadenceSamples.Add((LearningTrainer.OverrideCadenceFeatures(21), 8.0));
+            cadenceSamples.Add((LearningTrainer.OverrideCadenceFeatures(13), 45.0));
+        }
+
+        var model = trainer.Train([], [], null, interferenceSamples, cadenceSamples);
+
+        var hot = trainer.PredictInterferenceProbability(model, LearningTrainer.InterferenceFeatures(21, true, true, false, 3.0, 3));
+        var calm = trainer.PredictInterferenceProbability(model, LearningTrainer.InterferenceFeatures(4, false, false, false, -1.0, 0));
+        if (hot <= 0.5 || calm >= 0.5 || hot <= calm)
+        {
+            throw new InvalidOperationException($"Interference model should separate likely ({hot:0.00}) from unlikely ({calm:0.00}) contexts.");
+        }
+
+        var evening = trainer.PredictOverrideCadenceMinutes(model, LearningTrainer.OverrideCadenceFeatures(21));
+        var midday = trainer.PredictOverrideCadenceMinutes(model, LearningTrainer.OverrideCadenceFeatures(13));
+        if (evening is not { } e || midday is not { } m || e >= m)
+        {
+            throw new InvalidOperationException($"Cadence model should learn faster evening fighting than midday, got {evening:0.0}/{midday:0.0}.");
+        }
+    }
+
+    public void EnforcerConsumesTrainedInterferenceModel()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        EnforcerSettings(store, s => s.EnforcerUseLearning = true);
+
+        var now = DateTimeOffset.UtcNow;
+        var samples = new List<EnforcerOverrideSample>();
+        for (var i = 0; i < 6; i++)
+        {
+            samples.Add(new EnforcerOverrideSample { At = now.AddMinutes(-i * 7), HourOfDay = 21, OwnerHome = true, BedroomOccupied = true, PeakPower = false, RoomAboveTargetCelsius = 3.0, RecentOverrideCount = 3, Label = 1 });
+            samples.Add(new EnforcerOverrideSample { At = now.AddHours(-i - 1), HourOfDay = 4, OwnerHome = false, BedroomOccupied = false, PeakPower = false, RoomAboveTargetCelsius = -1.0, RecentOverrideCount = 0, Label = 0 });
+        }
+
+        SetRuntimeProperty(store, "EnforcerOverrideSamples", samples);
+        store.TrainLearningModels(now);
+
+        var trainedSnapshot = store.GetSnapshot();
+        if (!trainedSnapshot.LearningModel.InterferenceModelTrained || trainedSnapshot.LearningModel.InterferencePositiveSamples <= 0)
+        {
+            throw new InvalidOperationException("The enforcer override log should train the interference model.");
+        }
+
+        // With the model trained and learning enabled, a live evaluation should report the model as active.
+        store.RecordHomeAssistantReading(EnforcerReading("cool", 22.0, 22.0, "intruder"));
+        store.EvaluateEnforcer(EnforcerReading("cool", 22.0, 22.0, "intruder"), now);
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.Enforcer.LearningActive)
+        {
+            throw new InvalidOperationException("With trained data and learning enabled, the enforcer should be using the trained model.");
+        }
+    }
+
     public void PeakPowerSaverHoldsSafeCoolingDuringAlectraOnPeakButBypassesHotRoom()
     {
         using var fixture = DefenderStoreFixture.Create();
@@ -2197,6 +2629,22 @@ internal sealed class DefenderSetPointRegressionTests
         var elementType = listProperty.PropertyType.GetGenericArguments()[0];
         var sample = elementType.GetConstructors()[0].Invoke([timestamp, temperatureCelsius]);
         list.Add(sample);
+    }
+
+    private static void SeedAngerMemorySlot(DefenderStateStore store, int hourOfDay, double angerScore, DateTimeOffset updatedAt)
+    {
+        var state = GetRuntimeState(store);
+        var listProperty = state.GetType().GetProperty("AngerMemorySlots")
+            ?? throw new InvalidOperationException("Could not find AngerMemorySlots state property.");
+        var list = (System.Collections.IList?)listProperty.GetValue(state)
+            ?? throw new InvalidOperationException("Could not read AngerMemorySlots.");
+        var elementType = listProperty.PropertyType.GetGenericArguments()[0];
+        var slot = Activator.CreateInstance(elementType)
+            ?? throw new InvalidOperationException("Could not create an AngerMemorySlot.");
+        elementType.GetProperty("HourOfDay")!.SetValue(slot, hourOfDay);
+        elementType.GetProperty("AngerScore")!.SetValue(slot, angerScore);
+        elementType.GetProperty("UpdatedAt")!.SetValue(slot, updatedAt);
+        list.Add(slot);
     }
 
     private static object GetRuntimeState(DefenderStateStore store)

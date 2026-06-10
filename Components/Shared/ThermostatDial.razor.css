@@ -1,0 +1,165 @@
+.tdial {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+}
+
+.tdial-face {
+    position: relative;
+    width: 240px;
+    max-width: 100%;
+    aspect-ratio: 1 / 1;
+}
+
+.tdial-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.tdial-bezel {
+    fill: #11161d;
+    stroke: #2a323d;
+    stroke-width: 2;
+}
+
+.tdial--cooling .tdial-bezel {
+    filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.45));
+}
+
+.tdial-inner {
+    fill: #161c25;
+    stroke: #232b36;
+    stroke-width: 1;
+}
+
+.tdial-tick {
+    stroke: #39414d;
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+
+.tdial-tick--on {
+    stroke: #6f7d8c;
+}
+
+.tdial--cooling .tdial-tick--on {
+    stroke: #38bdf8;
+}
+
+.tdial--idle .tdial-tick--on {
+    stroke: #b9c4d2;
+}
+
+.tdial--off .tdial-tick--on {
+    stroke: #4b5563;
+}
+
+.tdial-track {
+    fill: none;
+    stroke: #2a323d;
+    stroke-width: 8;
+    stroke-linecap: round;
+}
+
+.tdial-fill {
+    fill: none;
+    stroke: #38bdf8;
+    stroke-width: 8;
+    stroke-linecap: round;
+    transition: stroke-dasharray 0.3s ease;
+}
+
+.tdial--idle .tdial-fill {
+    stroke: #8ea2b8;
+}
+
+.tdial--off .tdial-fill {
+    stroke: #4b5563;
+}
+
+.tdial-room-dot {
+    fill: #f8fafc;
+    stroke: #0b0f14;
+    stroke-width: 2;
+}
+
+.tdial-target {
+    fill: #f8fafc;
+    font-size: 46px;
+    font-weight: 600;
+    letter-spacing: -1px;
+}
+
+.tdial-unit {
+    font-size: 18px;
+    fill: #9aa7b6;
+    font-weight: 500;
+}
+
+.tdial-mode {
+    fill: #38bdf8;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.tdial--idle .tdial-mode {
+    fill: #b9c4d2;
+}
+
+.tdial--off .tdial-mode {
+    fill: #6b7280;
+}
+
+.tdial-room {
+    fill: #8593a3;
+    font-size: 13px;
+}
+
+.tdial-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid #2f3845;
+    background: #1b222c;
+    color: #e5edf6;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.tdial-btn:hover {
+    background: #273140;
+}
+
+.tdial-btn:active {
+    transform: translateY(-50%) scale(0.92);
+}
+
+.tdial-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.tdial-btn--down {
+    left: -6px;
+}
+
+.tdial-btn--up {
+    right: -6px;
+}
+
+.tdial-footer {
+    width: 100%;
+}

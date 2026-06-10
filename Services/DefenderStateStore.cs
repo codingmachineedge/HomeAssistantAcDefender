@@ -414,6 +414,115 @@ public sealed class DefenderStateStore
             state.Settings.HomePresenceRequired = request.HomePresenceRequired;
             state.Settings.PresenceEntityIds = request.PresenceEntityIds?.Trim() ?? string.Empty;
             state.Settings.DefenderRunsContinuously = true;
+
+            // Desired-State Enforcer. Apply only the values that are present so a partial save never resets it.
+            if (request.EnforcerModeEnabled is { } enforcerEnabled)
+            {
+                state.Settings.EnforcerModeEnabled = enforcerEnabled;
+            }
+
+            if (request.EnforcerTargetTemperatureCelsius is { } enforcerTarget)
+            {
+                state.Settings.EnforcerTargetTemperatureCelsius = enforcerTarget <= 0
+                    ? 0.0
+                    : Math.Round(Math.Clamp(enforcerTarget, 10.0, 35.0), 1);
+            }
+
+            if (request.EnforcerEnforceMode is { } enforcerEnforceMode)
+            {
+                state.Settings.EnforcerEnforceMode = enforcerEnforceMode;
+            }
+
+            if (request.EnforcerEnforceSetpoint is { } enforcerEnforceSetpoint)
+            {
+                state.Settings.EnforcerEnforceSetpoint = enforcerEnforceSetpoint;
+            }
+
+            if (request.EnforcerStealthShaping is { } enforcerStealth)
+            {
+                state.Settings.EnforcerStealthShaping = enforcerStealth;
+            }
+
+            if (request.EnforcerRespectOwner is { } enforcerRespectOwner)
+            {
+                state.Settings.EnforcerRespectOwner = enforcerRespectOwner;
+            }
+
+            if (request.EnforcerOwnerUserIds is not null)
+            {
+                state.Settings.EnforcerOwnerUserIds = request.EnforcerOwnerUserIds.Trim();
+            }
+
+            if (request.EnforcerDebounceSeconds is { } enforcerDebounce)
+            {
+                state.Settings.EnforcerDebounceSeconds = Math.Clamp(enforcerDebounce, 2, 120);
+            }
+
+            if (request.EnforcerCooldownSeconds is { } enforcerCooldown)
+            {
+                state.Settings.EnforcerCooldownSeconds = Math.Clamp(enforcerCooldown, 10, 600);
+            }
+
+            if (request.EnforcerRateWindowMinutes is { } enforcerWindow)
+            {
+                state.Settings.EnforcerRateWindowMinutes = Math.Clamp(enforcerWindow, 1, 240);
+            }
+
+            if (request.EnforcerMaxAssertsPerWindow is { } enforcerMaxAsserts)
+            {
+                state.Settings.EnforcerMaxAssertsPerWindow = Math.Clamp(enforcerMaxAsserts, 1, 60);
+            }
+
+            if (request.EnforcerEscalateAfterOverrides is { } enforcerEscalate)
+            {
+                state.Settings.EnforcerEscalateAfterOverrides = Math.Clamp(enforcerEscalate, 1, 20);
+            }
+
+            if (request.EnforcerBackoffBaseSeconds is { } enforcerBackoffBase)
+            {
+                state.Settings.EnforcerBackoffBaseSeconds = Math.Clamp(enforcerBackoffBase, 5, 300);
+            }
+
+            if (request.EnforcerBackoffMaxSeconds is { } enforcerBackoffMax)
+            {
+                state.Settings.EnforcerBackoffMaxSeconds = Math.Clamp(enforcerBackoffMax, 30, 3600);
+            }
+
+            if (request.EnforcerScheduleEnabled is { } enforcerScheduleEnabled)
+            {
+                state.Settings.EnforcerScheduleEnabled = enforcerScheduleEnabled;
+            }
+
+            if (request.EnforcerStartTime is not null)
+            {
+                state.Settings.EnforcerStartTime = NormalizeHourMinute(request.EnforcerStartTime, "00:00");
+            }
+
+            if (request.EnforcerEndTime is not null)
+            {
+                state.Settings.EnforcerEndTime = NormalizeHourMinute(request.EnforcerEndTime, "23:59");
+            }
+
+            if (request.EnforcerRequirePresence is { } enforcerRequirePresence)
+            {
+                state.Settings.EnforcerRequirePresence = enforcerRequirePresence;
+            }
+
+            if (request.EnforcerNotifyEnabled is { } enforcerNotify)
+            {
+                state.Settings.EnforcerNotifyEnabled = enforcerNotify;
+            }
+
+            if (request.EnforcerUseLearning is { } enforcerUseLearning)
+            {
+                state.Settings.EnforcerUseLearning = enforcerUseLearning;
+            }
+
+            if (!state.Settings.EnforcerModeEnabled)
+            {
+                ClearEnforcerRuntime();
+            }
+
             state.Schedule = request.Schedule
                 .Select(NormalizeScheduleEntry)
                 .Take(24)
@@ -782,6 +891,16 @@ public sealed class DefenderStateStore
                 ContextUserId = reading.Context?.UserId,
                 UpdatedAt = now
             };
+            if (reading.MinSetPointCelsius is { } deviceMin)
+            {
+                state.DeviceMinSetPointCelsius = deviceMin;
+            }
+
+            if (reading.MaxSetPointCelsius is { } deviceMax)
+            {
+                state.DeviceMaxSetPointCelsius = deviceMax;
+            }
+
             TrackHvacActionAlibiTransition(reading, previousHvacAction, now);
             TrackCoolingRunway(reading, previousHvacAction, now);
             UpdateCoolingFailureDetection(reading, now);
@@ -1143,6 +1262,380 @@ public sealed class DefenderStateStore
             state.CoolModeRestoreStatus = $"Cool mode restore sent from {previousMode}.";
             SaveState();
         }
+    }
+
+    // ============================================================================================
+    // Desired-State Enforcer
+    // The assertive supervisor that makes the owner's chosen AC state win automatically when someone
+    // else turns it off or moves the setpoint. It is attribution-aware (respects the owner's own
+    // changes via Home Assistant context.user_id), debounced, cooldown/backoff/rate-limited, escalates
+    // on repeated interference, and can run in smart-stealth mode (let the human-like pipeline ease the
+    // setpoint back) or hard mode (snap to the exact target). It reads the trained interference model to
+    // pace itself. It performs NO Home Assistant IO and never throws on missing data — the caller does
+    // the IO and the existing try/catch keeps the worker from crash-looping.
+    // ============================================================================================
+    public EnforcerGate EvaluateEnforcer(ThermostatReading reading, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            var s = state.Settings;
+
+            EnforcerGate Gate(EnforcerDecision decision, string message, DateTimeOffset until, double setPoint = 0, bool notify = false, string notifyMessage = "")
+                => new(decision, setPoint, message, until, notify, notifyMessage, s.EnforcerStealthShaping);
+
+            if (!s.EnforcerModeEnabled)
+            {
+                state.EnforcerLearningActive = false;
+                state.EnforcerStatus = "Desired-State Enforcer is off; the stealth pipeline runs normally.";
+                return Gate(EnforcerDecision.Inactive, state.EnforcerStatus, now);
+            }
+
+            if (s.EnforcerScheduleEnabled && !EnforcerInWindow(s, now))
+            {
+                state.EnforcerStatus = $"Outside the enforce window ({s.EnforcerStartTime}-{s.EnforcerEndTime}); stealth pipeline runs.";
+                return Gate(EnforcerDecision.Inactive, state.EnforcerStatus, now);
+            }
+
+            if (s.EnforcerRequirePresence && !state.IsHome)
+            {
+                state.EnforcerStatus = "Nobody home; Desired-State Enforcer is idle.";
+                return Gate(EnforcerDecision.Inactive, state.EnforcerStatus, now);
+            }
+
+            var desiredTarget = ComputeEnforcerDesiredTarget(s);
+            var modeOff = s.EnforcerEnforceMode && !string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase);
+            var setpointAway = s.EnforcerEnforceSetpoint && (reading.SetPointCelsius - desiredTarget) > options.TemperatureToleranceCelsius;
+            var deviated = modeOff || setpointAway;
+
+            PruneEnforcerOverrideTimes(now, s);
+            PruneEnforcerAssertTimes(now, s);
+
+            // Trained-model telemetry (read only) for the snapshot and smart pacing.
+            var roomAboveTarget = Math.Round(reading.CurrentTemperatureCelsius - desiredTarget, 2);
+            var interference = s.EnforcerUseLearning
+                ? learningTrainer.PredictInterferenceProbability(
+                    state.LearningModel,
+                    LearningTrainer.InterferenceFeatures(
+                        now.ToLocalTime().Hour,
+                        state.IsHome,
+                        state.MasterBedroomOccupied,
+                        IsPeakPowerNow(),
+                        roomAboveTarget,
+                        state.EnforcerOverrideTimes.Count))
+                : 0.0;
+            state.EnforcerInterferenceProbability = Math.Round(interference, 3);
+            state.EnforcerLearningActive = s.EnforcerUseLearning
+                && state.LearningModel.InterferencePositiveSamples > 0
+                && state.LearningModel.InterferenceNegativeSamples > 0;
+
+            var changeUser = reading.Context?.UserId;
+            state.EnforcerLastChangeUser = string.IsNullOrWhiteSpace(changeUser) ? "device/cloud/unknown" : changeUser!;
+
+            if (!deviated)
+            {
+                // The desired state holds: the last assert stuck. Clear reject/pending and de-escalate as
+                // overrides age out of the window. Sample a benign negative for the interference model.
+                state.EnforcerConsecutiveRejects = 0;
+                state.EnforcerPendingSince = null;
+                if (state.EnforcerOverrideTimes.Count == 0)
+                {
+                    state.EnforcerEscalated = false;
+                }
+
+                RecordEnforcerBenignSampleIfDue(reading, desiredTarget, now);
+                state.EnforcerStatus = state.EnforcerEscalated
+                    ? $"Holding your {desiredTarget:0.0} C after repeated interference."
+                    : $"Desired state holding at {desiredTarget:0.0} C.";
+                SaveState();
+                return Gate(EnforcerDecision.Inactive, state.EnforcerStatus, now);
+            }
+
+            // Deviated. Attribution: respect the owner's own changes.
+            var ownerIds = ParseOwnerUserIds(s.EnforcerOwnerUserIds);
+            var isOwner = s.EnforcerRespectOwner && !string.IsNullOrWhiteSpace(changeUser) && ownerIds.Contains(changeUser!);
+            if (isOwner)
+            {
+                state.EnforcerPendingSince = null;
+                state.EnforcerStatus = $"Change attributed to the owner ({changeUser}); respecting it.";
+                SaveState();
+                return Gate(EnforcerDecision.RespectOwner, state.EnforcerStatus, now.AddSeconds(Math.Max(3, options.PollIntervalSeconds)));
+            }
+
+            // First sighting of this deviation episode: record the override (escalation + ML training data).
+            if (state.EnforcerPendingSince is null)
+            {
+                state.EnforcerPendingSince = now;
+                RecordEnforcerOverride(reading, desiredTarget, now);
+                PruneEnforcerOverrideTimes(now, s);
+            }
+
+            var overrideCount = state.EnforcerOverrideTimes.Count;
+            var notify = false;
+            var notifyMessage = string.Empty;
+            if (overrideCount >= Math.Max(1, s.EnforcerEscalateAfterOverrides) && !state.EnforcerEscalated)
+            {
+                state.EnforcerEscalated = true;
+                AddEvent("warning", $"Desired-State Enforcer escalation: {overrideCount} external override(s) within {s.EnforcerRateWindowMinutes} min; enforcing firmly.");
+                if (s.EnforcerNotifyEnabled)
+                {
+                    notify = true;
+                    notifyMessage = $"AC Enforcer: repeated interference ({overrideCount}x) — firmly holding your {desiredTarget:0.0} C.";
+                }
+            }
+
+            // Debounce: the deviation must persist (escalation tightens it; high learned interference OR a
+            // historically high-upset hour relaxes it in stealth mode so the correction blends into a
+            // human-looking cadence and is less likely to be noticed or to make anyone mad).
+            var debounceSec = state.EnforcerEscalated
+                ? Math.Min(2, Math.Max(0, s.EnforcerDebounceSeconds))
+                : Math.Max(0, s.EnforcerDebounceSeconds);
+            if (s.EnforcerUseLearning && s.EnforcerStealthShaping && !state.EnforcerEscalated)
+            {
+                // Caution = how likely interference is now, OR how upset-prone this hour has been (both from
+                // the trained models). Higher caution -> wait longer before a visible correction.
+                var caution = Math.Max(interference, CalculateAngerSensitivity(now));
+                if (caution > 0.5)
+                {
+                    debounceSec = Math.Min(90, (int)Math.Round(Math.Max(1, debounceSec) * (1.0 + caution)));
+                }
+            }
+
+            if (now - state.EnforcerPendingSince!.Value < TimeSpan.FromSeconds(debounceSec))
+            {
+                var debounceUntil = state.EnforcerPendingSince!.Value.AddSeconds(debounceSec);
+                state.EnforcerStatus = $"Deviation seen; debouncing {debounceSec}s before enforcing your {desiredTarget:0.0} C.";
+                SaveState();
+                return Gate(EnforcerDecision.Cooldown, state.EnforcerStatus, debounceUntil, notify: notify, notifyMessage: notifyMessage);
+            }
+
+            // Smart-stealth setpoint pass-through: a non-escalated setpoint raise is handled by the existing
+            // human-like pipeline (so it never looks like an instant robot snap-back). Mode-off and escalated
+            // states always take the firm path below.
+            if (setpointAway && !modeOff && s.EnforcerStealthShaping && !state.EnforcerEscalated)
+            {
+                if (s.EnforcerTargetTemperatureCelsius > 0 && Math.Abs(state.TargetTemperatureCelsius - desiredTarget) > 0.01)
+                {
+                    state.TargetTemperatureCelsius = Math.Round(desiredTarget, 1);
+                }
+
+                state.EnforcerStatus = $"Stealth enforce: easing the setpoint back to {desiredTarget:0.0} C through the natural pipeline.";
+                SaveState();
+                return Gate(EnforcerDecision.Inactive, state.EnforcerStatus, now, notify: notify, notifyMessage: notifyMessage);
+            }
+
+            // Firm path: cooldown (also covers the Home Assistant echo grace window), then device-reject backoff.
+            var cooldown = Math.Max(s.EnforcerCooldownSeconds, Math.Max(15, options.CommandGraceSeconds));
+            if (state.EnforcerLastAssertAt is { } lastAssert)
+            {
+                var cooldownUntil = lastAssert.AddSeconds(cooldown);
+                if (now < cooldownUntil)
+                {
+                    state.EnforcerStatus = "Enforced recently; waiting for Home Assistant to confirm before re-asserting.";
+                    SaveState();
+                    return Gate(EnforcerDecision.Cooldown, state.EnforcerStatus, cooldownUntil, notify: notify, notifyMessage: notifyMessage);
+                }
+
+                if (state.EnforcerConsecutiveRejects > 0)
+                {
+                    var backoff = Math.Min(
+                        Math.Max(1, s.EnforcerBackoffMaxSeconds),
+                        (int)(Math.Max(1, s.EnforcerBackoffBaseSeconds) * Math.Pow(2, state.EnforcerConsecutiveRejects - 1)));
+                    var backoffUntil = lastAssert.AddSeconds(cooldown + backoff);
+                    if (now < backoffUntil)
+                    {
+                        state.EnforcerStatus = $"Device did not confirm the last enforce; backing off {backoff}s (reject #{state.EnforcerConsecutiveRejects}).";
+                        SaveState();
+                        return Gate(EnforcerDecision.Backoff, state.EnforcerStatus, backoffUntil, notify: notify, notifyMessage: notifyMessage);
+                    }
+                }
+            }
+
+            // Rate limit: too many asserts this window means the device or the other person is fighting; hold
+            // and escalate rather than thrash.
+            if (state.EnforcerAssertTimes.Count >= Math.Max(1, s.EnforcerMaxAssertsPerWindow))
+            {
+                if (!state.EnforcerEscalated)
+                {
+                    state.EnforcerEscalated = true;
+                    AddEvent("warning", "Desired-State Enforcer hit its rate limit; holding and escalating instead of thrashing.");
+                    if (s.EnforcerNotifyEnabled)
+                    {
+                        notify = true;
+                        notifyMessage = $"AC Enforcer: rate-limited after repeated fights — holding your {desiredTarget:0.0} C.";
+                    }
+                }
+
+                state.EnforcerStatus = "Rate limit reached; holding to avoid thrashing the thermostat.";
+                SaveState();
+                return Gate(EnforcerDecision.Backoff, state.EnforcerStatus, now.AddSeconds(60), notify: notify, notifyMessage: notifyMessage);
+            }
+
+            // Assert. Optimistically count a reject; the next cycle clears it to 0 once the echo confirms.
+            state.EnforcerConsecutiveRejects += 1;
+            state.EnforcerLastAssertAt = now;
+            state.EnforcerAssertTimes.Add(now);
+            state.EnforcerPendingSince = null;
+            var decision = modeOff ? EnforcerDecision.EnforceMode : EnforcerDecision.EnforceSetpoint;
+            state.EnforcerStatus = modeOff
+                ? $"Someone turned the AC off; restoring cool at {desiredTarget:0.0} C."
+                : $"Setpoint was raised to {reading.SetPointCelsius:0.0} C; restoring your {desiredTarget:0.0} C.";
+            if (s.EnforcerNotifyEnabled && !notify && (modeOff || state.EnforcerEscalated))
+            {
+                notify = true;
+                notifyMessage = state.EnforcerStatus;
+            }
+
+            SaveState();
+            return Gate(decision, state.EnforcerStatus, now.AddSeconds(cooldown), desiredTarget, notify, notifyMessage);
+        }
+    }
+
+    private double ComputeEnforcerDesiredTarget(DefenderSettings s)
+    {
+        var target = s.EnforcerTargetTemperatureCelsius > 0
+            ? s.EnforcerTargetTemperatureCelsius
+            : state.TargetTemperatureCelsius;
+        var min = state.DeviceMinSetPointCelsius ?? options.MinimumCoolingSetPointCelsius;
+        var max = state.DeviceMaxSetPointCelsius ?? (target + options.MaximumBoostOffsetCelsius);
+        if (max < min)
+        {
+            max = min;
+        }
+
+        return Math.Round(Math.Clamp(target, min, max), 1);
+    }
+
+    private bool EnforcerInWindow(DefenderSettings s, DateTimeOffset now)
+    {
+        if (!TryParseHourMinute(s.EnforcerStartTime, out var start) || !TryParseHourMinute(s.EnforcerEndTime, out var end))
+        {
+            return true;
+        }
+
+        var minutes = now.ToLocalTime().Hour * 60 + now.ToLocalTime().Minute;
+        if (start == end)
+        {
+            return true;
+        }
+
+        return start < end
+            ? minutes >= start && minutes < end
+            : minutes >= start || minutes < end;
+    }
+
+    private static bool TryParseHourMinute(string? value, out int totalMinutes)
+    {
+        totalMinutes = 0;
+        var parts = (value ?? string.Empty).Split(':');
+        if (parts.Length != 2
+            || !int.TryParse(parts[0], out var hour)
+            || !int.TryParse(parts[1], out var minute)
+            || hour is < 0 or > 23
+            || minute is < 0 or > 59)
+        {
+            return false;
+        }
+
+        totalMinutes = hour * 60 + minute;
+        return true;
+    }
+
+    private static HashSet<string> ParseOwnerUserIds(string? value)
+    {
+        return (value ?? string.Empty)
+            .Split([',', ';', '\n', '\r', ' '], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private bool IsPeakPowerNow()
+    {
+        var tou = state.AlectraPeakPower?.TouPeriod;
+        return !string.IsNullOrWhiteSpace(tou) && tou.Contains("peak", StringComparison.OrdinalIgnoreCase)
+            && !tou.Contains("off", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void PruneEnforcerOverrideTimes(DateTimeOffset now, DefenderSettings s)
+    {
+        var window = TimeSpan.FromMinutes(Math.Max(1, s.EnforcerRateWindowMinutes));
+        state.EnforcerOverrideTimes.RemoveAll(t => now - t > window);
+    }
+
+    private void PruneEnforcerAssertTimes(DateTimeOffset now, DefenderSettings s)
+    {
+        var window = TimeSpan.FromMinutes(Math.Max(1, s.EnforcerRateWindowMinutes));
+        state.EnforcerAssertTimes.RemoveAll(t => now - t > window);
+    }
+
+    private void RecordEnforcerOverride(ThermostatReading reading, double desiredTarget, DateTimeOffset now)
+    {
+        state.EnforcerOverrideTimes.Add(now);
+        state.EnforcerOverrideSamples.Add(new EnforcerOverrideSample
+        {
+            At = now,
+            HourOfDay = now.ToLocalTime().Hour,
+            OwnerHome = state.IsHome,
+            BedroomOccupied = state.MasterBedroomOccupied,
+            PeakPower = IsPeakPowerNow(),
+            RoomAboveTargetCelsius = Math.Round(reading.CurrentTemperatureCelsius - desiredTarget, 2),
+            RecentOverrideCount = state.EnforcerOverrideTimes.Count,
+            Label = 1
+        });
+        PruneEnforcerOverrideSamples(now);
+    }
+
+    private void RecordEnforcerBenignSampleIfDue(ThermostatReading reading, double desiredTarget, DateTimeOffset now)
+    {
+        if (state.EnforcerLastBenignSampleAt is { } last && now - last < TimeSpan.FromMinutes(10))
+        {
+            return;
+        }
+
+        state.EnforcerLastBenignSampleAt = now;
+        state.EnforcerOverrideSamples.Add(new EnforcerOverrideSample
+        {
+            At = now,
+            HourOfDay = now.ToLocalTime().Hour,
+            OwnerHome = state.IsHome,
+            BedroomOccupied = state.MasterBedroomOccupied,
+            PeakPower = IsPeakPowerNow(),
+            RoomAboveTargetCelsius = Math.Round(reading.CurrentTemperatureCelsius - desiredTarget, 2),
+            RecentOverrideCount = state.EnforcerOverrideTimes.Count,
+            Label = 0
+        });
+        PruneEnforcerOverrideSamples(now);
+    }
+
+    private void PruneEnforcerOverrideSamples(DateTimeOffset now)
+    {
+        state.EnforcerOverrideSamples.RemoveAll(item => now - item.At > TimeSpan.FromDays(45));
+        if (state.EnforcerOverrideSamples.Count > 1000)
+        {
+            state.EnforcerOverrideSamples.RemoveRange(0, state.EnforcerOverrideSamples.Count - 1000);
+        }
+    }
+
+    private static string NormalizeHourMinute(string? value, string fallback)
+    {
+        if (!TryParseHourMinute(value, out var totalMinutes))
+        {
+            return fallback;
+        }
+
+        return $"{totalMinutes / 60:00}:{totalMinutes % 60:00}";
+    }
+
+    private void ClearEnforcerRuntime()
+    {
+        state.EnforcerPendingSince = null;
+        state.EnforcerLastAssertAt = null;
+        state.EnforcerConsecutiveRejects = 0;
+        state.EnforcerEscalated = false;
+        state.EnforcerAssertTimes.Clear();
+        state.EnforcerOverrideTimes.Clear();
+        state.EnforcerLearningActive = false;
+        state.EnforcerInterferenceProbability = 0;
+        state.EnforcerLastChangeUser = "--";
+        state.EnforcerStatus = "Desired-State Enforcer is off; the stealth pipeline runs normally.";
     }
 
     /// <summary>Conflict Quiet: true while standing down after repeated wall touches, as long as the room stays inside the comfort band.</summary>
@@ -5065,7 +5558,37 @@ public sealed class DefenderStateStore
             comfortSamples.Add((LearningTrainer.ComfortFeatures(sample.HourOfDay), sample.PreferredSetPointCelsius));
         }
 
-        state.LearningModel = learningTrainer.Train(angerSamples, comfortSamples, state.LearningModel);
+        // Interference dataset: real enforcer override events are positives, benign operating moments are
+        // negatives. Override-cadence dataset: the minutes between consecutive real overrides, by hour.
+        var interferenceSamples = new List<(double[] Features, int Label)>();
+        foreach (var sample in state.EnforcerOverrideSamples)
+        {
+            interferenceSamples.Add((
+                LearningTrainer.InterferenceFeatures(
+                    sample.HourOfDay,
+                    sample.OwnerHome,
+                    sample.BedroomOccupied,
+                    sample.PeakPower,
+                    sample.RoomAboveTargetCelsius,
+                    sample.RecentOverrideCount),
+                sample.Label));
+        }
+
+        var overrideCadenceSamples = new List<(double[] Features, double Target)>();
+        var overridePositives = state.EnforcerOverrideSamples
+            .Where(item => item.Label == 1)
+            .OrderBy(item => item.At)
+            .ToList();
+        for (var i = 1; i < overridePositives.Count; i++)
+        {
+            var gapMinutes = (overridePositives[i].At - overridePositives[i - 1].At).TotalMinutes;
+            if (gapMinutes is > 1 and < 360)
+            {
+                overrideCadenceSamples.Add((LearningTrainer.OverrideCadenceFeatures(overridePositives[i - 1].HourOfDay), gapMinutes));
+            }
+        }
+
+        state.LearningModel = learningTrainer.Train(angerSamples, comfortSamples, state.LearningModel, interferenceSamples, overrideCadenceSamples);
         state.LearningModel.TrainedAt = now;
 
         SeedComfortMemoryFromModel(now);
@@ -5176,7 +5699,12 @@ public sealed class DefenderStateStore
             model.ComfortSamples,
             model.AngerLogLoss,
             model.ComfortRmse,
-            model.TrainedAt);
+            model.TrainedAt,
+            model.InterferencePositiveSamples > 0 && model.InterferenceNegativeSamples > 0,
+            model.InterferencePositiveSamples,
+            model.InterferenceNegativeSamples,
+            model.OverrideCadenceSamples >= 4,
+            model.OverrideCadenceSamples);
     }
 
     private HistoryLearningSnapshot BuildHistoryLearningSnapshot(DateTimeOffset now)
@@ -6530,6 +7058,34 @@ public sealed class DefenderStateStore
         saved.Settings.RemoteSettlingHoldMinutes = Math.Clamp(saved.Settings.RemoteSettlingHoldMinutes <= 0 ? 12 : saved.Settings.RemoteSettlingHoldMinutes, 0, 240);
         saved.Settings.RemoteSettlingSafetyBandCelsius = Math.Round(Math.Clamp(saved.Settings.RemoteSettlingSafetyBandCelsius <= 0 ? 1.0 : saved.Settings.RemoteSettlingSafetyBandCelsius, 0.1, 10.0), 1);
         saved.Settings.DefenderRunsContinuously = true;
+
+        // Desired-State Enforcer: clamp loaded values into range for forward/backward compatibility.
+        saved.Settings.EnforcerTargetTemperatureCelsius = saved.Settings.EnforcerTargetTemperatureCelsius <= 0
+            ? 0.0
+            : Math.Round(Math.Clamp(saved.Settings.EnforcerTargetTemperatureCelsius, 10.0, 35.0), 1);
+        saved.Settings.EnforcerOwnerUserIds = saved.Settings.EnforcerOwnerUserIds?.Trim() ?? string.Empty;
+        saved.Settings.EnforcerDebounceSeconds = Math.Clamp(saved.Settings.EnforcerDebounceSeconds <= 0 ? 8 : saved.Settings.EnforcerDebounceSeconds, 2, 120);
+        saved.Settings.EnforcerCooldownSeconds = Math.Clamp(saved.Settings.EnforcerCooldownSeconds <= 0 ? 30 : saved.Settings.EnforcerCooldownSeconds, 10, 600);
+        saved.Settings.EnforcerRateWindowMinutes = Math.Clamp(saved.Settings.EnforcerRateWindowMinutes <= 0 ? 15 : saved.Settings.EnforcerRateWindowMinutes, 1, 240);
+        saved.Settings.EnforcerMaxAssertsPerWindow = Math.Clamp(saved.Settings.EnforcerMaxAssertsPerWindow <= 0 ? 6 : saved.Settings.EnforcerMaxAssertsPerWindow, 1, 60);
+        saved.Settings.EnforcerEscalateAfterOverrides = Math.Clamp(saved.Settings.EnforcerEscalateAfterOverrides <= 0 ? 3 : saved.Settings.EnforcerEscalateAfterOverrides, 1, 20);
+        saved.Settings.EnforcerBackoffBaseSeconds = Math.Clamp(saved.Settings.EnforcerBackoffBaseSeconds <= 0 ? 20 : saved.Settings.EnforcerBackoffBaseSeconds, 5, 300);
+        saved.Settings.EnforcerBackoffMaxSeconds = Math.Clamp(saved.Settings.EnforcerBackoffMaxSeconds <= 0 ? 300 : saved.Settings.EnforcerBackoffMaxSeconds, 30, 3600);
+        saved.Settings.EnforcerStartTime = NormalizeHourMinute(saved.Settings.EnforcerStartTime, "00:00");
+        saved.Settings.EnforcerEndTime = NormalizeHourMinute(saved.Settings.EnforcerEndTime, "23:59");
+        saved.EnforcerAssertTimes ??= [];
+        saved.EnforcerOverrideTimes ??= [];
+        saved.EnforcerOverrideSamples ??= [];
+        if (string.IsNullOrWhiteSpace(saved.EnforcerStatus))
+        {
+            saved.EnforcerStatus = "Desired-State Enforcer is off.";
+        }
+
+        if (string.IsNullOrWhiteSpace(saved.EnforcerLastChangeUser))
+        {
+            saved.EnforcerLastChangeUser = "--";
+        }
+
         saved.Schedule ??= [];
         saved.Events ??= [];
         saved.ThermostatChanges ??= [];
@@ -7604,6 +8160,22 @@ public sealed class DefenderStateStore
                 omegaAlerting,
                 omegaSeconds,
                 state.OmegaRoomRiseCelsius),
+            new EnforcerSnapshot(
+                state.Settings.EnforcerModeEnabled,
+                state.Settings.EnforcerModeEnabled && (state.EnforcerPendingSince is not null || state.EnforcerEscalated),
+                state.EnforcerEscalated,
+                !state.Settings.EnforcerScheduleEnabled || EnforcerInWindow(state.Settings, now),
+                state.Settings.EnforcerStealthShaping,
+                state.EnforcerOverrideTimes.Count,
+                state.EnforcerAssertTimes.Count,
+                state.EnforcerConsecutiveRejects,
+                ComputeEnforcerDesiredTarget(state.Settings),
+                string.IsNullOrWhiteSpace(state.LastChangeSource) ? "none" : state.LastChangeSource,
+                state.EnforcerLastChangeUser,
+                state.EnforcerInterferenceProbability,
+                state.EnforcerLearningActive,
+                string.IsNullOrWhiteSpace(state.EnforcerStatus) ? "Desired-State Enforcer is off." : state.EnforcerStatus,
+                state.EnforcerPendingSince),
             new ComfortSnapshot(
                 state.Settings.UpstairsComfortEnabled,
                 state.Settings.HomePresenceRequired,
@@ -8376,7 +8948,27 @@ public sealed class DefenderStateStore
             UpstairsComfortBoostCelsius = settings.UpstairsComfortBoostCelsius,
             HomePresenceRequired = settings.HomePresenceRequired,
             PresenceEntityIds = settings.PresenceEntityIds,
-            DefenderRunsContinuously = true
+            DefenderRunsContinuously = true,
+            EnforcerModeEnabled = settings.EnforcerModeEnabled,
+            EnforcerTargetTemperatureCelsius = settings.EnforcerTargetTemperatureCelsius,
+            EnforcerEnforceMode = settings.EnforcerEnforceMode,
+            EnforcerEnforceSetpoint = settings.EnforcerEnforceSetpoint,
+            EnforcerStealthShaping = settings.EnforcerStealthShaping,
+            EnforcerRespectOwner = settings.EnforcerRespectOwner,
+            EnforcerOwnerUserIds = settings.EnforcerOwnerUserIds,
+            EnforcerDebounceSeconds = settings.EnforcerDebounceSeconds,
+            EnforcerCooldownSeconds = settings.EnforcerCooldownSeconds,
+            EnforcerRateWindowMinutes = settings.EnforcerRateWindowMinutes,
+            EnforcerMaxAssertsPerWindow = settings.EnforcerMaxAssertsPerWindow,
+            EnforcerEscalateAfterOverrides = settings.EnforcerEscalateAfterOverrides,
+            EnforcerBackoffBaseSeconds = settings.EnforcerBackoffBaseSeconds,
+            EnforcerBackoffMaxSeconds = settings.EnforcerBackoffMaxSeconds,
+            EnforcerScheduleEnabled = settings.EnforcerScheduleEnabled,
+            EnforcerStartTime = settings.EnforcerStartTime,
+            EnforcerEndTime = settings.EnforcerEndTime,
+            EnforcerRequirePresence = settings.EnforcerRequirePresence,
+            EnforcerNotifyEnabled = settings.EnforcerNotifyEnabled,
+            EnforcerUseLearning = settings.EnforcerUseLearning
         };
     }
 
@@ -8769,6 +9361,35 @@ public sealed class DefenderStateStore
         public string? LastChangeContextParentId { get; set; }
 
         public string? LastChangeContextUserId { get; set; }
+
+        // ===== Desired-State Enforcer runtime =====
+        public DateTimeOffset? EnforcerPendingSince { get; set; }
+
+        public DateTimeOffset? EnforcerLastAssertAt { get; set; }
+
+        public int EnforcerConsecutiveRejects { get; set; }
+
+        public bool EnforcerEscalated { get; set; }
+
+        public string EnforcerStatus { get; set; } = "Desired-State Enforcer is off.";
+
+        public string EnforcerLastChangeUser { get; set; } = "--";
+
+        public double EnforcerInterferenceProbability { get; set; }
+
+        public bool EnforcerLearningActive { get; set; }
+
+        public List<DateTimeOffset> EnforcerAssertTimes { get; set; } = [];
+
+        public List<DateTimeOffset> EnforcerOverrideTimes { get; set; } = [];
+
+        public List<EnforcerOverrideSample> EnforcerOverrideSamples { get; set; } = [];
+
+        public DateTimeOffset? EnforcerLastBenignSampleAt { get; set; }
+
+        public double? DeviceMinSetPointCelsius { get; set; }
+
+        public double? DeviceMaxSetPointCelsius { get; set; }
 
         public List<RoomTemperatureSample> RoomTemperatureSamples { get; set; } = [];
 

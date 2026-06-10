@@ -51,6 +51,40 @@
         </ChildContent>
     </SectionCard>
 
+    <SectionCard Title="Desired-State Enforcer"
+                 Subtitle="@EnforcerSubtitle"
+                 Help="Makes your chosen AC state win automatically. Configure it on the Settings page (Desired-State Enforcer).">
+        <Actions>
+            <MudChip T="string" Color="@EnforcerChipColor" Variant="Variant.Outlined" Size="Size.Small">@EnforcerChipText</MudChip>
+        </Actions>
+        <ChildContent>
+            @if (Snapshot?.Enforcer is { } enforcer)
+            {
+                <MudText Typo="Typo.body2">@enforcer.Status</MudText>
+                @if (enforcer.Enabled)
+                {
+                    <MudText Typo="Typo.caption" Class="helper-text">
+                        Holding @enforcer.DesiredTargetCelsius.ToString("0.0") C ·
+                        overrides @enforcer.RecentOverrideCount ·
+                        asserts @enforcer.RecentAssertCount ·
+                        last changed by @enforcer.LastChangeUser
+                    </MudText>
+                    <MudText Typo="Typo.caption" Class="helper-text">
+                        Interference model: @(enforcer.LearningActive ? enforcer.InterferenceProbability.ToString("0.00") : "learning")
+                    </MudText>
+                    @if (enforcer.Escalated)
+                    {
+                        <MudAlert Class="mt-2" Severity="Severity.Error" Variant="Variant.Filled" Dense="true">Repeated interference detected — enforcing firmly.</MudAlert>
+                    }
+                }
+                else
+                {
+                    <MudAlert Class="mt-2" Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">Off. Turn it on under Settings → Desired-State Enforcer to make your chosen state win automatically.</MudAlert>
+                }
+            }
+        </ChildContent>
+    </SectionCard>
+
     <SectionCard Title="Alectra Peak Power Saver"
                  Subtitle="@(Snapshot?.PeakPowerSaver.Active == true ? "Saving" : "Watching")"
                  Help="Uses real Alectra Hui power, price, and TOU sensors to hold only safe cooling during peak or high-load periods.">
@@ -71,10 +105,18 @@
 
     <MudGrid Spacing="3">
         <MudItem xs="12" md="6">
-            <SectionCard Title="Target" Help="The cool number the defender keeps.">
+            <SectionCard Title="Target" Help="The cool number the defender keeps. Tap − / + to dial it in, just like a real thermostat.">
                 <MudGrid Spacing="2">
+                    <MudItem xs="12" Class="d-flex justify-center">
+                        <ThermostatDial Target="_targetInput"
+                                        Current="Snapshot?.HomeAssistantThermostat?.CurrentTemperatureCelsius"
+                                        Mode="@(Snapshot?.HomeAssistantThermostat?.HvacMode ?? "cool")"
+                                        Action="@(Snapshot?.HomeAssistantThermostat?.HvacAction ?? "idle")"
+                                        Min="16" Max="30" Step="0.5"
+                                        TargetChanged="OnTargetInputChanged" />
+                    </MudItem>
                     <MudItem xs="12">
-                        <MudNumericField T="double" Value="_targetInput" ValueChanged="OnTargetInputChanged" Label="Set target"
+                        <MudNumericField T="double" Value="_targetInput" ValueChanged="OnTargetInputChanged" Label="Or type it"
                                          HelperText="Type the temperature you want." Variant="Variant.Outlined"
                                          Min="10" Max="35" Step="0.1" Adornment="Adornment.End" AdornmentText="C" />
                     </MudItem>
@@ -202,6 +244,24 @@
 
     private DefenderSnapshot? Snapshot => State.Snapshot;
     private string EmergencyProtocolHelp => EmergencyProtocols.FirstOrDefault(o => o.Value == _emergencyProtocol).Help ?? "Pick an emergency action.";
+
+    private string EnforcerSubtitle => Snapshot?.Enforcer switch
+    {
+        { Enabled: false } => "Off",
+        { Escalated: true } => "Escalated",
+        { Active: true, Stealth: true } => "Enforcing (stealth)",
+        { Active: true } => "Enforcing",
+        { Enabled: true } => "Watching",
+        _ => "Off"
+    };
+    private string EnforcerChipText => EnforcerSubtitle;
+    private Color EnforcerChipColor => Snapshot?.Enforcer switch
+    {
+        { Enabled: false } => Color.Default,
+        { Escalated: true } => Color.Error,
+        { Active: true } => Color.Warning,
+        _ => Color.Success
+    };
     private bool DefenderIsEnabled => Snapshot?.DefenderEnabled == true;
     private string DefenderToggleText => DefenderIsEnabled ? "Stand Down Defender" : "Activate Defender";
     private string DefenderToggleIcon => DefenderIsEnabled ? Icons.Material.Filled.Shield : Icons.Material.Filled.PowerSettingsNew;

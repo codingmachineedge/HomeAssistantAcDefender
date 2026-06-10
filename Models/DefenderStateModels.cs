@@ -57,12 +57,35 @@ public sealed record DefenderSnapshot(
     SuperDefenderSnapshot SuperDefender,
     RemoteSettlingSnapshot RemoteSettling,
     CoolingFailureSnapshot CoolingFailure,
+    EnforcerSnapshot Enforcer,
     ComfortSnapshot Comfort,
     DefenderSettings Settings,
     IReadOnlyList<ScheduleEntry> Schedule,
     IReadOnlyList<ThermostatChangeAudit> ThermostatChanges,
     DateTimeOffset UpdatedAt,
     IReadOnlyList<DefenderEvent> Events);
+
+/// <summary>
+/// Live view of the Desired-State Enforcer: whether it is enforcing the owner's exact desired state,
+/// how many unwanted external overrides and re-asserts happened this window, whether it has escalated
+/// to firm mode, and whether the learned interference model is currently shaping its timing.
+/// </summary>
+public sealed record EnforcerSnapshot(
+    bool Enabled,
+    bool Active,
+    bool Escalated,
+    bool InWindow,
+    bool Stealth,
+    int RecentOverrideCount,
+    int RecentAssertCount,
+    int ConsecutiveRejects,
+    double DesiredTargetCelsius,
+    string LastChangeSource,
+    string LastChangeUser,
+    double InterferenceProbability,
+    bool LearningActive,
+    string Status,
+    DateTimeOffset? Until);
 
 public sealed record ThermostatSnapshot(
     double CurrentTemperatureCelsius,
@@ -127,7 +150,9 @@ public sealed record ThermostatReading(
     string HvacAction,
     string? FanMode,
     IReadOnlyList<string> AvailableFanModes,
-    HomeAssistantStateContext? Context = null);
+    HomeAssistantStateContext? Context = null,
+    double? MinSetPointCelsius = null,
+    double? MaxSetPointCelsius = null);
 
 public sealed record HomeAssistantStateContext(
     string? Id,
@@ -335,6 +360,21 @@ public sealed class LearningModelState
     public double AngerLogLoss { get; set; }
     public double ComfortRmse { get; set; }
     public DateTimeOffset? TrainedAt { get; set; }
+
+    // Interference classifier: P(an unwanted external override is happening | time/presence/power context),
+    // learned from real enforcer override events (positives) vs benign operating contexts (negatives).
+    public double[] InterferenceWeights { get; set; } = [];
+    public double InterferenceBias { get; set; }
+    public int InterferencePositiveSamples { get; set; }
+    public int InterferenceNegativeSamples { get; set; }
+    public double InterferenceLogLoss { get; set; }
+
+    // Override-cadence regressor: predicted minutes between consecutive unwanted overrides by time of day,
+    // learned from the gaps in the real override-event log. Lets the enforcer pace re-asserts so they blend in.
+    public double[] OverrideCadenceWeights { get; set; } = [];
+    public double OverrideCadenceBias { get; set; }
+    public int OverrideCadenceSamples { get; set; }
+    public double OverrideCadenceRmse { get; set; }
 }
 
 public sealed record LearningModelSnapshot(
@@ -345,10 +385,64 @@ public sealed record LearningModelSnapshot(
     int ComfortSamples,
     double AngerLogLoss,
     double ComfortRmse,
-    DateTimeOffset? TrainedAt);
+    DateTimeOffset? TrainedAt,
+    bool InterferenceModelTrained = false,
+    int InterferencePositiveSamples = 0,
+    int InterferenceNegativeSamples = 0,
+    bool OverrideCadenceModelTrained = false,
+    int OverrideCadenceSamples = 0);
 
 /// <summary>One Home Assistant entity's on/off-style state and whether it counts as "active".</summary>
 public sealed record EntityActivation(string EntityId, string Name, string State, bool Active);
+
+/// <summary>What the Desired-State Enforcer decided this cycle.</summary>
+public enum EnforcerDecision
+{
+    /// <summary>Enforcer is off/idle or chose to let the stealth pipeline run; the caller falls through.</summary>
+    Inactive,
+
+    /// <summary>Restore cool mode (and the target) now — someone turned the unit off/away from cool.</summary>
+    EnforceMode,
+
+    /// <summary>Restore the exact desired setpoint now.</summary>
+    EnforceSetpoint,
+
+    /// <summary>Deviation seen but the enforcer is debouncing or waiting out its cooldown; send nothing.</summary>
+    Cooldown,
+
+    /// <summary>The device is not confirming commands or the rate limit was hit; hold and send nothing.</summary>
+    Backoff,
+
+    /// <summary>The change was attributed to the owner; respect it and send nothing this cycle.</summary>
+    RespectOwner
+}
+
+/// <summary>The Enforcer's per-cycle verdict for <c>AcDefenderService.RunCycleAsync</c> to act on.</summary>
+public sealed record EnforcerGate(
+    EnforcerDecision Decision,
+    double AssertSetPoint,
+    string Message,
+    DateTimeOffset Until,
+    bool Notify,
+    string NotifyMessage,
+    bool Stealth);
+
+/// <summary>
+/// One accumulated training sample for the Desired-State Enforcer's learned models: the real context in
+/// which an unwanted external override happened (Label 1) or a benign operating moment (Label 0). The
+/// override-cadence regressor reads the timestamps of the positives to learn how often interference recurs.
+/// </summary>
+public sealed class EnforcerOverrideSample
+{
+    public DateTimeOffset At { get; set; }
+    public int HourOfDay { get; set; }
+    public bool OwnerHome { get; set; }
+    public bool BedroomOccupied { get; set; }
+    public bool PeakPower { get; set; }
+    public double RoomAboveTargetCelsius { get; set; }
+    public int RecentOverrideCount { get; set; }
+    public int Label { get; set; }
+}
 
 /// <summary>Per-cycle context for the adjustment statistics: is the tracked person home, is the master bedroom occupied.</summary>
 public sealed record TrackedContextReading(string PersonLabel, bool PersonConfigured, bool PersonHome, bool BedroomConfigured, bool BedroomOccupied);
@@ -1031,6 +1125,70 @@ public sealed class DefenderSettings
     public string PresenceEntityIds { get; set; } = "";
 
     public bool DefenderRunsContinuously { get; set; } = true;
+
+    // ===== Desired-State Enforcer =====
+    // The assertive layer that makes the owner's chosen AC state win automatically when someone else
+    // turns it off or moves the setpoint. Off by default so the existing stealth pipeline is unchanged.
+
+    /// <summary>Master switch. When false the Enforcer is inactive and the stealth pipeline runs unchanged.</summary>
+    public bool EnforcerModeEnabled { get; set; }
+
+    /// <summary>Exact temperature to hold. 0 means "follow the website target" so there is no hardcoded value.</summary>
+    public double EnforcerTargetTemperatureCelsius { get; set; }
+
+    /// <summary>Restore HVAC mode to cool immediately when the unit is switched off/heat/auto by someone else.</summary>
+    public bool EnforcerEnforceMode { get; set; } = true;
+
+    /// <summary>Restore the desired setpoint when it is moved away from the target by someone else.</summary>
+    public bool EnforcerEnforceSetpoint { get; set; } = true;
+
+    /// <summary>Smart-stealth mode: route setpoint corrections through the human-like stealth pipeline so the
+    /// fix is less likely to be noticed. When off, the Enforcer snaps to the exact target immediately.</summary>
+    public bool EnforcerStealthShaping { get; set; } = true;
+
+    /// <summary>Respect changes attributed to the owner (EnforcerOwnerUserIds); only counteract other people.</summary>
+    public bool EnforcerRespectOwner { get; set; } = true;
+
+    /// <summary>Comma-separated Home Assistant context.user_id values that are the owner (respected).</summary>
+    public string EnforcerOwnerUserIds { get; set; } = "";
+
+    /// <summary>A deviation must persist this many seconds before re-asserting (hysteresis vs in-flight reads).</summary>
+    public int EnforcerDebounceSeconds { get; set; } = 8;
+
+    /// <summary>Minimum gap between re-asserts; also clamps to the Home Assistant echo grace window.</summary>
+    public int EnforcerCooldownSeconds { get; set; } = 30;
+
+    /// <summary>Sliding window (minutes) for the rate limit and for counting repeated overrides.</summary>
+    public int EnforcerRateWindowMinutes { get; set; } = 15;
+
+    /// <summary>Max asserts inside the window before the Enforcer holds and escalates instead of thrashing.</summary>
+    public int EnforcerMaxAssertsPerWindow { get; set; } = 6;
+
+    /// <summary>Escalate to firm mode after this many unwanted external overrides inside the window.</summary>
+    public int EnforcerEscalateAfterOverrides { get; set; } = 3;
+
+    /// <summary>Exponential device-reject backoff base seconds (wait base*2^(rejects-1) when commands do not stick).</summary>
+    public int EnforcerBackoffBaseSeconds { get; set; } = 20;
+
+    /// <summary>Cap for the device-reject backoff.</summary>
+    public int EnforcerBackoffMaxSeconds { get; set; } = 300;
+
+    /// <summary>When true, the Enforcer is only active inside the local EnforcerStartTime..EnforcerEndTime window.</summary>
+    public bool EnforcerScheduleEnabled { get; set; }
+
+    public string EnforcerStartTime { get; set; } = "00:00";
+
+    public string EnforcerEndTime { get; set; } = "23:59";
+
+    /// <summary>When true, only enforce while someone is home (reuses presence readings).</summary>
+    public bool EnforcerRequirePresence { get; set; }
+
+    /// <summary>Send a Home Assistant notification when the Enforcer defends or detects repeated interference.</summary>
+    public bool EnforcerNotifyEnabled { get; set; }
+
+    /// <summary>Use the trained interference/cadence models to smartly pace re-asserts (falls back to the
+    /// static debounce/cooldown until the models have enough real data to be trained).</summary>
+    public bool EnforcerUseLearning { get; set; } = true;
 }
 
 public sealed class ScheduleEntry

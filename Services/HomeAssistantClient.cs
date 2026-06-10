@@ -472,6 +472,30 @@ public sealed class HomeAssistantClient
         }, cancellationToken);
     }
 
+    /// <summary>
+    /// Best-effort Home Assistant notification used by the Desired-State Enforcer. Does nothing when no
+    /// notify service is configured, so a missing service name never turns into a per-cycle error.
+    /// </summary>
+    public async Task SendNotificationAsync(string? service, string title, string message, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+        {
+            return;
+        }
+
+        var serviceName = service.Trim();
+        if (serviceName.StartsWith("notify.", StringComparison.OrdinalIgnoreCase))
+        {
+            serviceName = serviceName["notify.".Length..];
+        }
+
+        await CallServiceAsync("notify", serviceName, new
+        {
+            title,
+            message
+        }, cancellationToken);
+    }
+
     private async Task<UsageEntityReading?> TryGetUsageEntityAsync(string? entityId, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(entityId))
@@ -727,7 +751,9 @@ public sealed class HomeAssistantClient
             TryGetAttributeString(root, "hvac_action") ?? hvacMode,
             TryGetAttributeString(root, "fan_mode"),
             TryGetAttributeStringArray(root, "fan_modes"),
-            TryGetContext(root));
+            TryGetContext(root),
+            TryGetAttributeDouble(root, "min_temp"),
+            TryGetAttributeDouble(root, "max_temp"));
     }
 
     private static WeatherReading ParseWeatherState(JsonElement root, string entityId)

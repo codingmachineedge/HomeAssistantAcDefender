@@ -626,6 +626,34 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Desired-State Enforcer", GuardCategory.System,
+            "Makes the owner's chosen AC state win automatically: if someone else turns the unit off or moves the setpoint, it restores the exact desired state and keeps it there.",
+            "Home Assistant HVAC mode, the live setpoint vs the owner's target, context.user_id attribution, recent override/assert counts, and the learned interference probability.",
+            "When a change is attributed to someone other than the owner (or has no owner user_id) it debounces, then either lets the human-like stealth pipeline ease the setpoint back (smart-stealth mode) or snaps to the exact target (hard mode). Cooldown, device-reject backoff, and a rate limit stop it thrashing; repeated overrides escalate it to firm mode and an optional notification. Owner changes are respected. It clamps to the device min/max and never acts while Home Assistant is unreachable.",
+            "Restores the desired mode/setpoint, escalates on repeated interference, and notifies — using the trained interference/cadence models to pace itself.",
+            ["EnforcerModeEnabled", "EnforcerTargetTemperatureCelsius", "EnforcerEnforceMode", "EnforcerEnforceSetpoint", "EnforcerStealthShaping", "EnforcerRespectOwner", "EnforcerOwnerUserIds", "EnforcerDebounceSeconds", "EnforcerCooldownSeconds", "EnforcerRateWindowMinutes", "EnforcerMaxAssertsPerWindow", "EnforcerEscalateAfterOverrides", "EnforcerBackoffBaseSeconds", "EnforcerBackoffMaxSeconds", "EnforcerScheduleEnabled", "EnforcerStartTime", "EnforcerEndTime", "EnforcerRequirePresence", "EnforcerNotifyEnabled", "EnforcerUseLearning"],
+            s =>
+            {
+                var e = s.Enforcer;
+                var tone = !e.Enabled ? GuardTone.Off
+                    : e.Escalated ? GuardTone.Alert
+                    : e.Active ? GuardTone.Warning
+                    : GuardTone.Calm;
+                var label = !e.Enabled ? "Off"
+                    : e.Escalated ? "Escalated"
+                    : e.Active ? (e.Stealth ? "Enforcing (stealth)" : "Enforcing")
+                    : "Watching";
+                return new GuardLiveView(e.Enabled, e.Active || e.Escalated, label, tone, e.Status,
+                [
+                    new("Desired", e.Enabled ? $"{e.DesiredTargetCelsius:0.0} C" : "Off", "Exact temperature the owner wants held."),
+                    new("Overrides", e.Enabled ? e.RecentOverrideCount.ToString() : "Off", "Unwanted external overrides inside the window."),
+                    new("Asserts", e.Enabled ? e.RecentAssertCount.ToString() : "Off", "Firm enforce commands inside the window."),
+                    new("Last changed by", e.Enabled ? e.LastChangeUser : "Off", "Home Assistant user_id attribution for the last change."),
+                    new("Interference model", e.LearningActive ? $"{e.InterferenceProbability:0.00}" : "Learning", "Trained probability that interference is happening now."),
+                ]);
+            }),
+
+        new GuardInfo(
             "Remote Settling Guard", GuardCategory.System,
             "Gives repeated phone/Home Assistant or automation thermostat changes a quiet settling window before a safe answer-back.",
             "Home Assistant change source attribution, recent remote-style change count, room temperature, and the expected setpoint.",
