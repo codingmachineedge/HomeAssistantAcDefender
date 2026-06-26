@@ -1,0 +1,5 @@
+# Driver dependencies (Playwright) — reinstall with `npm install`
+node_modules/
+
+# Screenshot artifacts the driver produces
+shots/
