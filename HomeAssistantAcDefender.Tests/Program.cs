@@ -65,11 +65,56 @@ tests.EnforcerStealthWaitsLongerDuringHighAngerHours();
 tests.EnforcerInactiveWhenDisabledLeavesStealthPipelineUnchanged();
 tests.EnforcerLearningModelsTrainInterferenceAndCadenceFromOverrides();
 tests.EnforcerConsumesTrainedInterferenceModel();
+tests.AppliedTargetPersistsAcrossStoreReloads();
+tests.InvalidLoadedTargetFallsBackToConfiguredDefault();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
 internal sealed class DefenderSetPointRegressionTests
 {
+    public void AppliedTargetPersistsAcrossStoreReloads()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            using (var fixture = DefenderStoreFixture.Create(contentRoot))
+            {
+                fixture.Store.SetTarget(20.5);
+            }
+
+            using (var reloaded = DefenderStoreFixture.Create(contentRoot))
+            {
+                AssertEqual(20.5, reloaded.Store.GetTargetTemperature(), "Applied target should persist exactly after reloading state.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public void InvalidLoadedTargetFallsBackToConfiguredDefault()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(contentRoot, "state.json"), """
+                {
+                  "targetTemperatureCelsius": 0,
+                  "defenderEnabled": true,
+                  "connectionState": "unavailable"
+                }
+                """);
+
+            using var fixture = DefenderStoreFixture.Create(contentRoot, new DefenderOptions { DefaultTargetCelsius = 21.5 });
+            AssertEqual(21.5, fixture.Store.GetTargetTemperature(), "A missing or invalid persisted target must fall back to the configured default.");
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
     public void GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot()
     {
         using var fixture = DefenderStoreFixture.Create();
@@ -2696,17 +2741,19 @@ internal sealed class DefenderSetPointRegressionTests
 
 internal sealed class DefenderStoreFixture : IDisposable
 {
-    private DefenderStoreFixture(string contentRoot)
+    private readonly bool ownsContentRoot;
+
+    private DefenderStoreFixture(string contentRoot, DefenderOptions? options = null, bool ownsContentRoot = true)
     {
         ContentRoot = contentRoot;
+        this.ownsContentRoot = ownsContentRoot;
+        options ??= new DefenderOptions();
+        options.StateFilePath = Path.Combine(contentRoot, "state.json");
+        options.MinimumCoolingSetPointCelsius = 16.0;
+        options.MaximumBoostOffsetCelsius = 5.0;
+        options.TemperatureToleranceCelsius = 0.1;
         Store = new DefenderStateStore(
-            Options.Create(new DefenderOptions
-            {
-                StateFilePath = Path.Combine(contentRoot, "state.json"),
-                MinimumCoolingSetPointCelsius = 16.0,
-                MaximumBoostOffsetCelsius = 5.0,
-                TemperatureToleranceCelsius = 0.1
-            }),
+            Options.Create(options),
             new TestWebHostEnvironment(contentRoot),
             NullLogger<DefenderStateStore>.Instance);
     }
@@ -2717,16 +2764,36 @@ internal sealed class DefenderStoreFixture : IDisposable
 
     public static DefenderStoreFixture Create()
     {
+        var contentRoot = CreateContentRoot();
+        return new DefenderStoreFixture(contentRoot);
+    }
+
+    public static DefenderStoreFixture Create(string contentRoot, DefenderOptions? options = null)
+    {
+        Directory.CreateDirectory(contentRoot);
+        return new DefenderStoreFixture(contentRoot, options, ownsContentRoot: false);
+    }
+
+    public static string CreateContentRoot()
+    {
         var contentRoot = Path.Combine(Path.GetTempPath(), "ha-ac-defender-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
-        return new DefenderStoreFixture(contentRoot);
+        return contentRoot;
+    }
+
+    public static void DeleteContentRoot(string contentRoot)
+    {
+        if (Directory.Exists(contentRoot))
+        {
+            Directory.Delete(contentRoot, recursive: true);
+        }
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(ContentRoot))
+        if (ownsContentRoot)
         {
-            Directory.Delete(ContentRoot, recursive: true);
+            DeleteContentRoot(ContentRoot);
         }
     }
 }

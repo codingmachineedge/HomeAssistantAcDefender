@@ -291,7 +291,15 @@
         State.Changed += OnStateChanged;
     }
 
-    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+    private void OnStateChanged()
+    {
+        if (!_targetDirty && Snapshot is not null)
+        {
+            _targetInput = Snapshot.TargetTemperatureCelsius;
+        }
+
+        InvokeAsync(StateHasChanged);
+    }
 
     private void OnTargetInputChanged(double value)
     {

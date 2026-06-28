@@ -65,7 +65,7 @@ public sealed class DefenderStateStore
             var max = options.MaximumGeneratedTargetCelsius;
             var step = options.GeneratedTargetStepCelsius <= 0 ? 0.5 : options.GeneratedTargetStepCelsius;
             var steps = Math.Max(0, (int)Math.Round((max - min) / step));
-            state.TargetTemperatureCelsius = Math.Round(min + random.Next(steps + 1) * step, 1);
+            state.TargetTemperatureCelsius = NormalizeTargetTemperature(min + random.Next(steps + 1) * step);
             ResetCoolingDefenderStep();
             ResetNaturalRecovery("Website generated a target; comfort sync is ready.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
@@ -79,7 +79,7 @@ public sealed class DefenderStateStore
     {
         lock (gate)
         {
-            state.TargetTemperatureCelsius = Math.Round(temperatureCelsius, 1);
+            state.TargetTemperatureCelsius = NormalizeTargetTemperature(temperatureCelsius);
             ResetCoolingDefenderStep();
             ResetNaturalRecovery("Website target changed; comfort sync is ready.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
@@ -6879,6 +6879,7 @@ public sealed class DefenderStateStore
                 if (saved is not null)
                 {
                     SanitizeLoadedState(saved);
+                    saved.TargetTemperatureCelsius = NormalizeTargetTemperature(saved.TargetTemperatureCelsius);
                     return saved;
                 }
             }
@@ -9030,6 +9031,16 @@ public sealed class DefenderStateStore
             "outdoor-below-target" => "outdoor-below-target",
             _ => "always"
         };
+    }
+
+    private double NormalizeTargetTemperature(double temperatureCelsius)
+    {
+        if (double.IsNaN(temperatureCelsius) || double.IsInfinity(temperatureCelsius) || temperatureCelsius <= 0)
+        {
+            temperatureCelsius = options.DefaultTargetCelsius;
+        }
+
+        return Math.Round(Math.Clamp(temperatureCelsius, 10.0, 35.0), 1);
     }
 
     private static string ResolveStatePath(string configuredPath, string contentRoot)
