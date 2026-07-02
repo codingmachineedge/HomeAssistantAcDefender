@@ -77,6 +77,7 @@ tests.CoolingRestStopsAnUnreachableTargetFromRunningForever();
 tests.BrotherMadProtocolStandsDownForTwoHours();
 tests.AutoBrotherMadFiresOnRageWithoutAnyButton();
 tests.StandDownParkingRaisesOnlyWhenAppropriate();
+tests.AcRuntimeAccumulatesOnlyWhileCooling();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -1125,6 +1126,48 @@ internal sealed class DefenderSetPointRegressionTests
         if (!burst.Emergency.Active || !burst.Emergency.Protocol.Contains("auto", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Three quick external touches must trigger the automatic brother-mad apology.");
+        }
+    }
+
+    public void AcRuntimeAccumulatesOnlyWhileCooling()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        // Seed: previous sample 60s ago while cooling — the next reading banks ~60s of runtime.
+        store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 25.0, 24.0, "cool", "cooling", null, []));
+        SetRuntimeProperty(store, "AcRuntimeLastSampleAt", DateTimeOffset.UtcNow.AddSeconds(-60));
+        var snapshot = store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 25.0, 24.0, "cool", "cooling", null, []));
+
+        var today = snapshot.AcRuntime?.TodayHours ?? 0;
+        if (today < 0.012 || today > 0.03)
+        {
+            throw new InvalidOperationException($"60s of cooling should bank about 0.017h of runtime, got {today:0.000}h.");
+        }
+
+        if (Math.Abs((snapshot.AcRuntime?.LifetimeHours ?? 0) - today) > 0.001
+            || Math.Abs((snapshot.AcRuntime?.MonthHours ?? 0) - today) > 0.001)
+        {
+            throw new InvalidOperationException("Today, month, and lifetime buckets must all bank the same cooling time.");
+        }
+
+        // Idle time banks nothing.
+        SetRuntimeProperty(store, "AcRuntimeLastSampleAt", DateTimeOffset.UtcNow.AddSeconds(-60));
+        SetRuntimeProperty(store, "AcRuntimeLastWasCooling", false);
+        var idle = store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 25.0, 24.0, "cool", "idle", null, []));
+        if (Math.Abs((idle.AcRuntime?.TodayHours ?? 0) - today) > 0.001)
+        {
+            throw new InvalidOperationException("Idle time must not count as compressor runtime.");
+        }
+
+        // Huge gaps (downtime) are capped at 2 minutes.
+        SetRuntimeProperty(store, "AcRuntimeLastSampleAt", DateTimeOffset.UtcNow.AddHours(-8));
+        SetRuntimeProperty(store, "AcRuntimeLastWasCooling", true);
+        var afterGap = store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 25.0, 24.0, "cool", "cooling", null, []));
+        if ((afterGap.AcRuntime?.TodayHours ?? 0) > today + 0.04)
+        {
+            throw new InvalidOperationException("An 8-hour gap must bank at most the 2-minute cap, not 8 hours.");
         }
     }
 

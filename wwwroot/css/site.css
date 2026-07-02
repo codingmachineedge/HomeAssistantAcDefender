@@ -1259,6 +1259,68 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 .slide-confirm--done .slide-confirm__knob { border-color: var(--good); color: var(--good); animation: none; left: calc(100% - 46px) !important; }
 .slide-confirm--done .slide-confirm__chevrons { display: none; }
 
+/* full-page drama while the slider is being moved */
+@keyframes dramaShake {
+    0%, 100% { transform: translate(0, 0); }
+    20% { transform: translate(-2px, 1px); }
+    40% { transform: translate(2px, -1px); }
+    60% { transform: translate(-1px, -2px); }
+    80% { transform: translate(2px, 1px); }
+}
+
+@keyframes dramaFlicker {
+    0%, 100% { filter: brightness(1); }
+    50% { filter: brightness(1.4); }
+}
+
+@keyframes dramaGlyph {
+    0%, 100% { transform: translateY(-50%) scale(1); opacity: 0.5; }
+    50% { transform: translateY(-50%) scale(1.35); opacity: 1; }
+}
+
+.slide-drama {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 95;
+    background:
+        radial-gradient(ellipse at center, transparent 38%, rgba(255, 40, 25, 0.45)),
+        repeating-linear-gradient(0deg, rgba(255, 30, 15, 0.05) 0 2px, transparent 2px 6px);
+    animation: alertBreathe 0.7s ease infinite, dramaFlicker 0.3s steps(2) infinite;
+    transition: opacity 0.12s linear;
+}
+
+.slide-drama__glyph {
+    position: absolute;
+    top: 50%;
+    font-size: 64px;
+    color: rgba(255, 60, 40, 0.85);
+    text-shadow: 0 0 34px rgba(255, 40, 25, 0.9);
+    animation: dramaGlyph 0.7s ease infinite;
+}
+
+.slide-drama__glyph--left { left: 5%; }
+.slide-drama__glyph--right { right: 5%; animation-delay: 0.35s; }
+
+.ops-root:has(.slide-confirm--dragging) .ops-main { animation: dramaShake 0.32s linear infinite; }
+.ops-root:has(.slide-confirm--dragging) .ops-header { animation: dramaShake 0.41s linear infinite; }
+.ops-root:has(.slide-confirm--dragging) .ops-rail { animation: dramaShake 0.37s linear infinite; }
+.ops-root:has(.slide-confirm--dragging) .ops-mood__label { animation: flash 0.4s ease infinite; }
+
+/* AC runtime panel */
+.ops-runtime { display: flex; gap: 10px; }
+
+.ops-runtime__stat {
+    flex: 1;
+    border: 1px solid var(--line2);
+    background: var(--panel2);
+    padding: 10px 8px;
+    text-align: center;
+}
+
+.ops-runtime__value { font-size: 18px; font-weight: 800; color: var(--accent); }
+.ops-runtime__label { font-size: 8px; color: var(--sub); letter-spacing: 0.18em; margin-top: 3px; }
+
 /* very apologetic overlay */
 @keyframes apologyBow {
     0%, 100% { transform: rotate(0deg) translateY(0); }

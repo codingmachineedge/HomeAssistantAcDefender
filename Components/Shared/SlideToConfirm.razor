@@ -1,6 +1,14 @@
 @* Slide-to-confirm for emergency actions: drag the knob all the way right to fire. Built on a
    native range input so it works with mouse and touch without any JS interop; releasing early
    snaps back to zero. *@
+@if (Dragging)
+{
+    <div class="slide-drama" style="opacity: @DramaOpacity" aria-hidden="true">
+        <div class="slide-drama__glyph slide-drama__glyph--left">⚠</div>
+        <div class="slide-drama__glyph slide-drama__glyph--right">⚠</div>
+    </div>
+}
+
 <div class="@RootClass">
     <div class="slide-confirm__track">
         <div class="slide-confirm__fill" style="width: @(_value)%"></div>
@@ -23,7 +31,13 @@
     private int _value;
     private bool _confirmed;
 
-    private string RootClass => _confirmed ? "slide-confirm slide-confirm--done" : "slide-confirm";
+    private bool Dragging => _value > 0 && !_confirmed;
+
+    private string DramaOpacity => (0.3 + _value / 140.0).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+
+    private string RootClass => _confirmed
+        ? "slide-confirm slide-confirm--done"
+        : Dragging ? "slide-confirm slide-confirm--dragging" : "slide-confirm";
 
     private async Task OnInput(ChangeEventArgs e)
     {

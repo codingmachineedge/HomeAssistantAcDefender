@@ -224,6 +224,26 @@
                 </div>
             </div>
 
+            @* AC runtime *@
+            <div class="ops-panel ops-panel--pad">
+                <div class="ops-panel__label">AC RUNTIME — HOURS COOLING</div>
+                <div class="ops-runtime">
+                    <div class="ops-runtime__stat">
+                        <div class="ops-runtime__value">@RuntimeText(Snapshot?.AcRuntime?.TodayHours)</div>
+                        <div class="ops-runtime__label">TODAY</div>
+                    </div>
+                    <div class="ops-runtime__stat">
+                        <div class="ops-runtime__value">@RuntimeText(Snapshot?.AcRuntime?.MonthHours)</div>
+                        <div class="ops-runtime__label">THIS MONTH</div>
+                    </div>
+                    <div class="ops-runtime__stat">
+                        <div class="ops-runtime__value">@RuntimeText(Snapshot?.AcRuntime?.LifetimeHours)</div>
+                        <div class="ops-runtime__label">LIFETIME</div>
+                    </div>
+                </div>
+                <div class="helper-text" style="margin-top: 8px;">Real compressor time (hvac_action = cooling)@(Snapshot?.AcRuntime?.TrackingSince is { } since ? $", counted since {Format.ToToronto(since):yyyy-MM-dd}" : "").</div>
+            </div>
+
             @* direct orders *@
             <div class="ops-panel ops-panel--pad">
                 <div class="ops-panel__label">DIRECT ORDERS</div>
@@ -292,6 +312,10 @@
     private string NextActionGlyph => !DefenderIsEnabled ? "☾" : BusyGuardCount > 0 ? "◔" : "✓";
     private string NextActionTag => !DefenderIsEnabled ? "STAND-DOWN" : BusyGuardCount > 0 ? "NEXT MOVE" : "ALL QUIET";
     private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
+
+    private static string RuntimeText(double? hours) => hours is { } h
+        ? h >= 10 ? $"{h:0}h" : $"{(int)h}h {(int)Math.Round(h % 1 * 60)}m"
+        : "--";
 
     // ---------- floor ----------
 

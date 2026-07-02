@@ -63,7 +63,8 @@ public sealed record DefenderSnapshot(
     IReadOnlyList<ScheduleEntry> Schedule,
     IReadOnlyList<ThermostatChangeAudit> ThermostatChanges,
     DateTimeOffset UpdatedAt,
-    IReadOnlyList<DefenderEvent> Events);
+    IReadOnlyList<DefenderEvent> Events,
+    AcRuntimeSnapshot? AcRuntime = null);
 
 /// <summary>
 /// Live view of the Desired-State Enforcer: whether it is enforcing the owner's exact desired state,
@@ -663,6 +664,13 @@ public sealed record CoolingFailureSnapshot(
     bool OmegaAlerting,
     int OmegaSecondsActive,
     double? RoomRiseCelsius);
+
+/// <summary>Accumulated compressor runtime (hvac_action == cooling), tracked from live readings.</summary>
+public sealed record AcRuntimeSnapshot(
+    double TodayHours,
+    double MonthHours,
+    double LifetimeHours,
+    DateTimeOffset? TrackingSince);
 
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,

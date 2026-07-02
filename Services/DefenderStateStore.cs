@@ -1236,6 +1236,42 @@ public sealed class DefenderStateStore
         }
     }
 
+    // Runtime accounting: integrate the time spent with hvac_action == cooling into today /
+    // this-month / lifetime buckets (Toronto-local rollover). Deltas are capped at 2 minutes so
+    // app downtime or missed polls never count as runtime.
+    private void AccumulateAcRuntime(ThermostatReading reading, DateTimeOffset now)
+    {
+        // Container runs with TZ=America/Toronto, so local time == Toronto (same convention as
+        // the night-window checks).
+        var local = now.ToLocalTime();
+        var dayKey = local.ToString("yyyy-MM-dd");
+        var monthKey = local.ToString("yyyy-MM");
+        if (!string.Equals(state.AcRuntimeDayKey, dayKey, StringComparison.Ordinal))
+        {
+            state.AcRuntimeDayKey = dayKey;
+            state.AcRuntimeSecondsToday = 0;
+        }
+
+        if (!string.Equals(state.AcRuntimeMonthKey, monthKey, StringComparison.Ordinal))
+        {
+            state.AcRuntimeMonthKey = monthKey;
+            state.AcRuntimeSecondsMonth = 0;
+        }
+
+        state.AcRuntimeTrackingSince ??= now;
+
+        if (state.AcRuntimeLastSampleAt is { } lastSample && state.AcRuntimeLastWasCooling)
+        {
+            var deltaSeconds = Math.Clamp((now - lastSample).TotalSeconds, 0, 120);
+            state.AcRuntimeSecondsToday += deltaSeconds;
+            state.AcRuntimeSecondsMonth += deltaSeconds;
+            state.AcRuntimeSecondsLifetime += deltaSeconds;
+        }
+
+        state.AcRuntimeLastSampleAt = now;
+        state.AcRuntimeLastWasCooling = string.Equals(reading.HvacAction, "cooling", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsInMinuteWindow(DateTimeOffset now, int startMinutes, int endMinutes)
     {
         var minutes = now.ToLocalTime().Hour * 60 + now.ToLocalTime().Minute;
@@ -1297,6 +1333,7 @@ public sealed class DefenderStateStore
         {
             var now = DateTimeOffset.UtcNow;
             var previousHvacAction = state.HomeAssistantThermostat?.HvacAction;
+            AccumulateAcRuntime(reading, now);
             DetectExternalSetPointChange(reading, now);
             RecordRoomTemperatureSample(reading, now);
             RecordHomeAssistantReadingTime(now);
@@ -7486,6 +7523,7 @@ public sealed class DefenderStateStore
         saved.PeaceOfferingPendingSetPointCelsius = null;
         saved.PeaceOfferingArmedAt = null;
         saved.NightShutdownActive = false;
+        saved.AcRuntimeLastSampleAt = null; // downtime must not count as compressor runtime
 
         saved.Settings ??= new DefenderSettings();
         saved.Settings.MaximumNaturalDelaySeconds = Math.Max(
@@ -8799,7 +8837,12 @@ public sealed class DefenderStateStore
             state.Schedule.Select(CloneScheduleEntry).ToArray(),
             state.ThermostatChanges.ToArray(),
             state.UpdatedAt,
-            state.Events.ToArray());
+            state.Events.ToArray(),
+            new AcRuntimeSnapshot(
+                Math.Round(state.AcRuntimeSecondsToday / 3600.0, 2),
+                Math.Round(state.AcRuntimeSecondsMonth / 3600.0, 2),
+                Math.Round(state.AcRuntimeSecondsLifetime / 3600.0, 2),
+                state.AcRuntimeTrackingSince));
     }
 
     private void AddEvent(string level, string message)
@@ -9698,6 +9741,23 @@ public sealed class DefenderStateStore
 
         // The night window (keyed by its end date) whose one-and-only OFF command was already sent.
         public string? NightShutdownLastOffWindowKey { get; set; }
+
+        // AC runtime accounting (hvac_action == cooling), Toronto-local day/month rollover.
+        public double AcRuntimeSecondsToday { get; set; }
+
+        public string? AcRuntimeDayKey { get; set; }
+
+        public double AcRuntimeSecondsMonth { get; set; }
+
+        public string? AcRuntimeMonthKey { get; set; }
+
+        public double AcRuntimeSecondsLifetime { get; set; }
+
+        public DateTimeOffset? AcRuntimeLastSampleAt { get; set; }
+
+        public bool AcRuntimeLastWasCooling { get; set; }
+
+        public DateTimeOffset? AcRuntimeTrackingSince { get; set; }
 
         // On-forever protection: when the current continuous cooling run started, and the active
         // rest window that stops an unreachable target from keeping the AC on for 24 hours.
