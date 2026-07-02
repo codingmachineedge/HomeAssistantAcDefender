@@ -1,0 +1,10 @@
+{
+  "name": "run-ac-defender-driver",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Playwright harness that signs in and screenshots the AC Defender Blazor app.",
+  "dependencies": {
+    "playwright": "^1.61.0"
+  }
+}
