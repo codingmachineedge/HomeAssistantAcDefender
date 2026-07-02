@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject DefenderStateProvider State
+@inject DefenderStateStore StateStore
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -10,147 +11,371 @@
 <MudDialogProvider />
 <MudSnackbarProvider />
 
-@if (OmegaVisible)
-{
-    <div class="omega-overlay">
-        <div class="omega-overlay__box">
-            <MudIcon Icon="@Icons.Material.Filled.ReportProblem" Class="omega-overlay__icon" />
-            <div class="omega-overlay__title">OMEGA ALERT</div>
-            <div class="omega-overlay__subtitle">Cooling failure confirmed</div>
-            <p class="omega-overlay__status">@Snapshot?.CoolingFailure.Status</p>
-            @if (Snapshot?.CoolingFailure.RoomRiseCelsius is { } rise)
-            {
-                <p class="omega-overlay__rise">Room temperature is climbing: +@rise.ToString("0.0") C over the last few minutes — consistent with the AC breaker being OFF.</p>
-            }
-            <div class="omega-overlay__actions">
-                <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Large" OnClick="GoToControls" StartIcon="@Icons.Material.Filled.Power">Open controls</MudButton>
-                <MudButton Variant="Variant.Outlined" Size="Size.Large" OnClick="DismissOmega" Class="omega-overlay__dismiss">Dismiss for 1 min</MudButton>
+<div class="@RootClass">
+
+    @* ═════════ COMMAND BAR ═════════ *@
+    <header class="ops-header">
+        <div class="ops-brand">
+            <div class="ops-brand__mark" aria-hidden="true">
+                ❆
+                <span class="ops-brand__ping"></span>
             </div>
-            <div class="omega-overlay__meta">Confirmed @(Snapshot?.CoolingFailure.OmegaSecondsActive ?? 0)s ago · mega alert #@(Snapshot?.CoolingFailure.AlertCount ?? 0)</div>
+            <div>
+                <div class="ops-brand__name">AC DEFENDER</div>
+                <div class="ops-brand__sub">TACTICAL OPS // DINING ROOM</div>
+            </div>
         </div>
-    </div>
-}
 
-<MudLayout Class="@(_isDarkMode ? "app-shell app-dark" : "app-shell app-light")">
-    <MudAppBar Class="top-bar" Color="Color.Default" Elevation="0" Fixed="true">
-        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" aria-label="Toggle navigation" />
-        <MudIcon Icon="@Icons.Material.Filled.Security" Class="brand-icon" />
-        <MudText Typo="Typo.h6" Class="brand-text">AC Defender Guard Post</MudText>
-        <MudSpacer />
-        <MudChip T="string" Class="status-chip" Color="@HeaderColor" Variant="Variant.Filled" Size="Size.Small">@HeaderStatus</MudChip>
-        <MudTooltip Text="Sign out">
-            <MudIconButton Color="Color.Inherit" Icon="@Icons.Material.Filled.Logout" OnClick="SignOut" aria-label="Sign out" />
-        </MudTooltip>
-        <MudTooltip Text="@ThemeTooltip">
-            <MudIconButton Color="Color.Inherit" Icon="@ThemeIcon" OnClick="ToggleTheme" aria-label="@ThemeTooltip" />
-        </MudTooltip>
-    </MudAppBar>
+        <div class="ops-header__spacer"></div>
 
-    <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="1" Variant="@DrawerVariant.Responsive" Class="app-drawer">
-        <NavMenu />
-    </MudDrawer>
+        <div class="ops-mood" role="status">
+            <span class="ops-mood__dot"></span>
+            <span class="ops-mood__label">@MoodLabel</span>
+        </div>
 
-    <MudMainContent Class="main-content">
-        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="page-container">
-            <h1 class="sr-only">@PageTitle</h1>
+        <div class="ops-clock">
+            <div class="ops-clock__time">@_clockText</div>
+            <div class="ops-clock__label">MISSION CLOCK · TORONTO</div>
+        </div>
+
+        <button class="ops-icon-btn" @onclick="SignOut" aria-label="Sign out" title="Sign out">⏻</button>
+        <button class="ops-icon-btn" @onclick="ToggleTheme" aria-label="@ThemeTooltip" title="@ThemeTooltip">@ThemeGlyph</button>
+    </header>
+
+    <div class="ops-body">
+
+        @* ═════════ NAV RAIL ═════════ *@
+        <nav class="ops-rail" aria-label="Primary">
+            <div class="ops-rail__title">STATIONS</div>
+            @foreach (var item in Stations)
+            {
+                var tag = StationTag(item);
+                <a href="@item.Href" class="@RailClass(item)">
+                    <span class="ops-rail__glyph" aria-hidden="true">@item.Glyph</span>
+                    <span>@item.Label</span>
+                    <span class="ops-rail__spacer"></span>
+                    <span class="@(tag.EndsWith('!') ? "ops-rail__tag ops-rail__tag--hot" : "ops-rail__tag")">@tag</span>
+                </a>
+            }
+
+            <div class="ops-rail__flex"></div>
+
+            <div class="ops-master">
+                <div class="ops-master__label">MASTER SWITCH</div>
+                <button class="@MasterBtnClass" @onclick="ToggleDefender">@MasterText</button>
+                <div class="ops-master__help">@MasterHelp</div>
+            </div>
+        </nav>
+
+        @* ═════════ MAIN ═════════ *@
+        <main class="ops-main">
+
+            @if (BannerVisible)
+            {
+                <div class="@BannerClass" role="alert">
+                    <div class="ops-alert-banner__strip"></div>
+                    <div class="ops-alert-banner__body">
+                        <span class="ops-alert-banner__glyph" aria-hidden="true">⚠</span>
+                        <div class="ops-alert-banner__main">
+                            <div class="ops-alert-banner__title">@BannerTitle</div>
+                            <div class="ops-alert-banner__sub">@BannerSub</div>
+                        </div>
+                        <div class="ops-alert-banner__timerbox">
+                            <div class="ops-alert-banner__timer">@BannerTimer</div>
+                            <div class="ops-alert-banner__timer-label">UNRESOLVED</div>
+                        </div>
+                        <button class="ops-alert-banner__ack" @onclick="AcknowledgeAlert">ACKNOWLEDGE</button>
+                        <a class="ops-alert-banner__controls" href="/controls">OPEN CONTROLS</a>
+                    </div>
+                    <div class="ops-alert-banner__strip ops-alert-banner__strip--bottom"></div>
+                </div>
+            }
+
+            <div class="ops-page-head">
+                <span class="ops-page-head__caret" aria-hidden="true">▸</span>
+                <h1>@PageTitle</h1>
+                <span class="ops-page-head__code">@PageCode</span>
+            </div>
+
             @Body
-        </MudContainer>
-    </MudMainContent>
-</MudLayout>
+        </main>
+    </div>
+
+    @* ═════════ MOBILE BOTTOM NAV ═════════ *@
+    <nav class="ops-mobile-nav" aria-label="Primary mobile">
+        @foreach (var item in Stations.Where(s => s.Mobile))
+        {
+            <a href="@item.Href" class="@MobileClass(item)">
+                <div class="ops-mobile-nav__glyph" aria-hidden="true">@item.Glyph</div>
+                <div class="ops-mobile-nav__label">@item.Label</div>
+            </a>
+        }
+    </nav>
+
+    @* atmosphere overlays *@
+    <div class="ops-scanlines" aria-hidden="true"></div>
+    <div class="ops-vignette" aria-hidden="true"></div>
+    @if (IsAlertMood)
+    {
+        <div class="ops-alert-breathe" aria-hidden="true"></div>
+    }
+    @if (Mood == "omega")
+    {
+        <div class="ops-omega-sweep" aria-hidden="true"></div>
+    }
+
+    @* boot sequence *@
+    @if (_bootStarted && _bootStep < BootDoneStep)
+    {
+        <div class="ops-boot" aria-hidden="true">
+            <div class="ops-boot__box">
+                <div class="ops-boot__title">AC DEFENDER <span>// BOOT SEQUENCE</span></div>
+                @foreach (var (text, ok) in BootLines.Take(Math.Min(_bootStep, BootLines.Length)))
+                {
+                    <div class="@(ok ? "ops-boot__line ops-boot__line--ok" : "ops-boot__line")">@text</div>
+                }
+                <span class="ops-boot__cursor"></span>
+                <div class="ops-boot__track">
+                    <div class="ops-boot__progress" style="width: @(Math.Min(100, _bootStep * 100 / BootDoneStep))%"></div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
 
 @code {
     private bool _isDarkMode = true;
-    private bool _drawerOpen = true;
+    private string _clockText = "--:--:--";
+    private System.Threading.Timer? _clock;
+    private int _bootStep;
+    private bool _bootStarted;
+
+    private const int BootDoneStep = 14;
+
+    private static readonly (string Text, bool Ok)[] BootLines =
+    [
+        ("> INITIALIZING GUARD POST KERNEL", false),
+        ("> CONNECTING TO HOME ASSISTANT ............ OK", true),
+        ("> CLIMATE.DINING_ROOM ..................... LOCKED", true),
+        ("> ROSTER: GUARD UNITS ..................... ONLINE", true),
+        ("> ALECTRA HUI INTEL LINK .................. OK", true),
+        ("> FRONT-DOOR KILL SWITCH .................. ARMED", true),
+        ("> SNACK INVENTORY ......................... ADEQUATE", true),
+        ("> ALL SECTORS NOMINAL — GUARD POST AWAKE", false),
+    ];
 
     private readonly MudTheme _theme = new()
     {
         PaletteLight = new PaletteLight
         {
-            Primary = "#0f7d67",
-            Secondary = "#5b6cd6",
-            Tertiary = "#b94a2f",
-            Info = "#166da8",
-            Success = "#1f9d57",
-            Warning = "#c98a18",
-            Error = "#c0392b",
-            AppbarBackground = "#ffffff",
-            AppbarText = "#17211c",
-            Background = "#eef1f0",
-            Surface = "#ffffff",
-            DrawerBackground = "#ffffff",
-            DrawerText = "#36443d",
-            TextPrimary = "#17211c",
-            TextSecondary = "#5d6b64",
-            ActionDefault = "#5d6b64",
-            LinesDefault = "#dde5e1"
+            Primary = "#0e7a52",
+            Secondary = "#68737b",
+            Info = "#0e7a52",
+            Success = "#0e7a52",
+            Warning = "#9a6605",
+            Error = "#c22c18",
+            AppbarBackground = "#f7f5ef",
+            AppbarText = "#1c2429",
+            Background = "#eceae3",
+            Surface = "#f7f5ef",
+            DrawerBackground = "#f7f5ef",
+            DrawerText = "#1c2429",
+            TextPrimary = "#1c2429",
+            TextSecondary = "#68737b",
+            ActionDefault = "#68737b",
+            LinesDefault = "#c9c3b2"
         },
         PaletteDark = new PaletteDark
         {
-            Primary = "#46c1a7",
-            Secondary = "#8a98ef",
-            Tertiary = "#e07a5f",
-            Info = "#6fb7e9",
-            Success = "#46c178",
-            Warning = "#e6b450",
-            Error = "#e57368",
-            AppbarBackground = "#131b18",
-            AppbarText = "#e7f6ef",
-            Background = "#0f1614",
-            Surface = "#17211c",
-            DrawerBackground = "#131b18",
-            DrawerText = "#cfe0d8",
-            TextPrimary = "#e7f6ef",
-            TextSecondary = "#9fb0a8",
-            ActionDefault = "#9fb0a8",
-            LinesDefault = "#2a3832"
+            Primary = "#3ddc97",
+            Secondary = "#6d7c86",
+            Info = "#4fc3ff",
+            Success = "#3ddc97",
+            Warning = "#ffb347",
+            Error = "#ff5c47",
+            AppbarBackground = "#0d1116",
+            AppbarText = "#d9e2e6",
+            Background = "#07090c",
+            Surface = "#0d1116",
+            DrawerBackground = "#0d1116",
+            DrawerText = "#d9e2e6",
+            TextPrimary = "#d9e2e6",
+            TextSecondary = "#6d7c86",
+            ActionDefault = "#6d7c86",
+            LinesDefault = "#2a3742"
         },
         Typography = new Typography
         {
-            Default = new DefaultTypography { FontFamily = ["Segoe UI", "Inter", "Roboto", "Arial", "sans-serif"] }
+            Default = new DefaultTypography { FontFamily = ["JetBrains Mono", "Consolas", "monospace"] }
         },
         LayoutProperties = new LayoutProperties
         {
-            DefaultBorderRadius = "12px",
-            DrawerWidthLeft = "248px"
+            DefaultBorderRadius = "0px"
         }
     };
 
-    private string ThemeIcon => _isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode;
-    private string ThemeTooltip => _isDarkMode ? "Switch to light theme" : "Switch to dark theme";
+    private DefenderSnapshot? Snapshot => State.Snapshot;
 
-    // A single descriptive <h1> landmark per page for screen readers (the visual headings are MudText).
-    private string PageTitle => new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant() switch
+    // ---------- mood (drives the accent colour of the whole shell) ----------
+
+    private string Mood => Snapshot switch
     {
-        "" or "/" => "Dashboard",
-        "/controls" => "Controls",
-        "/settings" => "Settings",
-        "/defense" => "Defense board",
-        "/energy" => "Energy",
-        "/comfort" => "Comfort",
-        "/logs" => "Logs",
-        "/guide" => "Guide",
+        null => "standby",
+        { CoolingFailure.OmegaAlerting: true } => "omega",
+        { CoolingFailure.Alerting: true } => "alert",
+        { FrontDoorKillSwitch.Active: true } or { FrontDoorKillSwitch.PersonDetected: true } => "alert",
+        { DefenderEnabled: false } => "standby",
+        _ => BusyGuardCount > 0 ? "acting" : "watching"
+    };
+
+    private string MoodLabel => Mood switch
+    {
+        "standby" => "STANDING DOWN",
+        "acting" => "GUARDS ENGAGED",
+        "alert" => "⚠ RED ALERT",
+        "omega" => "☠ OMEGA ALERT",
+        _ => Snapshot?.ConnectionState == "home-assistant" ? "ON WATCH" : "HA OFFLINE"
+    };
+
+    private bool IsAlertMood => Mood is "alert" or "omega";
+
+    private int BusyGuardCount => Snapshot is null
+        ? 0
+        : GuardCatalog.Live.Count(g => g.Project!(Snapshot).Busy);
+
+    private string RootClass => $"ops-root {(_isDarkMode ? "theme-dark" : "theme-light")} mood-{Mood}";
+
+    // ---------- stations ----------
+
+    private sealed record Station(string Href, string Glyph, string Label, string Code, bool Mobile);
+
+    private IReadOnlyList<Station> Stations =>
+    [
+        new("/", "⌖", "COMMAND", "STN-01", true),
+        new("/defense", "⛨", "DEFENSE", "STN-02", true),
+        new("/comfort", "☼", "COMFORT", "STN-03", true),
+        new("/energy", "↯", "ENERGY", "STN-04", true),
+        new("/logs", "≣", "LOGS", "STN-05", true),
+        new("/controls", "⌘", "CONTROLS", "STN-06", false),
+        new("/settings", "⚙", "ORDERS", "STN-07", true),
+        new("/guide", "✦", "GUIDE", "STN-08", false),
+    ];
+
+    private string CurrentPath => new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant() is { Length: > 0 } p ? p : "/";
+
+    private bool IsActive(Station s) => s.Href == "/" ? CurrentPath == "/" : CurrentPath.StartsWith(s.Href, StringComparison.Ordinal);
+
+    private string RailClass(Station s) => IsActive(s) ? "ops-rail__item active" : "ops-rail__item";
+    private string MobileClass(Station s) => IsActive(s) ? "ops-mobile-nav__item active" : "ops-mobile-nav__item";
+
+    private string StationTag(Station s) => s.Href switch
+    {
+        "/defense" when IsAlertMood => $"{BusyGuardCount}!",
+        "/defense" when BusyGuardCount > 0 => $"{BusyGuardCount}",
+        "/logs" when Snapshot?.ThermostatChanges is { Count: > 0 } changes => $"{Math.Min(changes.Count, 99)}",
+        _ => ""
+    };
+
+    private string PageTitle => CurrentPath switch
+    {
+        "/" => "Command Center",
+        "/defense" => "Defense Roster",
+        "/comfort" => "Comfort Watch",
+        "/energy" => "Energy Intel",
+        "/logs" => "Field Reports",
+        "/controls" => "Direct Controls",
+        "/settings" => "Standing Orders",
+        "/guide" => "Field Manual",
         var other => other.TrimStart('/') is { Length: > 0 } name
             ? char.ToUpperInvariant(name[0]) + name[1..]
             : "AC Defender"
     };
 
-    private DefenderSnapshot? Snapshot => State.Snapshot;
-
-    private string HeaderStatus => Snapshot switch
+    private string PageCode => CurrentPath switch
     {
-        null => "Starting",
-        { DefenderEnabled: false } => "Stand down",
-        { ConnectionState: "home-assistant" } => "Guard active",
-        _ => "Home Assistant offline"
+        "/" => "STN-01 · OVERVIEW",
+        "/defense" => $"STN-02 · {GuardCatalog.Live.Count()} UNITS",
+        "/comfort" => "STN-03 · UPSTAIRS",
+        "/energy" => "STN-04 · ALECTRA",
+        "/logs" => "STN-05 · ARCHIVE",
+        "/controls" => "STN-06 · DIRECT",
+        "/settings" => "STN-07 · CONFIG",
+        "/guide" => "STN-08 · MANUAL",
+        _ => ""
     };
 
-    private Color HeaderColor => Snapshot switch
+    // ---------- master switch ----------
+
+    private bool DefenderIsEnabled => Snapshot?.DefenderEnabled == true;
+    private string MasterText => DefenderIsEnabled ? "⛨ STAND DOWN" : "⏻ ACTIVATE";
+    private string MasterBtnClass => DefenderIsEnabled ? "ops-master__btn" : "ops-master__btn ops-master__btn--off";
+    private string MasterHelp => DefenderIsEnabled ? "The guard post is awake and caffeinated." : "Paused. Tap to wake the tiny guard shift.";
+
+    private void ToggleDefender()
     {
-        null => Color.Default,
-        { DefenderEnabled: false } => Color.Warning,
-        { ConnectionState: "home-assistant" } => Color.Success,
-        _ => Color.Error
-    };
+        var enable = !DefenderIsEnabled;
+        var gate = StateStore.TryBeginWebsiteCommand(enable ? "turn defender on" : "pause defender", bypassDebounce: true);
+        State.Refresh();
+        if (!gate.Accepted)
+        {
+            Snackbar.Add(gate.Message, Severity.Warning);
+            return;
+        }
+
+        StateStore.SetDefenderEnabled(enable);
+        State.Refresh();
+        Snackbar.Add(enable ? "Defender turned on." : "Defender paused. The real thermostat can be turned off from Controls.", Severity.Info);
+    }
+
+    // ---------- dramatic alert banner ----------
+
+    private DateTimeOffset? _alertAckUntil;
+
+    private bool BannerVisible =>
+        (Snapshot?.CoolingFailure.Alerting == true || Snapshot?.CoolingFailure.OmegaAlerting == true)
+        && (_alertAckUntil is null || DateTimeOffset.UtcNow >= _alertAckUntil);
+
+    private string BannerClass => Snapshot?.CoolingFailure.OmegaAlerting == true
+        ? "ops-alert-banner ops-alert-banner--omega"
+        : "ops-alert-banner";
+
+    private string BannerTitle => Snapshot?.CoolingFailure.OmegaAlerting == true
+        ? "☠ OMEGA ALERT — COOLING FAILURE CONFIRMED"
+        : "⚠ MEGA ALERT — COOLING FAILURE";
+
+    private string BannerSub => Snapshot?.CoolingFailure.Status ?? "";
+
+    private string BannerTimer
+    {
+        get
+        {
+            var secs = Snapshot?.CoolingFailure.OmegaAlerting == true
+                ? Snapshot.CoolingFailure.OmegaSecondsActive
+                : Snapshot?.CoolingFailure.SecondsActive ?? 0;
+            return $"{secs / 60:00}:{secs % 60:00}";
+        }
+    }
+
+    private void AcknowledgeAlert() => _alertAckUntil = DateTimeOffset.UtcNow.AddSeconds(60);
+
+    // ---------- theme ----------
+
+    private string ThemeGlyph => _isDarkMode ? "☀" : "☾";
+    private string ThemeTooltip => _isDarkMode ? "Switch to light theme" : "Switch to dark theme";
+
+    private async Task ToggleTheme()
+    {
+        _isDarkMode = !_isDarkMode;
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", "ac-defender-theme", _isDarkMode ? "dark" : "light");
+        }
+        catch
+        {
+        }
+    }
+
+    // ---------- lifecycle ----------
 
     protected override void OnInitialized()
     {
@@ -174,7 +399,24 @@
             if (!string.IsNullOrWhiteSpace(savedTheme))
             {
                 _isDarkMode = string.Equals(savedTheme, "dark", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        catch
+        {
+        }
+
+        _clock = new System.Threading.Timer(_ => InvokeAsync(TickClock), null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+
+        // Boot cinematic runs once per browser session, not on every navigation.
+        try
+        {
+            var bootDone = await JS.InvokeAsync<string?>("sessionStorage.getItem", "ops-boot-done");
+            if (string.IsNullOrEmpty(bootDone))
+            {
+                await JS.InvokeVoidAsync("sessionStorage.setItem", "ops-boot-done", "1");
+                _bootStarted = true;
                 StateHasChanged();
+                _ = RunBootSequenceAsync();
             }
         }
         catch
@@ -182,45 +424,31 @@
         }
     }
 
-    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
-
-    private async Task ToggleTheme()
+    private void TickClock()
     {
-        _isDarkMode = !_isDarkMode;
-        try
+        _clockText = Format.ToToronto(DateTimeOffset.UtcNow).ToString("HH:mm:ss");
+        StateHasChanged();
+    }
+
+    private async Task RunBootSequenceAsync()
+    {
+        while (_bootStep < BootDoneStep)
         {
-            await JS.InvokeVoidAsync("localStorage.setItem", "ac-defender-theme", _isDarkMode ? "dark" : "light");
-        }
-        catch
-        {
+            await Task.Delay(170);
+            _bootStep++;
+            await InvokeAsync(StateHasChanged);
         }
     }
+
+    // ---------- cooling-failure snackbar (kept from previous shell) ----------
 
     private DateTimeOffset? _lastCoolingFailureSnackbarAt;
-    private DateTimeOffset? _omegaDismissedUntil;
-
-    private bool OmegaVisible =>
-        Snapshot?.CoolingFailure.OmegaAlerting == true
-        && (_omegaDismissedUntil is null || DateTimeOffset.UtcNow >= _omegaDismissedUntil);
-
-    private void DismissOmega() => _omegaDismissedUntil = DateTimeOffset.UtcNow.AddSeconds(60);
-
-    private void GoToControls()
-    {
-        DismissOmega();
-        Nav.NavigateTo("/controls");
-    }
-
-    private void SignOut()
-    {
-        Nav.NavigateTo("/logout", forceLoad: true);
-    }
 
     private void OnStateChanged()
     {
-        if (Snapshot?.CoolingFailure.OmegaAlerting != true)
+        if (Snapshot?.CoolingFailure.Alerting != true && Snapshot?.CoolingFailure.OmegaAlerting != true)
         {
-            _omegaDismissedUntil = null;
+            _alertAckUntil = null;
         }
 
         ShowCoolingFailureSnackbarIfDue();
@@ -249,9 +477,15 @@
         });
     }
 
+    private void SignOut()
+    {
+        Nav.NavigateTo("/logout", forceLoad: true);
+    }
+
     public void Dispose()
     {
         State.Changed -= OnStateChanged;
         Nav.LocationChanged -= OnLocationChanged;
+        _clock?.Dispose();
     }
 }

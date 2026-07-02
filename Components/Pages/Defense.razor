@@ -4,59 +4,55 @@
 
 <PageTitle>Defense - AC Defender</PageTitle>
 
-<MudStack Spacing="3">
-    <SectionCard Title="Natural Defender"
-                 Subtitle="Live timing, wall-touch, and safety guards"
-                 Help="Each card shows what the guard is doing right now. Open How this works for the plain algorithm, or More extra-specific info for the decision brief, next step, trigger verdict, future trigger, overrule rules, exact algorithm, and live evidence.">
-        <Actions>
-            <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">@BusyCount busy</MudChip>
-            <MudButton Href="/guide" Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.MenuBook">Guide</MudButton>
-        </Actions>
-        <ChildContent>
-            <MudGrid Spacing="2" Class="mt-1">
-                <MudItem xs="12" sm="8">
-                    <MudTextField @bind-Value="_search" Immediate="true" Clearable="true"
-                                  Placeholder="Search guards (cooldown, touch, weather, echo, runway…)"
-                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-                                  Variant="Variant.Outlined" Margin="Margin.Dense" />
-                </MudItem>
-                <MudItem xs="12" sm="4">
-                    <MudSelect T="string" @bind-Value="_category" Variant="Variant.Outlined" Margin="Margin.Dense" Label="Category">
-                        <MudSelectItem T="string" Value="@("All")">All categories</MudSelectItem>
-                        <MudSelectItem T="string" Value="@("Core")">Core</MudSelectItem>
-                        <MudSelectItem T="string" Value="@("WallTouch")">Wall touch</MudSelectItem>
-                        <MudSelectItem T="string" Value="@("Sensor")">Sensors</MudSelectItem>
-                        <MudSelectItem T="string" Value="@("System")">System</MudSelectItem>
-                    </MudSelect>
-                </MudItem>
-            </MudGrid>
-        </ChildContent>
-    </SectionCard>
-
-    @foreach (var group in Groups)
+<div class="ops-roster-tools">
+    <input class="ops-input" value="@_search" @oninput="OnSearchChanged" placeholder="SEARCH ROSTER…" aria-label="Search guards" />
+    @foreach (var (value, label) in Categories)
     {
-        var guards = Filtered(group.Category).ToList();
-        if (guards.Count == 0)
-        {
-            continue;
-        }
+        <button class="@ChipClass(value)" @onclick="() => _category = value">@label</button>
+    }
+    <a class="ops-chip" href="/guide">✦ GUIDE</a>
+</div>
 
-        <div>
-            <MudText Typo="Typo.subtitle1" Class="guard-group__title">@group.Title</MudText>
-            <div class="guard-grid">
-                @foreach (var guard in guards)
-                {
-                    <GuardCard Info="guard" Snapshot="Snapshot" />
-                }
-            </div>
+@if (BusyCount > 0)
+{
+    <div class="ops-alert-row ops-alert-row--warn" style="margin-bottom: 14px;">
+        <span class="ops-alert-row__glyph" aria-hidden="true">◔</span>
+        <span class="ops-alert-row__tag">@BusyCount UNIT@(BusyCount == 1 ? "" : "S") ACTING</span>
+        <span class="ops-alert-row__text">Guards currently holding, waiting, or shaping a correction.</span>
+    </div>
+}
+
+@foreach (var group in Groups)
+{
+    var guards = Filtered(group.Category).ToList();
+    if (guards.Count == 0)
+    {
+        continue;
+    }
+
+    <div class="ops-roster-group">
+        <div class="ops-roster-group__head">
+            <span class="ops-roster-group__title">@group.Title</span>
+            <span class="ops-roster-group__rule"></span>
+            <span class="ops-roster-group__count">@guards.Count UNIT@(guards.Count == 1 ? "" : "S")</span>
         </div>
-    }
+        <div class="guard-grid">
+            @foreach (var guard in guards)
+            {
+                <GuardCard Info="guard" Snapshot="Snapshot" />
+            }
+        </div>
+    </div>
+}
 
-    @if (!Groups.SelectMany(g => Filtered(g.Category)).Any())
-    {
-        <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined">No guard matches that search.</MudAlert>
-    }
-</MudStack>
+@if (!Groups.SelectMany(g => Filtered(g.Category)).Any())
+{
+    <div class="ops-alert-row">
+        <span class="ops-alert-row__glyph" aria-hidden="true">∅</span>
+        <span class="ops-alert-row__tag">NO MATCH</span>
+        <span class="ops-alert-row__text">No guard matches that search.</span>
+    </div>
+}
 
 @code {
     private string _search = "";
@@ -71,6 +67,19 @@
         (GuardCategory.Sensor, "Sensor timing"),
         (GuardCategory.System, "Safety & system"),
     ];
+
+    private static readonly (string Value, string Label)[] Categories =
+    [
+        ("All", "ALL"),
+        ("Core", "CORE COOLING"),
+        ("WallTouch", "WALL-TOUCH"),
+        ("Sensor", "SENSOR TIMING"),
+        ("System", "SAFETY & SYSTEM"),
+    ];
+
+    private string ChipClass(string value) => _category == value ? "ops-chip active" : "ops-chip";
+
+    private void OnSearchChanged(ChangeEventArgs e) => _search = e.Value?.ToString() ?? "";
 
     private int BusyCount => GuardCatalog.Live.Count(g => g.Project!(Snapshot).Busy);
 

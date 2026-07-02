@@ -6,186 +6,479 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
-<PageTitle>Dashboard - AC Defender</PageTitle>
+<PageTitle>Command Center - AC Defender</PageTitle>
 
-<MudStack Spacing="3">
-    @* ---------- Hero ---------- *@
-    <MudPaper Class="hero" Elevation="0">
-        <div class="hero__main">
-            <MudText Typo="Typo.overline">Generated target</MudText>
-            <div class="hero__target">@TargetText</div>
-            <MudText Typo="Typo.body2" Class="helper-text">The cool number the defender is keeping for the dining room.</MudText>
+<div class="ops-dash-stack">
 
-            <div class="hero__target-edit">
-                <MudNumericField T="double" Value="_targetInput" ValueChanged="OnTargetInputChanged"
-                                 Variant="Variant.Outlined" Margin="Margin.Dense" Min="10" Max="35" Step="0.1"
-                                 Adornment="Adornment.End" AdornmentText="C" Class="hero__target-field" />
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ApplyTarget" StartIcon="@Icons.Material.Filled.Check">Apply</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="GenerateTarget" StartIcon="@Icons.Material.Filled.AutoAwesome">Generate</MudButton>
-            </div>
-        </div>
-
-        <div class="hero__side">
-            <MudChip T="string" Color="@ConnectionColor" Variant="Variant.Filled">@ConnectionText</MudChip>
-            <MudButton Class="@DefenderToggleClass" FullWidth="true" Variant="Variant.Filled" Color="@DefenderToggleColor"
-                       Size="Size.Large" StartIcon="@DefenderToggleIcon" OnClick="ToggleDefender">
-                @DefenderToggleText
-            </MudButton>
-            <MudText Typo="Typo.caption" Class="helper-text">@DefenderToggleHelp</MudText>
-        </div>
-    </MudPaper>
-
-    @* ---------- Priority alerts ---------- *@
-    @if (Snapshot?.CoolingFailure.Alerting == true)
+    @* ---------- alert rows ---------- *@
+    @if (Snapshot?.FrontDoorKillSwitch.Active == true || Snapshot?.FrontDoorKillSwitch.PersonDetected == true)
     {
-        <MudAlert Severity="Severity.Error" Variant="Variant.Filled">@Snapshot.CoolingFailure.Status</MudAlert>
-    }
-    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">@NextActionText</MudAlert>
-    @if (Snapshot?.WebsiteCommandDebounce.Active == true)
-    {
-        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot.WebsiteCommandDebounce.Status</MudAlert>
+        <div class="ops-alert-row ops-alert-row--bad">
+            <span class="ops-alert-row__glyph" aria-hidden="true">⛔</span>
+            <span class="ops-alert-row__tag">DOOR TRIP</span>
+            <span class="ops-alert-row__text">@Snapshot.FrontDoorKillSwitch.Status</span>
+        </div>
     }
     @if (Snapshot?.Emergency.Active == true)
     {
-        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot.Emergency.Status</MudAlert>
+        <div class="ops-alert-row ops-alert-row--warn">
+            <span class="ops-alert-row__glyph" aria-hidden="true">‼</span>
+            <span class="ops-alert-row__tag">EMERGENCY</span>
+            <span class="ops-alert-row__text">@Snapshot.Emergency.Status</span>
+        </div>
     }
-    @if (Snapshot?.FrontDoorKillSwitch.Active == true || Snapshot?.FrontDoorKillSwitch.PersonDetected == true)
+    @if (Snapshot?.WebsiteCommandDebounce.Active == true)
     {
-        <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Dense="true">@Snapshot.FrontDoorKillSwitch.Status</MudAlert>
+        <div class="ops-alert-row ops-alert-row--warn">
+            <span class="ops-alert-row__glyph" aria-hidden="true">◔</span>
+            <span class="ops-alert-row__tag">DEBOUNCE</span>
+            <span class="ops-alert-row__text">@Snapshot.WebsiteCommandDebounce.Status</span>
+        </div>
     }
+    <div class="ops-alert-row">
+        <span class="ops-alert-row__glyph" aria-hidden="true">@NextActionGlyph</span>
+        <span class="ops-alert-row__tag">@NextActionTag</span>
+        <span class="ops-alert-row__text">@NextActionText</span>
+    </div>
 
-    @if (Snapshot?.DefenderEnabled == true)
-    {
-    @* ---------- Live readings ---------- *@
-    <SectionCard Title="Live readings" Help="The real dining-room thermostat right now.">
-        <MudGrid Spacing="2">
-            @foreach (var metric in ReadingMetrics)
-            {
-                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" Sm="4" Md="3" Lg="3" />
-            }
-        </MudGrid>
-    </SectionCard>
-    }
-    else
-    {
-        <SectionCard Title="Guard post standby"
-                     Subtitle="Defender is paused"
-                     Help="Live tactical doodads are hidden while the crew is standing down. Very hush-hush, very snack-based.">
-            <MudButton Class="@DefenderToggleClass" Variant="Variant.Filled" Color="@DefenderToggleColor"
-                       Size="Size.Large" StartIcon="@DefenderToggleIcon" OnClick="ToggleDefender">
-                @DefenderToggleText
-            </MudButton>
-        </SectionCard>
-    }
+    <div class="ops-dash-grid">
 
-    <MudGrid Spacing="3">
-        @* ---------- Defense at a glance ---------- *@
-        @if (Snapshot?.DefenderEnabled == true)
-        {
-        <MudItem xs="12" lg="7">
-            <SectionCard Title="Defense at a glance"
-                         Subtitle="@($"{BusyGuards.Count} guard{(BusyGuards.Count == 1 ? "" : "s")} acting")"
-                         Help="The guards currently holding, waiting, or shaping a correction.">
-                <Actions>
-                    <MudButton Href="/defense" Variant="Variant.Text" Size="Size.Small" EndIcon="@Icons.Material.Filled.ArrowForward">Open board</MudButton>
-                </Actions>
-                <ChildContent>
-                    @if (BusyGuards.Count > 0)
+        @* ── TACTICAL FLOOR ── *@
+        <div class="ops-floor">
+            <div class="ops-floor__head">
+                <span class="ops-floor__title">DEFENSE FLOOR — LIVE</span>
+                <span class="ops-floor__rec-dot" aria-hidden="true"></span>
+                <span class="ops-floor__rec">REC</span>
+                <span class="ops-floor__spacer"></span>
+                <span class="ops-floor__status">@FloorStatus</span>
+            </div>
+
+            <div class="ops-floor__map" @onclick="CloseThermostat">
+                <div class="ops-floor__radar" aria-hidden="true"><div class="ops-floor__radar-cone"></div></div>
+                <div class="ops-floor__scanline" aria-hidden="true"></div>
+
+                <div class="ops-room" style="left: 6%; top: 8%; width: 42%; height: 40%;"><span class="ops-room__label">DINING ROOM</span></div>
+                <div class="ops-room" style="left: 54%; top: 8%; width: 40%; height: 26%;"><span class="ops-room__label">KITCHEN</span></div>
+                <div class="ops-room" style="left: 54%; top: 40%; width: 40%; height: 32%;"><span class="ops-room__label">LIVING ROOM</span></div>
+                <div class="ops-room" style="left: 6%; top: 54%; width: 42%; height: 34%;"><span class="ops-room__label">HALLWAY · FRONT DOOR</span></div>
+
+                @* patrol routes *@
+                <div class="ops-floor__route-h" style="left: 14%; top: 36%; width: 34%;" aria-hidden="true"></div>
+                <div class="ops-floor__route-v" style="left: 62%; top: 30%; height: 38%;" aria-hidden="true"></div>
+
+                @* thermostat node *@
+                <div class="ops-thermo-node" @onclick:stopPropagation="true">
+                    <div class="@ThermoDiscClass" @onclick="ToggleThermostatPop" role="button" tabindex="0" aria-label="Open unit control">
+                        <span class="ops-thermo-node__value">@SetpointShort</span>
+                        <span class="ops-thermo-node__ping" aria-hidden="true"></span>
+                        <span class="ops-thermo-node__ping ops-thermo-node__ping--late" aria-hidden="true"></span>
+                    </div>
+                    <div class="ops-thermo-node__tag">THERMOSTAT · TAP</div>
+
+                    @if (_thermoOpen)
                     {
-                        <MudStack Spacing="1">
-                            @foreach (var item in BusyGuards)
-                            {
-                                <div class="glance-row">
-                                    <span class="guard-dot guard-dot--@item.View.Tone.Css()"></span>
-                                    <span class="glance-row__name">@item.Info.Name</span>
-                                    <MudChip T="string" Size="Size.Small" Color="@item.View.Tone.ToColor()" Variant="Variant.Outlined">@item.View.StateLabel</MudChip>
-                                    <span class="glance-row__status helper-text">@item.View.StatusText</span>
+                        <div class="ops-thermo-pop">
+                            <div class="ops-thermo-pop__head">
+                                <span class="ops-thermo-pop__title">UNIT CONTROL</span>
+                                <button class="ops-thermo-pop__close" @onclick="CloseThermostat" aria-label="Close unit control">✕</button>
+                            </div>
+                            <div class="ops-thermo-pop__row">
+                                <button class="ops-step-btn" @onclick="TargetDown" aria-label="Lower target">−</button>
+                                <div>
+                                    <div class="ops-thermo-pop__value">@TargetText</div>
+                                    <div class="ops-thermo-pop__value-label">TARGET</div>
                                 </div>
-                            }
-                        </MudStack>
+                                <button class="ops-step-btn" @onclick="TargetUp" aria-label="Raise target">+</button>
+                            </div>
+                            <div class="ops-thermo-pop__actions">
+                                <button class="ops-mode-btn active" @onclick="ForceBoost">❆ COOL</button>
+                                <button class="ops-mode-btn" @onclick="ForceTarget">⌖ TARGET</button>
+                                <button class="ops-mode-btn" @onclick="RefreshReal">⟳ REFRESH</button>
+                                <button class="ops-mode-btn" @onclick="TurnOff">⏻ OFF</button>
+                            </div>
+                            <div class="@ThermoNoteClass">@ThermoNote</div>
+                        </div>
                     }
-                    else
-                    {
-                        <MudText Class="helper-text">All guards are calm — the defender is just watching.</MudText>
-                    }
-                </ChildContent>
-            </SectionCard>
-        </MudItem>
-        }
+                </div>
 
-        @* ---------- Quick controls ---------- *@
-        <MudItem xs="12" lg="@(Snapshot?.DefenderEnabled == true ? 5 : 12)">
-            <SectionCard Title="Quick controls" Help="These talk to the real dining-room thermostat.">
-                <MudStack Spacing="2">
-                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh reading</MudButton>
-                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ForceTarget" StartIcon="@Icons.Material.Filled.TrackChanges">Force exact target</MudButton>
-                    <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ForceBoost" StartIcon="@Icons.Material.Filled.AcUnit">Force cooling</MudButton>
-                    <MudButton FullWidth="true" Variant="Variant.Text" Href="/controls" EndIcon="@Icons.Material.Filled.ArrowForward">All controls</MudButton>
-                </MudStack>
-            </SectionCard>
-        </MudItem>
-    </MudGrid>
-</MudStack>
+                @* cold air particles while actively cooling *@
+                @if (CoolingActive)
+                {
+                    <span class="ops-flake" style="left: 24%; top: 32%; font-size: 11px; animation-duration: 5s;" aria-hidden="true">❆</span>
+                    <span class="ops-flake" style="left: 29%; top: 30%; font-size: 9px; animation-duration: 6.5s; animation-delay: 1.2s;" aria-hidden="true">❆</span>
+                    <span class="ops-flake" style="left: 21%; top: 34%; font-size: 8px; animation-duration: 7.5s; animation-delay: 2.6s;" aria-hidden="true">❆</span>
+                    <span class="ops-flake" style="left: 33%; top: 33%; font-size: 10px; animation-duration: 5.8s; animation-delay: 3.4s;" aria-hidden="true">❆</span>
+                    <span class="ops-flake" style="left: 26%; top: 28%; font-size: 8.5px; animation-duration: 8.2s; animation-delay: 0.6s;" aria-hidden="true">❆</span>
+                }
+
+                @* front door sensor *@
+                <div class="@DoorClass">
+                    <span class="ops-door__diamond" aria-hidden="true"></span>
+                    <span class="ops-door__label">DOOR SENSOR</span>
+                </div>
+
+                @* wall-touch blip *@
+                @if (ShowIntruder)
+                {
+                    <div class="ops-intruder">
+                        <div class="ops-intruder__blip" aria-hidden="true"><span class="ops-intruder__blip-ping"></span></div>
+                        <div class="ops-intruder__label">@IntruderLabel</div>
+                    </div>
+                }
+
+                @* defender agents *@
+                @foreach (var agent in Agents)
+                {
+                    <div class="@agent.Css" style="left: @agent.X; top: @agent.Y;">
+                        <div class="ops-agent__inner">
+                            <div class="ops-agent__disc">
+                                @agent.Initials
+                                @if (agent.Engaged)
+                                {
+                                    <span class="ops-agent__ring" aria-hidden="true"></span>
+                                }
+                            </div>
+                            <div class="ops-agent__name">@agent.Name</div>
+                            <div class="ops-agent__state">@agent.State</div>
+                        </div>
+                    </div>
+                }
+
+                <span class="ops-floor__corner ops-floor__corner--tl" aria-hidden="true"></span>
+                <span class="ops-floor__corner ops-floor__corner--tr" aria-hidden="true"></span>
+                <span class="ops-floor__corner ops-floor__corner--bl" aria-hidden="true"></span>
+                <span class="ops-floor__corner ops-floor__corner--br" aria-hidden="true"></span>
+            </div>
+
+            <div class="ops-ticker">
+                <span class="ops-ticker__tag">FEED</span>
+                <div class="ops-ticker__viewport">
+                    <div class="ops-ticker__scroll">@TickerText@TickerText</div>
+                </div>
+            </div>
+        </div>
+
+        @* ── RIGHT COLUMN ── *@
+        <div class="ops-dash-col">
+
+            @* wall thermostat *@
+            <div class="ops-panel ops-panel--pad">
+                <div class="ops-dial-head">
+                    <span class="ops-panel__label">WALL THERMOSTAT — LIVE UNIT</span>
+                    <span class="@DialStateClass">@DialStateText</span>
+                </div>
+                <div class="ops-dial-wrap">
+                    <div class="ops-dial" style="background: @DialBackground;">
+                        <div class="ops-dial__center">
+                            <div>
+                                <div class="ops-dial__value">@SetpointText</div>
+                                <div class="ops-dial__mode">SETPOINT · @HvacModeText</div>
+                                <div class="ops-dial__room">ROOM @RoomText</div>
+                            </div>
+                        </div>
+                        <div class="ops-dial__knob" style="left: @KnobX; top: @KnobY;" aria-hidden="true"></div>
+                    </div>
+                </div>
+                <div class="ops-dial-scale"><span>16°</span><span>LIVE WALL UNIT</span><span>30°</span></div>
+                <div class="ops-dial-controls">
+                    <input type="number" min="10" max="35" step="0.5" value="@TargetInputText"
+                           @onchange="OnTargetInputChanged" aria-label="Target temperature" />
+                    <button class="ops-btn ops-btn--outline" @onclick="ForceTarget">⌖ SEND</button>
+                    <button class="ops-btn ops-btn--danger" @onclick="TurnOff">⏻ OFF</button>
+                </div>
+                <div class="@ThermoNoteClass" style="margin-top: 10px;">@ThermoNote</div>
+            </div>
+
+            @* generated target *@
+            <div class="ops-panel ops-panel--pad">
+                <div class="ops-panel__label">GENERATED TARGET</div>
+                <div class="ops-target__row">
+                    <div class="ops-target__value">@TargetShort</div>
+                    <div class="ops-target__steppers">
+                        <button @onclick="TargetUp" aria-label="Raise target">▲</button>
+                        <button @onclick="TargetDown" aria-label="Lower target">▼</button>
+                    </div>
+                </div>
+                <div class="ops-target__help">The cool number the defenders are holding for the dining room.</div>
+                <div class="ops-target__actions">
+                    <button class="ops-btn ops-btn--solid" @onclick="ApplyTarget">APPLY</button>
+                    <button class="ops-btn ops-btn--outline" @onclick="GenerateTarget">✦ GENERATE</button>
+                </div>
+            </div>
+
+            @* live telemetry *@
+            <div class="ops-panel ops-panel--pad">
+                <div class="ops-panel__label">LIVE TELEMETRY</div>
+                <div class="ops-telemetry">
+                    @foreach (var row in Telemetry)
+                    {
+                        <div>
+                            <div class="ops-telemetry__row-top">
+                                <span class="ops-telemetry__label">@row.Label</span>
+                                <span class="ops-telemetry__value @row.ValueCss">@row.Value</span>
+                            </div>
+                            <div class="ops-bar"><div class="ops-bar__fill @row.BarCss" style="width: @row.Bar;"></div></div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @* direct orders *@
+            <div class="ops-panel ops-panel--pad">
+                <div class="ops-panel__label">DIRECT ORDERS</div>
+                <div class="ops-orders">
+                    <button class="ops-order-btn" @onclick="RefreshReal">
+                        <span aria-hidden="true">⟳</span>
+                        <span class="ops-order-btn__label">REFRESH READING</span>
+                        <span class="ops-order-btn__hint">ask HA again</span>
+                    </button>
+                    <button class="ops-order-btn" @onclick="ForceTarget">
+                        <span aria-hidden="true">⌖</span>
+                        <span class="ops-order-btn__label">FORCE EXACT TARGET</span>
+                        <span class="ops-order-btn__hint">@TargetText now</span>
+                    </button>
+                    <button class="ops-order-btn ops-order-btn--solid" @onclick="ForceBoost">
+                        <span aria-hidden="true">❆</span>
+                        <span class="ops-order-btn__label">FORCE COOLING</span>
+                        <span class="ops-order-btn__hint">no waiting</span>
+                    </button>
+                    <a class="ops-order-btn" href="/controls">
+                        <span aria-hidden="true">⌘</span>
+                        <span class="ops-order-btn__label">ALL CONTROLS</span>
+                        <span class="ops-order-btn__hint">STN-06 →</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 
 @code {
     private double _targetInput = 22.0;
     private bool _targetDirty;
+    private bool _thermoOpen;
 
     private DefenderSnapshot? Snapshot => State.Snapshot;
 
-    private string TargetText => Snapshot is null ? "-- C" : $"{Snapshot.TargetTemperatureCelsius:0.0} C";
-    private string ConnectionText => Snapshot?.ConnectionState == "home-assistant" ? "Home Assistant" : Snapshot?.ConnectionState ?? "--";
-    private Color ConnectionColor => Snapshot?.ConnectionState == "home-assistant" ? Color.Success : Color.Error;
-    private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
     private bool DefenderIsEnabled => Snapshot?.DefenderEnabled == true;
-    private string DefenderToggleText => DefenderIsEnabled ? "Stand Down Defender" : "Activate Defender";
-    private string DefenderToggleHelp => DefenderIsEnabled ? "Green means the guard post is awake." : "Red means paused. Tap to wake the tiny guard shift.";
-    private string DefenderToggleIcon => DefenderIsEnabled ? Icons.Material.Filled.Shield : Icons.Material.Filled.PowerSettingsNew;
-    private Color DefenderToggleColor => DefenderIsEnabled ? Color.Success : Color.Error;
-    private string DefenderToggleClass => DefenderIsEnabled ? "defender-toggle defender-toggle--active" : "defender-toggle defender-toggle--paused";
+    private bool IsAlert => Snapshot?.CoolingFailure.Alerting == true || Snapshot?.CoolingFailure.OmegaAlerting == true
+        || Snapshot?.FrontDoorKillSwitch.Active == true || Snapshot?.FrontDoorKillSwitch.PersonDetected == true;
 
-    private IReadOnlyList<MetricItem> ReadingMetrics =>
-    [
-        new("Room", Format.Temp(Snapshot?.HomeAssistantThermostat?.CurrentTemperatureCelsius), "How warm the dining room is."),
-        new("Setpoint", Format.Temp(Snapshot?.HomeAssistantThermostat?.SetPointCelsius), "What the thermostat is set to."),
-        new("Outdoor", Format.Temp(Snapshot?.Weather?.OutdoorTemperatureCelsius), "How warm it is outside."),
-        new("Weather", Snapshot?.Weather?.Condition ?? "--", "What the weather looks like now."),
-        new("Mode", Snapshot?.HomeAssistantThermostat?.HvacMode ?? "--", "The AC must stay on cool while active."),
-        new("Action", Snapshot?.HomeAssistantThermostat?.HvacAction ?? "--", "What the thermostat is doing."),
-        new("Fan", Snapshot?.HomeAssistantThermostat?.FanMode ?? "--", "How the fan is blowing air."),
-        new("Cooldown", Snapshot?.CooldownSeconds > 0 ? $"{Snapshot.CooldownSeconds}s" : "Ready", "A short wait before fixing again."),
-    ];
+    private int BusyGuardCount => Snapshot is null ? 0 : GuardCatalog.Live.Count(g => g.Project!(Snapshot).Busy);
+    private bool Engaged => DefenderIsEnabled && (BusyGuardCount > 0 || IsAlert);
 
-    private record BusyGuard(GuardInfo Info, GuardLiveView View);
+    // ---------- alert / next-action row ----------
 
-    private IReadOnlyList<BusyGuard> BusyGuards =>
-        Snapshot is null
-            ? Array.Empty<BusyGuard>()
-            : GuardCatalog.Live
-                .Select(g => new BusyGuard(g, g.Project!(Snapshot)))
-                .Where(x => x.View.Busy)
-                .ToList();
+    private string NextActionGlyph => !DefenderIsEnabled ? "☾" : BusyGuardCount > 0 ? "◔" : "✓";
+    private string NextActionTag => !DefenderIsEnabled ? "STAND-DOWN" : BusyGuardCount > 0 ? "NEXT MOVE" : "ALL QUIET";
+    private string NextActionText => Snapshot?.NextAction ?? "Waiting for defender status.";
 
-    protected override void OnInitialized()
+    // ---------- floor ----------
+
+    private string FloorStatus => $"{Agents.Count(a => a.Engaged)} ENGAGED · {(DefenderIsEnabled ? 4 : 0)} ON DUTY";
+    private bool CoolingActive => DefenderIsEnabled && string.Equals(Snapshot?.HomeAssistantThermostat?.HvacAction, "cooling", StringComparison.OrdinalIgnoreCase);
+    private bool ShowIntruder => Engaged && BusyGuardCount > 0;
+    private string IntruderLabel => IsAlert ? "HOSTILE · WALL TOUCH" : "WALL TOUCH";
+    private string DoorClass => Snapshot?.FrontDoorKillSwitch.Active == true || Snapshot?.FrontDoorKillSwitch.PersonDetected == true
+        ? "ops-door ops-door--tripped"
+        : "ops-door";
+
+    private sealed record FloorAgent(string Name, string Initials, string X, string Y, string Route, string State, bool Engaged)
     {
-        _targetInput = Snapshot?.TargetTemperatureCelsius ?? 22.0;
-        State.Changed += OnStateChanged;
+        public string Css => $"ops-agent ops-agent--{Route}{(Engaged ? " ops-agent--engaged" : "")}";
     }
 
-    private void OnStateChanged()
+    private IReadOnlyList<FloorAgent> Agents
     {
-        if (!_targetDirty && Snapshot is not null)
+        get
         {
-            _targetInput = Snapshot.TargetTemperatureCelsius;
+            var alert = IsAlert;
+            var standby = !DefenderIsEnabled;
+            var engagedCount = Math.Min(BusyGuardCount, 4);
+
+            return
+            [
+                MakeAgent("SGT FROST", "F", "20%", "44%", "a", 0),
+                MakeAgent("CPL BREEZE", "B", "68%", "20%", "b", 1),
+                MakeAgent("PVT CHILL", "C", "72%", "56%", "c", 2),
+                MakeAgent("LT GLACIER", "G", "30%", "74%", "d", 3),
+            ];
+
+            FloorAgent MakeAgent(string name, string initials, string x, string y, string route, int index)
+            {
+                var engaged = !standby && (index < engagedCount || (alert && index < 2));
+                var state = standby ? "OFF DUTY"
+                    : alert ? (engaged ? "ENGAGING" : "COVERING")
+                    : engaged ? "CORRECTING"
+                    : "PATROLLING";
+                return new FloorAgent(name, initials, x, y, route, state, engaged);
+            }
+        }
+    }
+
+    // ---------- ticker ----------
+
+    private string TickerText
+    {
+        get
+        {
+            var bits = new List<string>();
+            if (!DefenderIsEnabled)
+            {
+                bits.Add("DEFENDER OFFLINE");
+                bits.Add("SNACK INVENTORY: ADEQUATE");
+                bits.Add("WAKE THE CREW WHEN READY");
+            }
+            else
+            {
+                if (Snapshot?.HomeAssistantThermostat is { } t)
+                {
+                    bits.Add($"ROOM {t.CurrentTemperatureCelsius:0.0}°C · SETPOINT {t.SetPointCelsius:0.0}°C · {t.HvacAction?.ToUpperInvariant()}");
+                }
+                if (Snapshot?.Weather?.OutdoorTemperatureCelsius is { } o)
+                {
+                    bits.Add($"OUTDOOR {o:0.0}°C {Snapshot.Weather.Condition?.ToUpperInvariant()}");
+                }
+                if (!string.IsNullOrWhiteSpace(Snapshot?.PeakPowerSaver.TouPeriod))
+                {
+                    bits.Add($"ALECTRA {Snapshot.PeakPowerSaver.TouPeriod.ToUpperInvariant()}");
+                }
+                foreach (var e in (Snapshot?.Events ?? Array.Empty<DefenderEvent>()).Take(4))
+                {
+                    bits.Add($"{Format.ShortTime(e.Timestamp)} {e.Message.ToUpperInvariant()}");
+                }
+                if (bits.Count == 0)
+                {
+                    bits.Add("ALL SECTORS NOMINAL");
+                }
+            }
+
+            return " /// " + string.Join(" /// ", bits) + " /// ";
+        }
+    }
+
+    // ---------- thermostat / dial ----------
+
+    private double Setpoint => Snapshot?.HomeAssistantThermostat?.SetPointCelsius ?? Target;
+    private double Target => Snapshot?.TargetTemperatureCelsius ?? 22.0;
+
+    private string SetpointShort => $"{Setpoint:0.0}°";
+    private string SetpointText => $"{Setpoint:0.0}°C";
+    private string TargetText => $"{Target:0.0}°C";
+    private string TargetShort => $"{Target:0.0}°";
+    private string TargetInputText => _targetInput.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+    private string RoomText => Snapshot?.HomeAssistantThermostat is { } t ? $"{t.CurrentTemperatureCelsius:0.0}°C" : "--";
+    private string HvacModeText => (Snapshot?.HomeAssistantThermostat?.HvacMode ?? "--").ToUpperInvariant();
+
+    private bool Drifted => Snapshot?.HomeAssistantThermostat is { } t
+        && (Math.Abs(t.SetPointCelsius - Target) > 0.05 || !string.Equals(t.HvacMode, "cool", StringComparison.OrdinalIgnoreCase));
+
+    private string ThermoDiscClass => Drifted ? "ops-thermo-node__disc ops-thermo-node__disc--drift" : "ops-thermo-node__disc";
+
+    private string ThermoNote => !DefenderIsEnabled
+        ? "Defender offline — nobody is watching this unit. Change anything, coward."
+        : Drifted
+            ? $"⚠ Drift from target detected. The guards noticed. A quiet correction back to {Target:0.0}°C cool is being scheduled."
+            : "Holding at target. The defenders approve of this configuration.";
+
+    private string ThermoNoteClass => Drifted && DefenderIsEnabled ? "ops-thermo-note ops-thermo-note--drift" : "ops-thermo-note";
+
+    private string DialStateText => !DefenderIsEnabled ? "UNGUARDED" : Drifted ? "DRIFT DETECTED" : "HOLDING";
+    private string DialStateClass => !DefenderIsEnabled
+        ? "ops-dial-state ops-dial-state--off"
+        : Drifted ? "ops-dial-state ops-dial-state--drift" : "ops-dial-state ops-dial-state--holding";
+
+    private double SetpointAngle => Math.Clamp((Setpoint - 16.0) / 14.0, 0, 1) * 270.0;
+
+    private string DialBackground =>
+        $"conic-gradient(from 135deg, var(--accent) 0deg {SetpointAngle.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}deg, var(--line) {SetpointAngle.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}deg 270deg, transparent 270deg 360deg)";
+
+    private string KnobX => $"{(96 + 82 * Math.Sin((135 + SetpointAngle) * Math.PI / 180)).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}px";
+    private string KnobY => $"{(96 - 82 * Math.Cos((135 + SetpointAngle) * Math.PI / 180)).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}px";
+
+    private void ToggleThermostatPop() => _thermoOpen = !_thermoOpen;
+    private void CloseThermostat() => _thermoOpen = false;
+
+    // ---------- telemetry ----------
+
+    private sealed record TelemetryRow(string Label, string Value, string Bar, string BarCss, string ValueCss);
+
+    private IReadOnlyList<TelemetryRow> Telemetry
+    {
+        get
+        {
+            if (!DefenderIsEnabled)
+            {
+                return [new TelemetryRow("DEFENDER", "OFFLINE", "0%", "ops-bar__fill--sub", "")];
+            }
+
+            var t = Snapshot?.HomeAssistantThermostat;
+            var rows = new List<TelemetryRow>();
+
+            if (t is not null)
+            {
+                rows.Add(new TelemetryRow("ROOM TEMP", $"{t.CurrentTemperatureCelsius:0.0}°C",
+                    Pct(t.CurrentTemperatureCelsius, 16, 32), IsAlert ? "ops-bar__fill--bad" : "", ""));
+                rows.Add(new TelemetryRow("SETPOINT", $"{t.SetPointCelsius:0.0}°C",
+                    Pct(t.SetPointCelsius, 16, 30), "", "ops-telemetry__value--accent"));
+            }
+
+            if (Snapshot?.Weather?.OutdoorTemperatureCelsius is { } o)
+            {
+                rows.Add(new TelemetryRow("OUTDOOR", $"{o:0.0}°C", Pct(o, 0, 40), "ops-bar__fill--warn", ""));
+            }
+
+            if (Snapshot?.Comfort.HottestUpstairsTemperatureCelsius is { } up)
+            {
+                rows.Add(new TelemetryRow("UPSTAIRS MAX", $"{up:0.0}°C", Pct(up, 16, 32), "ops-bar__fill--warn", ""));
+            }
+
+            var action = t?.HvacAction ?? "--";
+            var cooling = string.Equals(action, "cooling", StringComparison.OrdinalIgnoreCase);
+            rows.Add(new TelemetryRow("HVAC ACTION",
+                IsAlert && !cooling ? $"{action.ToUpperInvariant()} ⚠" : action.ToUpperInvariant(),
+                IsAlert && !cooling ? "4%" : cooling ? "70%" : "10%",
+                IsAlert && !cooling ? "ops-bar__fill--bad" : cooling ? "ops-bar__fill--good" : "ops-bar__fill--warn",
+                IsAlert && !cooling ? "ops-telemetry__value--bad" : cooling ? "ops-telemetry__value--good" : "ops-telemetry__value--warn"));
+
+            if (Snapshot?.CooldownSeconds > 0)
+            {
+                rows.Add(new TelemetryRow("COOLDOWN", $"{Snapshot.CooldownSeconds}s", Pct(Snapshot.CooldownSeconds, 0, 600), "ops-bar__fill--sub", ""));
+            }
+
+            return rows;
+
+            static string Pct(double value, double min, double max) =>
+                $"{Math.Clamp((value - min) / (max - min) * 100, 2, 100).ToString("0", System.Globalization.CultureInfo.InvariantCulture)}%";
+        }
+    }
+
+    // ---------- commands (same plumbing as before the redesign) ----------
+
+    private void OnTargetInputChanged(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v))
+        {
+            _targetInput = Math.Clamp(v, 10, 35);
+            _targetDirty = true;
+            SaveTarget(_targetInput);
+        }
+    }
+
+    private void TargetUp() => SaveTarget(Target + 0.5);
+    private void TargetDown() => SaveTarget(Target - 0.5);
+
+    private void SaveTarget(double value)
+    {
+        if (!TryBeginWebsiteCommand("set target"))
+        {
+            return;
         }
 
-        InvokeAsync(StateHasChanged);
-    }
-
-    private void OnTargetInputChanged(double value)
-    {
-        _targetInput = value;
-        _targetDirty = true;
+        var snapshot = StateStore.SetTarget(Math.Clamp(value, 10, 35));
+        State.Refresh();
+        _targetInput = snapshot.TargetTemperatureCelsius;
+        _targetDirty = false;
     }
 
     private void GenerateTarget()
@@ -202,53 +495,37 @@
         Snackbar.Add("Generated a new target.", Severity.Success);
     }
 
-    private void ApplyTarget()
+    private async Task ApplyTarget()
     {
         if (!TryBeginWebsiteCommand("set target"))
         {
             return;
         }
 
-        var snapshot = StateStore.SetTarget(_targetInput);
+        var snapshot = StateStore.SetTarget(_targetDirty ? _targetInput : Target);
         State.Refresh();
         _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
-        Snackbar.Add("Target saved.", Severity.Success);
-    }
-
-    private Task ToggleDefender() => SetDefenderEnabled(!DefenderIsEnabled);
-
-    private async Task SetDefenderEnabled(bool enabled)
-    {
-        if (!TryBeginWebsiteCommand(enabled ? "turn defender on" : "pause defender", bypassDebounce: true))
-        {
-            return;
-        }
-
-        StateStore.SetDefenderEnabled(enabled);
-        State.Refresh();
-        Snackbar.Add(enabled ? "Defender turned on." : "Defender paused.", Severity.Info);
-
-        if (enabled)
-        {
-            return;
-        }
-
-        var turnOff = await DialogService.ShowMessageBoxAsync(
-            "Turn off the real thermostat too?",
-            "The defender is paused now. Do you also want to send a real Home Assistant command to turn the thermostat off?",
-            yesText: "Turn thermostat off",
-            cancelText: "Leave thermostat on");
-
-        if (turnOff == true)
-        {
-            await RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off");
-        }
+        await RunThermostatAction(() => Defender.ForceTargetAsync(CancellationToken.None), "Target applied to the wall unit.", "force exact target");
     }
 
     private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat", bypassDebounce: true);
     private Task ForceTarget() => RunThermostatAction(() => Defender.ForceTargetAsync(CancellationToken.None), "Exact target sent.", "force exact target");
     private Task ForceBoost() => RunThermostatAction(() => Defender.ForceCoolingBoostAsync(CancellationToken.None), "Cooling boost sent.", "force cooling");
+
+    private async Task TurnOff()
+    {
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            "Turn off the real thermostat?",
+            "This sends a real Home Assistant command to turn the dining-room thermostat off.",
+            yesText: "Turn thermostat off",
+            cancelText: "Cancel");
+
+        if (confirm == true)
+        {
+            await RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off");
+        }
+    }
 
     private bool TryBeginWebsiteCommand(string actionName, bool bypassDebounce = false)
     {
@@ -287,6 +564,22 @@
             State.Refresh();
             Snackbar.Add(ex.Message, Severity.Error);
         }
+    }
+
+    protected override void OnInitialized()
+    {
+        _targetInput = Snapshot?.TargetTemperatureCelsius ?? 22.0;
+        State.Changed += OnStateChanged;
+    }
+
+    private void OnStateChanged()
+    {
+        if (!_targetDirty && Snapshot is not null)
+        {
+            _targetInput = Snapshot.TargetTemperatureCelsius;
+        }
+
+        InvokeAsync(StateHasChanged);
     }
 
     public void Dispose() => State.Changed -= OnStateChanged;

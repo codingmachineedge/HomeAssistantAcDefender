@@ -8,43 +8,29 @@
 <MudStack Spacing="3">
     @if (State.Snapshot?.AdjustmentStatistics is { } stats)
     {
-        <SectionCard Title="Adjustment statistics"
-                     Subtitle="@($"{stats.TotalAdjustments} thermostat adjustments analysed")"
-                     Help="How the thermostat is adjusted, correlated with room temp, outdoor temp, whether the tracked person is home, and whether the master bedroom is occupied.">
-            <MudStack Spacing="2">
-                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">@stats.Insight</MudAlert>
-                <MudSimpleTable Dense="true" Hover="true" Bordered="true">
-                    <thead>
-                        <tr>
-                            <th>Group</th>
-                            <th>Adjustments</th>
-                            <th>Avg setpoint</th>
-                            <th>Avg room</th>
-                            <th>Avg outdoor</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var row in new[] { stats.PersonHome, stats.PersonAway, stats.BedroomOccupied, stats.BedroomEmpty })
-                        {
-                            <tr>
-                                <td>@row.Label</td>
-                                <td>@row.Count</td>
-                                <td>@Format.Temp(row.AverageSetPointCelsius)</td>
-                                <td>@Format.Temp(row.AverageRoomTemperatureCelsius)</td>
-                                <td>@Format.Temp(row.AverageOutdoorTemperatureCelsius)</td>
-                            </tr>
-                        }
-                        <tr>
-                            <td><b>Overall</b></td>
-                            <td><b>@stats.TotalAdjustments</b></td>
-                            <td><b>@Format.Temp(stats.AverageSetPointCelsius)</b></td>
-                            <td><b>@Format.Temp(stats.AverageRoomTemperatureCelsius)</b></td>
-                            <td><b>@Format.Temp(stats.AverageOutdoorTemperatureCelsius)</b></td>
-                        </tr>
-                    </tbody>
-                </MudSimpleTable>
-            </MudStack>
-        </SectionCard>
+        <div class="ops-panel ops-panel--pad">
+            <div class="ops-panel__label">ADJUSTMENT STATISTICS — @stats.TotalAdjustments ANALYSED</div>
+            <div class="helper-text" style="margin-bottom: 12px;">@stats.Insight</div>
+            <div class="ops-stat-grid">
+                @foreach (var head in new[] { "GROUP", "COUNT", "AVG SET", "AVG ROOM", "AVG OUT" })
+                {
+                    <div class="ops-stat-grid__cell ops-stat-grid__cell--head">@head</div>
+                }
+                @foreach (var row in new[] { stats.PersonHome, stats.PersonAway, stats.BedroomOccupied, stats.BedroomEmpty })
+                {
+                    <div class="ops-stat-grid__cell ops-stat-grid__cell--label">@row.Label</div>
+                    <div class="ops-stat-grid__cell">@row.Count</div>
+                    <div class="ops-stat-grid__cell">@Format.Temp(row.AverageSetPointCelsius)</div>
+                    <div class="ops-stat-grid__cell">@Format.Temp(row.AverageRoomTemperatureCelsius)</div>
+                    <div class="ops-stat-grid__cell">@Format.Temp(row.AverageOutdoorTemperatureCelsius)</div>
+                }
+                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">OVERALL</div>
+                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@stats.TotalAdjustments</div>
+                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.Temp(stats.AverageSetPointCelsius)</div>
+                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.Temp(stats.AverageRoomTemperatureCelsius)</div>
+                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.Temp(stats.AverageOutdoorTemperatureCelsius)</div>
+            </div>
+        </div>
     }
     <MudGrid Spacing="3">
         <MudItem xs="12" lg="6">
@@ -63,12 +49,12 @@
                         {
                             @foreach (var change in FilteredThermostatChanges)
                             {
-                                <MudPaper Class="touch-row clickable-row" Elevation="0" @onclick="@(() => SelectTouchLog(change))">
-                                    <MudText Typo="Typo.subtitle2">@($"{change.PreviousSetPointCelsius:0.0} C → {change.NewSetPointCelsius:0.0} C")</MudText>
-                                    <MudText Typo="Typo.caption" Class="helper-text">@SourceText(change)</MudText>
-                                    <MudText Typo="Typo.caption" Class="helper-text">@Format.DateTimeText(change.Timestamp)</MudText>
-                                    <MudText Typo="Typo.caption" Class="helper-text">@($"{Format.Temp(change.RoomTemperatureCelsius)} room · {Format.Temp(change.OutdoorTemperatureCelsius)} outdoor · {change.WeatherCondition ?? "weather --"}")</MudText>
-                                </MudPaper>
+                                <div class="ops-log-row" @onclick="@(() => SelectTouchLog(change))">
+                                    <span class="ops-log-row__change">@($"{change.PreviousSetPointCelsius:0.0} → {change.NewSetPointCelsius:0.0}°C")</span>
+                                    <span class="ops-log-row__source">@SourceLabel(change)</span>
+                                    <span class="ops-log-row__context">@($"{Format.Temp(change.RoomTemperatureCelsius)} room · {Format.Temp(change.OutdoorTemperatureCelsius)} outdoor · {change.WeatherCondition ?? "weather --"}")</span>
+                                    <span class="ops-log-row__time">@Format.DateTimeText(change.Timestamp)</span>
+                                </div>
                             }
                         }
                         else
@@ -158,11 +144,11 @@
         _selectedLogJson = JsonSerializer.Serialize(new { Type = "thermostat-change", Change = change, Latest = BuildLogContext() }, LogJsonOptions);
     }
 
-    private static string SourceText(ThermostatChangeAudit change)
+    private static string SourceLabel(ThermostatChangeAudit change)
     {
         return string.IsNullOrWhiteSpace(change.ChangeSource)
-            ? "source: unknown"
-            : $"source: {change.ChangeSource}";
+            ? "UNKNOWN"
+            : change.ChangeSource.Replace("thermostat-device", "WALL").ToUpperInvariant();
     }
 
     private void SelectEventLog(DefenderEvent item)

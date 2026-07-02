@@ -2,10 +2,13 @@
 <MudPaper Class="@($"guard-card guard-card--{Tone.Css()}")" Elevation="0">
     <div class="guard-card__head">
         <div class="guard-card__title">
-            <span class="guard-dot guard-dot--@Tone.Css()"></span>
-            <MudText Typo="Typo.subtitle1">@Info.Name</MudText>
+            <span class="@($"guard-avatar guard-avatar--{Tone.Css()}")" aria-hidden="true">@Initials</span>
+            <div class="guard-card__id">
+                <MudText Typo="Typo.subtitle1">@Info.Name</MudText>
+                <span class="guard-card__rank">@RankText</span>
+            </div>
         </div>
-        <MudChip T="string" Size="Size.Small" Color="@Tone.ToColor()" Variant="Variant.Filled">@view.StateLabel</MudChip>
+        <span class="@($"guard-badge guard-badge--{Tone.Css()}")">@view.StateLabel</span>
     </div>
 
     <MudText Typo="Typo.body2" Class="guard-card__status">@view.StatusText</MudText>
@@ -188,6 +191,18 @@
 
     private bool _open;
     private bool _detailOpen;
+
+    private string Initials => string.Concat(
+        Info.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => char.ToUpperInvariant(w[0])));
+
+    private string RankText => Info.Category switch
+    {
+        GuardCategory.Core => "SGT · CORE COOLING",
+        GuardCategory.WallTouch => "CPL · WALL-TOUCH OPS",
+        GuardCategory.Sensor => "SPC · SENSOR TIMING",
+        GuardCategory.System => "LT · SAFETY & SYSTEM",
+        _ => Info.Category.ToString().ToUpperInvariant()
+    };
     private GuardLiveView view = default!;
     private static readonly IReadOnlyList<GuardInfo> LiveCards = GuardCatalog.Live.ToList();
     private GuardTone Tone => view.Tone;
