@@ -71,6 +71,7 @@ tests.InvalidLoadedTargetFallsBackToConfiguredDefault();
 tests.UserTargetSurvivesUpstairsComfortOverride();
 tests.NightShutdownTurnsAcOffOnceAndStandsDown();
 tests.GentleSteppingPacesWalkDownAndPreemptsCompressorStop();
+tests.PeaceOfferingConcedesUpwardOnAppRaiseThenStandsDown();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -955,6 +956,58 @@ internal sealed class DefenderSetPointRegressionTests
             {
                 throw new InvalidOperationException($"Walk-down went to {setPoint:0.0} C, below the user's 22.0 C.");
             }
+        }
+    }
+
+    public void PeaceOfferingConcedesUpwardOnAppRaiseThenStandsDown()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        // Baseline reading, then an app user (user_id attached) raises the setpoint 23.0 -> 24.5.
+        store.RecordHomeAssistantReading(new ThermostatReading(
+            "climate.dining_room", 23.5, 23.0, "cool", "idle", null, []));
+        store.RecordHomeAssistantReading(new ThermostatReading(
+            "climate.dining_room", 23.5, 24.5, "cool", "idle", null, [],
+            new HomeAssistantStateContext("ctx-1", null, "app-user-1")));
+
+        var reading = new ThermostatReading("climate.dining_room", 23.5, 24.5, "cool", "idle", null, []);
+        if (!store.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out var gift, out _, out _) || gift is null)
+        {
+            throw new InvalidOperationException("An app-sourced raise must arm a one-shot peace offering.");
+        }
+
+        AssertEqual(25.0, gift.Value, "The gift goes one step ABOVE what they asked for (24.5 + 0.5).");
+
+        // The gesture holds: no second command, corrections stand down.
+        if (!store.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out var second, out _, out _) || second is not null)
+        {
+            throw new InvalidOperationException("After the gift, the defender must hold without sending more commands.");
+        }
+
+        // A genuinely hot room cancels the hold — comfort still wins.
+        var hotReading = new ThermostatReading("climate.dining_room", 25.5, 25.0, "cool", "idle", null, []);
+        if (store.TryBeginPeaceOffering(hotReading, DateTimeOffset.UtcNow, out _, out _, out _))
+        {
+            throw new InvalidOperationException("A room above target + safety override must cancel the peace-offering hold.");
+        }
+
+        // A LOWERING app change must not arm anything (they want colder; going up would be war).
+        store.RecordHomeAssistantReading(new ThermostatReading(
+            "climate.dining_room", 23.5, 23.0, "cool", "idle", null, [],
+            new HomeAssistantStateContext("ctx-2", null, "app-user-1")));
+        if (store.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out _, out _, out _))
+        {
+            throw new InvalidOperationException("Lowering the setpoint from the app must not trigger a peace offering.");
+        }
+
+        // A wall change (no user_id) must not arm anything either.
+        store.RecordHomeAssistantReading(new ThermostatReading(
+            "climate.dining_room", 23.5, 24.0, "cool", "idle", null, []));
+        if (store.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out _, out _, out _))
+        {
+            throw new InvalidOperationException("A wall/device change must not trigger the app peace offering.");
         }
     }
 

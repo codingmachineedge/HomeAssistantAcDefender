@@ -52,6 +52,15 @@
     @* ───────────── Automation ───────────── *@
     <SectionCard Title="Automation" Help="Schedule, weather activation, cooldown, cool restore, conflict quiet, and weather drift.">
         <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
+            @if (Show("peace offering app phone concede up gift madness")) {
+                <MudExpansionPanel Text="Peace offering" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Concede when the app raises the temp" Value="_peaceOfferingEnabled" ValueChanged="@(v => SetDirty(v, x => _peaceOfferingEnabled = x))" Help="When someone raises the setpoint from the phone/Home Assistant app, immediately go a little HIGHER than they asked and stand down for the hold window — they see the system agreeing, not fighting. A genuinely hot room cancels the hold." />
+                        <SettingDouble Label="Extra step up (C)" Value="_peaceOfferingStepCelsius" ValueChanged="@(v => SetDirty(v, x => _peaceOfferingStepCelsius = x))" Min="0.1" Max="2" Step="0.1" Help="How much above their number the gift goes." />
+                        <SettingInt Label="Stand-down after the gift (minutes)" Value="_peaceOfferingHoldMinutes" ValueChanged="@(v => SetDirty(v, x => _peaceOfferingHoldMinutes = x))" Min="1" Max="240" Help="How long the defender leaves their choice alone." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("gentle stepping pace walk step gap fight slow")) {
                 <MudExpansionPanel Text="Gentle stepping" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -719,6 +728,9 @@
     private string _nightShutdownEndTime = "08:00";
     private double _nightShutdownOutdoorBelowCelsius = 24.0;
     private int _coolingStepMinimumGapSeconds = 180;
+    private bool _peaceOfferingEnabled = true;
+    private double _peaceOfferingStepCelsius = 0.5;
+    private int _peaceOfferingHoldMinutes = 20;
     private string _weatherActivationMode = "always";
     private int _baseCooldownSeconds = 45;
     private int _maxCooldownSeconds = 600;
@@ -1007,6 +1019,9 @@
         _nightShutdownEndTime = settings.NightShutdownEndTime;
         _nightShutdownOutdoorBelowCelsius = settings.NightShutdownOutdoorBelowCelsius;
         _coolingStepMinimumGapSeconds = settings.CoolingStepMinimumGapSeconds;
+        _peaceOfferingEnabled = settings.PeaceOfferingEnabled;
+        _peaceOfferingStepCelsius = settings.PeaceOfferingStepCelsius;
+        _peaceOfferingHoldMinutes = settings.PeaceOfferingHoldMinutes;
         _weatherActivationMode = settings.WeatherActivationMode;
         _baseCooldownSeconds = settings.BaseCooldownSeconds;
         _maxCooldownSeconds = settings.MaxCooldownSeconds;
@@ -1539,7 +1554,10 @@
             _nightShutdownStartTime,
             _nightShutdownEndTime,
             _nightShutdownOutdoorBelowCelsius,
-            _coolingStepMinimumGapSeconds);
+            _coolingStepMinimumGapSeconds,
+            _peaceOfferingEnabled,
+            _peaceOfferingStepCelsius,
+            _peaceOfferingHoldMinutes);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

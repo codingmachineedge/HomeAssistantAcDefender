@@ -440,6 +440,26 @@ public sealed class DefenderStateStore
                 state.Settings.CoolingStepMinimumGapSeconds = Math.Clamp(stepGapSeconds, 0, 3600);
             }
 
+            if (request.PeaceOfferingEnabled is { } peaceEnabled)
+            {
+                state.Settings.PeaceOfferingEnabled = peaceEnabled;
+                if (!peaceEnabled)
+                {
+                    state.PeaceOfferingPendingSetPointCelsius = null;
+                    state.PeaceOfferingHoldUntil = null;
+                }
+            }
+
+            if (request.PeaceOfferingStepCelsius is { } peaceStep)
+            {
+                state.Settings.PeaceOfferingStepCelsius = Math.Round(Math.Clamp(peaceStep, 0.1, 2.0), 1);
+            }
+
+            if (request.PeaceOfferingHoldMinutes is { } peaceHold)
+            {
+                state.Settings.PeaceOfferingHoldMinutes = Math.Clamp(peaceHold, 1, 240);
+            }
+
             if (request.WebsiteCommandDebounceEnabled is { } websiteDebounceEnabled)
             {
                 state.Settings.WebsiteCommandDebounceEnabled = websiteDebounceEnabled;
@@ -924,6 +944,66 @@ public sealed class DefenderStateStore
             state.UpdatedAt = now;
             SaveState();
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Peace offering: after an app/phone user raised the setpoint, send ONE concession command a
+    /// small step ABOVE their number, then stand down for the hold window so the gesture sticks.
+    /// A room that gets genuinely hot cancels the hold (comfort still wins eventually).
+    /// Returns true while the worker should idle; sendSetPoint is non-null exactly once.
+    /// </summary>
+    public bool TryBeginPeaceOffering(ThermostatReading reading, DateTimeOffset now, out double? sendSetPoint, out DateTimeOffset? until, out string message)
+    {
+        lock (gate)
+        {
+            sendSetPoint = null;
+            until = null;
+            message = string.Empty;
+
+            if (!state.Settings.PeaceOfferingEnabled)
+            {
+                state.PeaceOfferingPendingSetPointCelsius = null;
+                state.PeaceOfferingHoldUntil = null;
+                return false;
+            }
+
+            if (state.PeaceOfferingPendingSetPointCelsius is { } gift)
+            {
+                state.PeaceOfferingPendingSetPointCelsius = null;
+                state.PeaceOfferingHoldUntil = now.AddMinutes(Math.Clamp(state.Settings.PeaceOfferingHoldMinutes, 1, 240));
+                sendSetPoint = gift;
+                until = state.PeaceOfferingHoldUntil;
+                message = $"Peace offering sent: {gift:0.0} C (their wish plus a little). Standing down until {until.Value.ToLocalTime():HH:mm:ss}.";
+                RecordPendingThermostatCommand(
+                    commandedSetPointCelsius: gift,
+                    commandedHvacMode: "cool",
+                    commandedFanMode: null,
+                    commandSourceKind: "peace-offering",
+                    commandSourceLabel: "Peace offering",
+                    commandSourceDetail: "An app user raised the setpoint; AC Defender conceded a small extra step upward to keep the peace.");
+                state.LastCommand = $"Peace offering: setpoint raised to {gift:0.0} C after an app change.";
+                AddEvent("info", message);
+                SaveState();
+                return true;
+            }
+
+            if (state.PeaceOfferingHoldUntil is { } hold && hold > now)
+            {
+                if (reading.CurrentTemperatureCelsius > state.TargetTemperatureCelsius + state.Settings.NaturalSafetyOverrideCelsius)
+                {
+                    state.PeaceOfferingHoldUntil = null;
+                    AddEvent("warning", $"Room hit {reading.CurrentTemperatureCelsius:0.0} C during the peace-offering hold; comfort wins and normal duty resumes.");
+                    SaveState();
+                    return false;
+                }
+
+                until = hold;
+                message = $"Peace-offering hold: leaving their setpoint alone until {hold.ToLocalTime():HH:mm:ss} (or until the room gets too warm).";
+                return true;
+            }
+
+            return false;
         }
     }
 
@@ -4826,6 +4906,22 @@ public sealed class DefenderStateStore
         state.LastChangeContextParentId = reading.Context?.ParentId;
         state.LastChangeContextUserId = reading.Context?.UserId;
         TrackSuperDefenderSource(source, now);
+
+        // Peace offering: an app/phone user RAISED the setpoint — concede one extra step upward
+        // so they see the system agreeing. Skipped when the room genuinely needs cooling.
+        if (state.Settings.PeaceOfferingEnabled
+            && string.Equals(source.Kind, "home-assistant-user", StringComparison.OrdinalIgnoreCase)
+            && reading.SetPointCelsius > previous + 0.05
+            && reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + state.Settings.NaturalSafetyOverrideCelsius)
+        {
+            var deviceMax = state.DeviceMaxSetPointCelsius ?? 30.0;
+            var gift = Math.Round(Math.Min(reading.SetPointCelsius + Math.Clamp(state.Settings.PeaceOfferingStepCelsius, 0.1, 2.0), deviceMax), 1);
+            if (gift > reading.SetPointCelsius + 0.05)
+            {
+                state.PeaceOfferingPendingSetPointCelsius = gift;
+                AddEvent("info", $"Peace offering armed: someone asked for {reading.SetPointCelsius:0.0} C from the app — gifting {gift:0.0} C and standing down {state.Settings.PeaceOfferingHoldMinutes} min.");
+            }
+        }
 
         PruneTouchTimes(now);
         state.ExternalTouchTimes.Add(now);
@@ -9271,6 +9367,12 @@ public sealed class DefenderStateStore
 
         // When the walk-down state machine last took a 0.5 C step; paces gentle stepping.
         public DateTimeOffset? LastWalkStepAt { get; set; }
+
+        // Peace offering: one-shot concession setpoint (armed on an app-sourced raise) and the
+        // stand-down window that follows it.
+        public double? PeaceOfferingPendingSetPointCelsius { get; set; }
+
+        public DateTimeOffset? PeaceOfferingHoldUntil { get; set; }
 
         public bool DefenderEnabled { get; set; } = true;
 

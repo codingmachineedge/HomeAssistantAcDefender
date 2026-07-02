@@ -88,6 +88,20 @@ public sealed class AcDefenderService
                 return;
             }
 
+            // Peace offering: an app user raised the setpoint — concede a small extra step upward
+            // once, then leave their choice alone for the hold window. Runs before the enforcer
+            // and the correction pipeline so nothing undoes the gesture.
+            if (stateStore.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out var peaceSetPoint, out var peaceUntil, out var peaceMessage))
+            {
+                if (peaceSetPoint is { } gift)
+                {
+                    await homeAssistantClient.SetCoolingAsync(reading.EntityId, gift, cancellationToken);
+                }
+
+                stateStore.SetNextAction(peaceMessage, peaceUntil);
+                return;
+            }
+
             // Desired-State Enforcer: the assertive layer that makes the owner's chosen state win. When it
             // acts (or holds), it short-circuits the cycle; when Inactive it falls through to the stealth
             // pipeline unchanged.

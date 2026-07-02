@@ -706,6 +706,15 @@ public sealed class DefenderSettings
 
     public double NightShutdownOutdoorBelowCelsius { get; set; } = 24.0;
 
+    // Peace offering: when someone raises the setpoint from the phone/Home Assistant app, the
+    // defender immediately concedes a small extra step UP (their number + step) and stands down
+    // for the hold window — they see the system agreeing with them instead of fighting back.
+    public bool PeaceOfferingEnabled { get; set; } = true;
+
+    public double PeaceOfferingStepCelsius { get; set; } = 0.5;
+
+    public int PeaceOfferingHoldMinutes { get; set; } = 20;
+
     // Gentle stepping: minimum wall-clock gap between the defender's 0.5 C walk-down steps, so a
     // correction never looks like a machine-gun of commands. The pre-empt step (nudging 0.5 lower
     // while the AC is still cooling, just before it would stop) uses a shorter fixed 60s gap.

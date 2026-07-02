@@ -246,4 +246,7 @@ public sealed record SettingsRequest(
     string? NightShutdownStartTime = null,
     string? NightShutdownEndTime = null,
     double? NightShutdownOutdoorBelowCelsius = null,
-    int? CoolingStepMinimumGapSeconds = null);
+    int? CoolingStepMinimumGapSeconds = null,
+    bool? PeaceOfferingEnabled = null,
+    double? PeaceOfferingStepCelsius = null,
+    int? PeaceOfferingHoldMinutes = null);
