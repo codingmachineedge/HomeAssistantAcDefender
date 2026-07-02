@@ -52,6 +52,13 @@
     @* ───────────── Automation ───────────── *@
     <SectionCard Title="Automation" Help="Schedule, weather activation, cooldown, cool restore, conflict quiet, and weather drift.">
         <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
+            @if (Show("gentle stepping pace walk step gap fight slow")) {
+                <MudExpansionPanel Text="Gentle stepping" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingInt Label="Minimum gap between 0.5 C steps (seconds)" Value="_coolingStepMinimumGapSeconds" ValueChanged="@(v => SetDirty(v, x => _coolingStepMinimumGapSeconds = x))" Min="0" Max="3600" Help="The defender never fires walk-down steps faster than this, so it does not fight back too quickly. The keep-cooling nudge (0.5 C lower just before the AC would stop) uses a short 60s gap." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("night shutdown off overnight sleep window outdoor cheap power")) {
                 <MudExpansionPanel Text="Night shutdown" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -711,6 +718,7 @@
     private string _nightShutdownStartTime = "01:00";
     private string _nightShutdownEndTime = "08:00";
     private double _nightShutdownOutdoorBelowCelsius = 24.0;
+    private int _coolingStepMinimumGapSeconds = 180;
     private string _weatherActivationMode = "always";
     private int _baseCooldownSeconds = 45;
     private int _maxCooldownSeconds = 600;
@@ -998,6 +1006,7 @@
         _nightShutdownStartTime = settings.NightShutdownStartTime;
         _nightShutdownEndTime = settings.NightShutdownEndTime;
         _nightShutdownOutdoorBelowCelsius = settings.NightShutdownOutdoorBelowCelsius;
+        _coolingStepMinimumGapSeconds = settings.CoolingStepMinimumGapSeconds;
         _weatherActivationMode = settings.WeatherActivationMode;
         _baseCooldownSeconds = settings.BaseCooldownSeconds;
         _maxCooldownSeconds = settings.MaxCooldownSeconds;
@@ -1529,7 +1538,8 @@
             _nightShutdownEnabled,
             _nightShutdownStartTime,
             _nightShutdownEndTime,
-            _nightShutdownOutdoorBelowCelsius);
+            _nightShutdownOutdoorBelowCelsius,
+            _coolingStepMinimumGapSeconds);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

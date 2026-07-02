@@ -70,6 +70,7 @@ tests.AppliedTargetPersistsAcrossStoreReloads();
 tests.InvalidLoadedTargetFallsBackToConfiguredDefault();
 tests.UserTargetSurvivesUpstairsComfortOverride();
 tests.NightShutdownTurnsAcOffOnceAndStandsDown();
+tests.GentleSteppingPacesWalkDownAndPreemptsCompressorStop();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -917,6 +918,43 @@ internal sealed class DefenderSetPointRegressionTests
         if (second.Snapshot.WebsiteCommandDebounce.Active)
         {
             throw new InvalidOperationException("With debounce off, no debounce window may be armed.");
+        }
+    }
+
+    public void GentleSteppingPacesWalkDownAndPreemptsCompressorStop()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        var s = store.GetSettings();
+        s.CoolingStepMinimumGapSeconds = 180;
+        SetRuntimeProperty(store, "Settings", s);
+
+        // First correction lands normally: 0.5 C below the room.
+        AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "First warm-room step starts 0.5 C below the room.");
+
+        // Immediately asking again must NOT step further — the pacing gap holds it steady.
+        AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "A second idle step within the pacing gap must hold, not fire another command.");
+        AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Still holding inside the pacing gap.");
+
+        // Pre-empt: the AC is cooling and the room is about to reach the setpoint (within 0.4 C).
+        // After the short 60s pre-empt gap, nudge one 0.5 C step lower BEFORE the unit stops.
+        SetRuntimeProperty(store, "LastWalkStepAt", DateTimeOffset.UtcNow.AddSeconds(-90));
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(24.7, "cooling"), "While cooling, a room within 0.4 C of the setpoint gets the next 0.5 C step before the compressor stops.");
+
+        // But never a burst: right after that step the pre-empt is paced too.
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(24.2, "cooling"), "No immediate second pre-empt step.");
+
+        // And the floor is absolute: with the gap satisfied, walking continues but stops at 22.0.
+        for (var i = 0; i < 8; i++)
+        {
+            SetRuntimeProperty(store, "LastWalkStepAt", DateTimeOffset.UtcNow.AddSeconds(-200));
+            var setPoint = store.CalculateExpectedSetPoint(24.7, "cooling");
+            if (setPoint < 22.0)
+            {
+                throw new InvalidOperationException($"Walk-down went to {setPoint:0.0} C, below the user's 22.0 C.");
+            }
         }
     }
 
@@ -2881,6 +2919,14 @@ internal sealed class DefenderStoreFixture : IDisposable
             Options.Create(options),
             new TestWebHostEnvironment(contentRoot),
             NullLogger<DefenderStateStore>.Instance);
+
+        // Tests drive the walk-down state machine call-by-call, so disable the wall-clock pacing
+        // gap by default; the dedicated gentle-stepping test re-enables it explicitly.
+        var stateField = typeof(DefenderStateStore).GetField("state", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var runtimeState = stateField.GetValue(Store)!;
+        var settingsProperty = runtimeState.GetType().GetProperty("Settings")!;
+        var settings = (DefenderSettings)settingsProperty.GetValue(runtimeState)!;
+        settings.CoolingStepMinimumGapSeconds = 0;
     }
 
     public string ContentRoot { get; }

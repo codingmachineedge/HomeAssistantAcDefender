@@ -245,4 +245,5 @@ public sealed record SettingsRequest(
     bool? NightShutdownEnabled = null,
     string? NightShutdownStartTime = null,
     string? NightShutdownEndTime = null,
-    double? NightShutdownOutdoorBelowCelsius = null);
+    double? NightShutdownOutdoorBelowCelsius = null,
+    int? CoolingStepMinimumGapSeconds = null);

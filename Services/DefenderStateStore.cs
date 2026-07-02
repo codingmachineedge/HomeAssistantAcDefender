@@ -435,6 +435,11 @@ public sealed class DefenderStateStore
                 state.Settings.NightShutdownOutdoorBelowCelsius = Math.Round(Math.Clamp(nightOutdoor, 0.0, 40.0), 1);
             }
 
+            if (request.CoolingStepMinimumGapSeconds is { } stepGapSeconds)
+            {
+                state.Settings.CoolingStepMinimumGapSeconds = Math.Clamp(stepGapSeconds, 0, 3600);
+            }
+
             if (request.WebsiteCommandDebounceEnabled is { } websiteDebounceEnabled)
             {
                 state.Settings.WebsiteCommandDebounceEnabled = websiteDebounceEnabled;
@@ -4538,23 +4543,49 @@ public sealed class DefenderStateStore
             // How far below the room we sit, and the size of each step-down. Default 0.5 C keeps the wall
             // setpoint tracking just under the room so the cooling is far less noticeable to other people.
             var approach = Math.Clamp(options.WarmRoomApproachCelsius, 0.1, 3.0);
+
+            // Gentle stepping: idle walk-down steps are paced by the configurable gap so the
+            // defender never fires a burst of corrections; the pre-empt step (while the AC is
+            // still cooling) uses a short fixed gap so it lands BEFORE the compressor stops.
+            var stepGap = TimeSpan.FromSeconds(Math.Clamp(state.Settings.CoolingStepMinimumGapSeconds, 0, 3600));
+            var preemptGap = TimeSpan.FromSeconds(Math.Min(60, Math.Clamp(state.Settings.CoolingStepMinimumGapSeconds, 0, 3600)));
+            var paced = state.LastWalkStepAt is not { } lastStepAt || now - lastStepAt >= stepGap;
+            var preemptReady = state.LastWalkStepAt is not { } lastPreemptAt || now - lastPreemptAt >= preemptGap;
+            const double PreemptMarginCelsius = 0.4;
+
             double activeSetPoint;
+            var stepped = false;
             if (state.ActiveCoolingSetPointCelsius is not { } previousSetPoint)
             {
                 activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - approach);
                 state.ActiveCoolingStartedInSafeBand = activeSetPoint <= lowestNormalSetPoint + 0.05;
+                stepped = true;
+            }
+            else if (isCooling
+                && preemptReady
+                && previousSetPoint > lowestNormalSetPoint + 0.05
+                && currentTemperatureCelsius <= previousSetPoint + PreemptMarginCelsius)
+            {
+                // The unit is about to satisfy its setpoint and stop. Nudge one 0.5 C step lower
+                // NOW so it keeps cooling in one continuous run instead of cycling off — invisible
+                // on the wall, easier on the compressor, and it stops exactly at "my temp".
+                activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint - approach);
+                stepped = true;
             }
             else if (!isCooling
+                && paced
                 && state.ActiveCoolingStartedInSafeBand
                 && previousSetPoint <= lowestNormalSetPoint + 0.05
                 && currentTemperatureCelsius > target + 1.0)
             {
                 activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - approach);
                 state.ActiveCoolingStartedInSafeBand = false;
+                stepped = true;
             }
-            else if (!isCooling)
+            else if (!isCooling && paced)
             {
                 activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint - approach);
+                stepped = activeSetPoint < previousSetPoint - 0.05;
                 if (activeSetPoint > lowestNormalSetPoint + 0.05)
                 {
                     state.ActiveCoolingStartedInSafeBand = false;
@@ -4563,6 +4594,11 @@ public sealed class DefenderStateStore
             else
             {
                 activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint);
+            }
+
+            if (stepped)
+            {
+                state.LastWalkStepAt = now;
             }
 
             state.ActiveCoolingSetPointCelsius = Math.Round(activeSetPoint, 1);
@@ -9232,6 +9268,9 @@ public sealed class DefenderStateStore
         // True while the night-shutdown window is holding the AC off; used for edge events and so
         // the off command is sent only once per window (manual re-enables are respected).
         public bool NightShutdownActive { get; set; }
+
+        // When the walk-down state machine last took a 0.5 C step; paces gentle stepping.
+        public DateTimeOffset? LastWalkStepAt { get; set; }
 
         public bool DefenderEnabled { get; set; } = true;
 

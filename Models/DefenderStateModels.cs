@@ -706,6 +706,11 @@ public sealed class DefenderSettings
 
     public double NightShutdownOutdoorBelowCelsius { get; set; } = 24.0;
 
+    // Gentle stepping: minimum wall-clock gap between the defender's 0.5 C walk-down steps, so a
+    // correction never looks like a machine-gun of commands. The pre-empt step (nudging 0.5 lower
+    // while the AC is still cooling, just before it would stop) uses a shorter fixed 60s gap.
+    public int CoolingStepMinimumGapSeconds { get; set; } = 180;
+
     public bool ScheduleEnabled { get; set; }
 
     public string WeatherActivationMode { get; set; } = "always";
