@@ -706,6 +706,10 @@ public sealed class DefenderSettings
 
     public double NightShutdownOutdoorBelowCelsius { get; set; } = 24.0;
 
+    // During the night window (same hours as the shutdown), the defender never commands a
+    // setpoint below this — cheap nights beat cold nights. 0 disables the night floor.
+    public double NightMinimumSetPointCelsius { get; set; } = 23.0;
+
     // Peace offering: when someone raises the setpoint from the phone/Home Assistant app, the
     // defender immediately concedes a small extra step UP (their number + step) and stands down
     // for the hold window — they see the system agreeing with them instead of fighting back.
@@ -715,10 +719,9 @@ public sealed class DefenderSettings
 
     public int PeaceOfferingHoldMinutes { get; set; } = 20;
 
-    // Gentle stepping: minimum wall-clock gap between the defender's 0.5 C walk-down steps, so a
-    // correction never looks like a machine-gun of commands. The pre-empt step (nudging 0.5 lower
-    // while the AC is still cooling, just before it would stop) uses a shorter fixed 60s gap.
-    public int CoolingStepMinimumGapSeconds { get; set; } = 180;
+    // Anti-flap: minimum spacing between step commands. Steps are driven by the room temperature
+    // actually moving (never by a schedule); this only stops command bursts and short-cycling.
+    public int CoolingStepMinimumGapSeconds { get; set; } = 60;
 
     public bool ScheduleEnabled { get; set; }
 

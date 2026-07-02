@@ -435,6 +435,13 @@ public sealed class DefenderStateStore
                 state.Settings.NightShutdownOutdoorBelowCelsius = Math.Round(Math.Clamp(nightOutdoor, 0.0, 40.0), 1);
             }
 
+            if (request.NightMinimumSetPointCelsius is { } nightMin)
+            {
+                state.Settings.NightMinimumSetPointCelsius = nightMin <= 0
+                    ? 0.0
+                    : Math.Round(Math.Clamp(nightMin, 16.0, 30.0), 1);
+            }
+
             if (request.CoolingStepMinimumGapSeconds is { } stepGapSeconds)
             {
                 state.Settings.CoolingStepMinimumGapSeconds = Math.Clamp(stepGapSeconds, 0, 3600);
@@ -4601,7 +4608,7 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>Computes the defender target: applies Comfort Memory/Compromise modifiers, then the warm-room "approach below current room temperature" rule (DefenderOptions.WarmRoomApproachCelsius, default 0.5 C), stepping down by that approach per cycle while cooling stalls but never below the website target.</summary>
-    public double CalculateExpectedSetPoint(double currentTemperatureCelsius, string hvacAction)
+    public double CalculateExpectedSetPoint(double currentTemperatureCelsius, string hvacAction, double? currentSetPointCelsius = null)
     {
         lock (gate)
         {
@@ -4611,85 +4618,95 @@ public sealed class DefenderStateStore
             // HARD FLOOR: the user's "temp I want" is the MINIMUM the defender may ever command.
             // No guard, learned offset, boost, or comfort override is allowed to cool below it.
             target = Math.Max(target, state.TargetTemperatureCelsius);
+
+            // Night minimum: during the night window nothing below this may be commanded, even if
+            // the daytime target is lower. 0 disables the floor.
+            if (state.Settings.NightMinimumSetPointCelsius > 0
+                && TryParseHourMinute(state.Settings.NightShutdownStartTime, out var nightStart)
+                && TryParseHourMinute(state.Settings.NightShutdownEndTime, out var nightEnd)
+                && nightStart != nightEnd
+                && IsInMinuteWindow(now, nightStart, nightEnd))
+            {
+                target = Math.Max(target, state.Settings.NightMinimumSetPointCelsius);
+            }
+
+            // How far below the room we sit, and the size of every step. Default 0.5 C.
+            var approach = Math.Clamp(options.WarmRoomApproachCelsius, 0.1, 3.0);
+            // Anti-flap: minimum spacing between step commands. Steps are DRIVEN by the room
+            // temperature actually moving, not by this clock — it only prevents command bursts.
+            var antiFlap = TimeSpan.FromSeconds(Math.Clamp(state.Settings.CoolingStepMinimumGapSeconds, 0, 3600));
+            var stepReady = state.LastWalkStepAt is not { } lastStepAt || now - lastStepAt >= antiFlap;
+
+            double goal;
             if (currentTemperatureCelsius <= target + options.TemperatureToleranceCelsius)
             {
+                // Room satisfied: the goal is simply "my temp". The outer step-limit below still
+                // walks the wall there 0.5 C at a time — never a snap in either direction.
                 ResetCoolingDefenderStep();
-                return Math.Round(target, 1);
-            }
-
-            var action = (hvacAction ?? string.Empty).Trim().ToLowerInvariant();
-            var isCooling = action is "cooling" or "cool";
-            var lowestNormalSetPoint = Math.Max(options.MinimumCoolingSetPointCelsius, target);
-            // How far below the room we sit, and the size of each step-down. Default 0.5 C keeps the wall
-            // setpoint tracking just under the room so the cooling is far less noticeable to other people.
-            var approach = Math.Clamp(options.WarmRoomApproachCelsius, 0.1, 3.0);
-
-            // Gentle stepping: idle walk-down steps are paced by the configurable gap so the
-            // defender never fires a burst of corrections; the pre-empt step (while the AC is
-            // still cooling) uses a short fixed gap so it lands BEFORE the compressor stops.
-            var stepGap = TimeSpan.FromSeconds(Math.Clamp(state.Settings.CoolingStepMinimumGapSeconds, 0, 3600));
-            var preemptGap = TimeSpan.FromSeconds(Math.Min(60, Math.Clamp(state.Settings.CoolingStepMinimumGapSeconds, 0, 3600)));
-            var paced = state.LastWalkStepAt is not { } lastStepAt || now - lastStepAt >= stepGap;
-            var preemptReady = state.LastWalkStepAt is not { } lastPreemptAt || now - lastPreemptAt >= preemptGap;
-            const double PreemptMarginCelsius = 0.4;
-
-            double activeSetPoint;
-            var stepped = false;
-            if (state.ActiveCoolingSetPointCelsius is not { } previousSetPoint)
-            {
-                activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - approach);
-                state.ActiveCoolingStartedInSafeBand = activeSetPoint <= lowestNormalSetPoint + 0.05;
-                stepped = true;
-            }
-            else if (isCooling
-                && preemptReady
-                && previousSetPoint > lowestNormalSetPoint + 0.05
-                && currentTemperatureCelsius <= previousSetPoint + PreemptMarginCelsius)
-            {
-                // The unit is about to satisfy its setpoint and stop. Nudge one 0.5 C step lower
-                // NOW so it keeps cooling in one continuous run instead of cycling off — invisible
-                // on the wall, easier on the compressor, and it stops exactly at "my temp".
-                activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint - approach);
-                stepped = true;
-            }
-            else if (!isCooling
-                && paced
-                && state.ActiveCoolingStartedInSafeBand
-                && previousSetPoint <= lowestNormalSetPoint + 0.05
-                && currentTemperatureCelsius > target + 1.0)
-            {
-                activeSetPoint = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - approach);
-                state.ActiveCoolingStartedInSafeBand = false;
-                stepped = true;
-            }
-            else if (!isCooling && paced)
-            {
-                activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint - approach);
-                stepped = activeSetPoint < previousSetPoint - 0.05;
-                if (activeSetPoint > lowestNormalSetPoint + 0.05)
-                {
-                    state.ActiveCoolingStartedInSafeBand = false;
-                }
+                goal = Math.Round(target, 1);
             }
             else
             {
-                activeSetPoint = Math.Max(lowestNormalSetPoint, previousSetPoint);
+                var action = (hvacAction ?? string.Empty).Trim().ToLowerInvariant();
+                var isCooling = action is "cooling" or "cool";
+                var lowestNormalSetPoint = Math.Max(options.MinimumCoolingSetPointCelsius, target);
+                const double ProgressMarginCelsius = 0.4;
+
+                if (state.ActiveCoolingSetPointCelsius is not { } previousSetPoint)
+                {
+                    goal = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - approach);
+                    state.ActiveCoolingStartedInSafeBand = goal <= lowestNormalSetPoint + 0.05;
+                    state.LastWalkStepAt = now;
+                }
+                else if (stepReady
+                    && previousSetPoint > lowestNormalSetPoint + 0.05
+                    && currentTemperatureCelsius <= previousSetPoint + ProgressMarginCelsius)
+                {
+                    // TEMP-DRIVEN step: the room has actually dropped to (near) the current
+                    // setpoint. Take the next 0.5 C step — while still cooling this lands BEFORE
+                    // the compressor stops, so it keeps running in one continuous quiet stretch
+                    // all the way down to "my temp". No wall-clock schedule drives this.
+                    goal = Math.Max(lowestNormalSetPoint, previousSetPoint - approach);
+                    state.LastWalkStepAt = now;
+                }
+                else if (!isCooling
+                    && stepReady
+                    && state.ActiveCoolingStartedInSafeBand
+                    && previousSetPoint <= lowestNormalSetPoint + 0.05
+                    && currentTemperatureCelsius > target + 1.0)
+                {
+                    // The room warmed back up after a satisfied stretch: restart just below room.
+                    goal = Math.Max(lowestNormalSetPoint, currentTemperatureCelsius - approach);
+                    state.ActiveCoolingStartedInSafeBand = false;
+                    state.LastWalkStepAt = now;
+                }
+                else
+                {
+                    // No temperature progress yet — hold the line and wait for the room to move.
+                    goal = Math.Max(lowestNormalSetPoint, previousSetPoint);
+                }
+
+                state.ActiveCoolingSetPointCelsius = Math.Round(goal, 1);
+                state.BoostOffsetCelsius = Math.Round(
+                    Math.Clamp(currentTemperatureCelsius - goal, 0.0, options.MaximumBoostOffsetCelsius),
+                    1);
             }
 
-            if (stepped)
+            // OUTER STEP LIMIT: never move the real wall setpoint more than one step per command,
+            // in either direction. Defending pulls DOWN toward the goal only when the wall sits
+            // above it; a wall left below "my temp" is walked back UP 0.5 C at a time.
+            if (currentSetPointCelsius is { } wall && Math.Abs(goal - wall) > approach + 0.05)
             {
+                if (!stepReady)
+                {
+                    return Math.Round(wall, 1); // no command this cycle; wait out the anti-flap
+                }
+
                 state.LastWalkStepAt = now;
+                return Math.Round(wall + Math.CopySign(approach, goal - wall), 1);
             }
 
-            state.ActiveCoolingSetPointCelsius = Math.Round(activeSetPoint, 1);
-            state.BoostOffsetCelsius = Math.Round(
-                Math.Clamp(
-                    currentTemperatureCelsius - state.ActiveCoolingSetPointCelsius.Value,
-                    0.0,
-                    options.MaximumBoostOffsetCelsius),
-                1);
-
-            return state.ActiveCoolingSetPointCelsius.Value;
+            return Math.Round(goal, 1);
         }
     }
 

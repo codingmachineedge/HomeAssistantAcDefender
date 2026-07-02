@@ -7,6 +7,7 @@ using HomeAssistantAcDefender.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using MudBlazor.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -26,6 +27,15 @@ builder.Services.AddHostedService<AcDefenderWorker>();
 builder.Services.AddScoped<DefenderStateProvider>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMudServices();
+
+// Persist the DataProtection key ring under App_Data (a docker volume in production) so container
+// rebuilds do NOT invalidate auth cookies and antiforgery tokens. Without this every redeploy
+// signed everyone out and left open tabs with dead circuits — "the site stopped working".
+var dataProtectionKeysPath = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "dataprotection-keys");
+Directory.CreateDirectory(dataProtectionKeysPath);
+builder.Services.AddDataProtection()
+    .SetApplicationName("HomeAssistantAcDefender")
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>

@@ -64,7 +64,7 @@
             @if (Show("gentle stepping pace walk step gap fight slow")) {
                 <MudExpansionPanel Text="Gentle stepping" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
-                        <SettingInt Label="Minimum gap between 0.5 C steps (seconds)" Value="_coolingStepMinimumGapSeconds" ValueChanged="@(v => SetDirty(v, x => _coolingStepMinimumGapSeconds = x))" Min="0" Max="3600" Help="The defender never fires walk-down steps faster than this, so it does not fight back too quickly. The keep-cooling nudge (0.5 C lower just before the AC would stop) uses a short 60s gap." />
+                        <SettingInt Label="Anti-flap: minimum seconds between steps" Value="_coolingStepMinimumGapSeconds" ValueChanged="@(v => SetDirty(v, x => _coolingStepMinimumGapSeconds = x))" Min="0" Max="3600" Help="Steps are driven by the room temperature actually dropping, never by a schedule. This spacing only prevents command bursts and compressor short-cycling." />
                     </MudGrid>
                 </MudExpansionPanel>
             }
@@ -79,6 +79,7 @@
                             <MudTextField T="string" Value="_nightShutdownEndTime" ValueChanged="@(v => SetDirty(v, x => _nightShutdownEndTime = x))" Label="Until (HH:mm)" Variant="Variant.Outlined" Margin="Margin.Dense" />
                         </MudItem>
                         <SettingDouble Label="Only when outdoor below (C)" Value="_nightShutdownOutdoorBelowCelsius" ValueChanged="@(v => SetDirty(v, x => _nightShutdownOutdoorBelowCelsius = x))" Min="0" Max="40" Step="0.5" Help="Safety valve: on a hot night the AC keeps running. Unknown outdoor also keeps it running." />
+                        <SettingDouble Label="Night minimum setpoint (C)" Value="_nightMinimumSetPointCelsius" ValueChanged="@(v => SetDirty(v, x => _nightMinimumSetPointCelsius = x))" Min="0" Max="30" Step="0.5" Help="During the night window the defender never commands below this — even if the daytime target is lower. Set 0 to disable." />
                     </MudGrid>
                 </MudExpansionPanel>
             }
@@ -727,7 +728,8 @@
     private string _nightShutdownStartTime = "01:00";
     private string _nightShutdownEndTime = "08:00";
     private double _nightShutdownOutdoorBelowCelsius = 24.0;
-    private int _coolingStepMinimumGapSeconds = 180;
+    private int _coolingStepMinimumGapSeconds = 60;
+    private double _nightMinimumSetPointCelsius = 23.0;
     private bool _peaceOfferingEnabled = true;
     private double _peaceOfferingStepCelsius = 0.5;
     private int _peaceOfferingHoldMinutes = 20;
@@ -1019,6 +1021,7 @@
         _nightShutdownEndTime = settings.NightShutdownEndTime;
         _nightShutdownOutdoorBelowCelsius = settings.NightShutdownOutdoorBelowCelsius;
         _coolingStepMinimumGapSeconds = settings.CoolingStepMinimumGapSeconds;
+        _nightMinimumSetPointCelsius = settings.NightMinimumSetPointCelsius;
         _peaceOfferingEnabled = settings.PeaceOfferingEnabled;
         _peaceOfferingStepCelsius = settings.PeaceOfferingStepCelsius;
         _peaceOfferingHoldMinutes = settings.PeaceOfferingHoldMinutes;
@@ -1557,7 +1560,8 @@
             _coolingStepMinimumGapSeconds,
             _peaceOfferingEnabled,
             _peaceOfferingStepCelsius,
-            _peaceOfferingHoldMinutes);
+            _peaceOfferingHoldMinutes,
+            _nightMinimumSetPointCelsius);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

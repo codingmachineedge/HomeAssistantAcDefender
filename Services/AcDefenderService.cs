@@ -242,7 +242,7 @@ public sealed class AcDefenderService
                     commandSourceDetail: "AC Defender adjusted fan mode for energy saver.");
             }
 
-            var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, reading.HvacAction);
+            var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, reading.HvacAction, reading.SetPointCelsius);
             var changed = Math.Abs(reading.SetPointCelsius - expectedSetPoint) > 0.05;
 
             if (changed)
@@ -491,23 +491,26 @@ public sealed class AcDefenderService
 
     public async Task ForceTargetAsync(CancellationToken cancellationToken)
     {
+        // Even the explicit "force my temp" button never snaps the wall: it sends the stepper's
+        // next 0.5 C move toward the target; repeated cycles finish the walk.
         var reading = await RequireReadingAsync(cancellationToken);
         var target = stateStore.GetTargetTemperature();
-        await homeAssistantClient.SetCoolingAsync(reading.EntityId, target, cancellationToken);
+        var stepSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, reading.HvacAction, reading.SetPointCelsius);
+        await homeAssistantClient.SetCoolingAsync(reading.EntityId, stepSetPoint, cancellationToken);
         stateStore.RecordCommand(
-            $"Home Assistant {reading.EntityId} set to exact target {target:0.0} C.",
-            target,
+            $"Home Assistant {reading.EntityId} stepped to {stepSetPoint:0.0} C toward the target {target:0.0} C.",
+            stepSetPoint,
             commandedHvacMode: "cool",
             commandSourceKind: "website-command",
             commandSourceLabel: "Website control",
-            commandSourceDetail: "Website Force exact target button sent this Home Assistant command.");
-        stateStore.SetNextAction("Exact target command sent; waiting for the next live reading.", DateTimeOffset.UtcNow.AddSeconds(options.CurrentValue.PollIntervalSeconds));
+            commandSourceDetail: "Website Force target button sent one stepper move toward the target.");
+        stateStore.SetNextAction("Step toward the target sent; the walk continues with the live readings.", DateTimeOffset.UtcNow.AddSeconds(options.CurrentValue.PollIntervalSeconds));
     }
 
     public async Task ForceCoolingBoostAsync(CancellationToken cancellationToken)
     {
         var reading = await RequireReadingAsync(cancellationToken);
-        var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, "idle");
+        var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, "idle", reading.SetPointCelsius);
         await homeAssistantClient.SetCoolingAsync(reading.EntityId, expectedSetPoint, cancellationToken);
         stateStore.RecordCommand(
             $"Home Assistant {reading.EntityId} cooling boost set to {expectedSetPoint:0.0} C.",

@@ -71,6 +71,7 @@ tests.InvalidLoadedTargetFallsBackToConfiguredDefault();
 tests.UserTargetSurvivesUpstairsComfortOverride();
 tests.NightShutdownTurnsAcOffOnceAndStandsDown();
 tests.GentleSteppingPacesWalkDownAndPreemptsCompressorStop();
+tests.StepperNeverSnapsTheWallAndWalksBothWaysTowardMyTemp();
 tests.PeaceOfferingConcedesUpwardOnAppRaiseThenStandsDown();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
@@ -238,8 +239,11 @@ internal sealed class DefenderSetPointRegressionTests
         store.SetTarget(22.0);
 
         AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should start 0.5 C below the current room temperature.");
-        AssertEqual(24.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should keep stepping down 0.5 C while cooling is still off.");
-        AssertEqual(23.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room defense should keep stepping down 0.5 C toward the website target.");
+        // Steps are temperature-driven: with the room stuck at 25.0 the defender holds and waits.
+        AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "With no room-temperature progress the defender holds instead of stepping again.");
+        // The room dropping to (near) the setpoint is the progress signal for the next step.
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(24.8, "cooling"), "Once the room drops to the setpoint the next 0.5 C step lands.");
+        AssertEqual(23.5, store.CalculateExpectedSetPoint(24.3, "cooling"), "Each further room drop earns the next 0.5 C step toward the website target.");
 
         store.RecordCommand("Seed website target command.", 22.0);
         store.RecordHomeAssistantReading(new ThermostatReading(
@@ -270,14 +274,32 @@ internal sealed class DefenderSetPointRegressionTests
         var store = fixture.Store;
         store.SetTarget(22.0);
 
-        // approach defaults to 0.5 C, so the warm-room setpoint steps down half a degree per cycle.
+        // approach defaults to 0.5 C; every step after the first is earned by the room actually
+        // dropping to the previous setpoint (temperature-driven, not clock-driven).
         AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "First idle warm-room command should be 0.5 C below current room temperature.");
-        AssertEqual(24.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Should step down 0.5 C.");
-        AssertEqual(23.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Should step down 0.5 C.");
-        AssertEqual(23.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Should step down 0.5 C.");
-        AssertEqual(22.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Should step down 0.5 C.");
-        AssertEqual(22.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Should reach the website target.");
-        AssertEqual(22.0, store.CalculateExpectedSetPoint(25.0, "idle"), "Warm-room step-down must not go colder than the website target.");
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(24.8, "cooling"), "Should step down 0.5 C as the room reaches the setpoint.");
+        AssertEqual(23.5, store.CalculateExpectedSetPoint(24.3, "cooling"), "Should step down 0.5 C.");
+        AssertEqual(23.0, store.CalculateExpectedSetPoint(23.8, "cooling"), "Should step down 0.5 C.");
+        AssertEqual(22.5, store.CalculateExpectedSetPoint(23.3, "cooling"), "Should step down 0.5 C.");
+        AssertEqual(22.0, store.CalculateExpectedSetPoint(22.8, "cooling"), "Should reach the website target.");
+        AssertEqual(22.0, store.CalculateExpectedSetPoint(22.3, "cooling"), "Warm-room step-down must not go colder than the website target.");
+    }
+
+    public void StepperNeverSnapsTheWallAndWalksBothWaysTowardMyTemp()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        // Room satisfied but the wall was left at 26: never snap to 23 — one 0.5 C step DOWN.
+        AssertEqual(25.5, store.CalculateExpectedSetPoint(22.5, "idle", 26.0), "A wall left above the target is walked DOWN one 0.5 C step per command, never snapped.");
+
+        // Wall left BELOW "my temp" (someone forced 21): walk UP one 0.5 C step per command.
+        AssertEqual(21.5, store.CalculateExpectedSetPoint(22.5, "idle", 21.0), "A wall below the user's floor is walked UP one 0.5 C step per command.");
+
+        // While actually defending (warm room, wall above the goal) the step direction is DOWN.
+        var warmStep = store.CalculateExpectedSetPoint(25.0, "idle", 26.0);
+        AssertEqual(25.5, warmStep, "Defending a warm room steps the wall DOWN toward the goal, never up.");
     }
 
     public void SensorRhythmWaitsOnlyForSafeCorrections()
@@ -940,8 +962,8 @@ internal sealed class DefenderSetPointRegressionTests
         AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "Still holding inside the pacing gap.");
 
         // Pre-empt: the AC is cooling and the room is about to reach the setpoint (within 0.4 C).
-        // After the short 60s pre-empt gap, nudge one 0.5 C step lower BEFORE the unit stops.
-        SetRuntimeProperty(store, "LastWalkStepAt", DateTimeOffset.UtcNow.AddSeconds(-90));
+        // With the anti-flap satisfied, nudge one 0.5 C step lower BEFORE the unit stops.
+        SetRuntimeProperty(store, "LastWalkStepAt", DateTimeOffset.UtcNow.AddSeconds(-200));
         AssertEqual(24.0, store.CalculateExpectedSetPoint(24.7, "cooling"), "While cooling, a room within 0.4 C of the setpoint gets the next 0.5 C step before the compressor stops.");
 
         // But never a burst: right after that step the pre-empt is paced too.
