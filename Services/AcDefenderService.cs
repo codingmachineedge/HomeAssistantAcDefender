@@ -170,7 +170,7 @@ public sealed class AcDefenderService
             }
 
             var rules = stateStore.ApplyScheduleAndWeatherRules(reading);
-            var comfort = stateStore.ApplyComfortRules();
+            var comfort = stateStore.ApplyComfortRules(reading);
             if (!rules.WeatherAllowsDefender && !comfort.Active)
             {
                 stateStore.SetNextAction($"Weather rule '{rules.WeatherActivationMode}' is not met; checking again.", nextCheck);

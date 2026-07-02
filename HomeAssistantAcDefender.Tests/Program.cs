@@ -115,10 +115,25 @@ internal sealed class DefenderSetPointRegressionTests
         store.RecordComfortReadings(
             [new TemperatureSensorReading("sensor.master_bedroom", "Master bedroom", 27.0, "27.0")],
             []);
-        var comfort = store.ApplyComfortRules();
+        // Upstairs hot but the DINING ROOM is at target: advisory only, no urgency bypass.
+        var atTarget = new ThermostatReading("climate.dining_room", 23.8, 24.0, "cool", "idle", null, []);
+        var comfort = store.ApplyComfortRules(atTarget);
         if (!comfort.Active)
         {
             throw new InvalidOperationException("Upstairs comfort guard should be active while upstairs is hot.");
+        }
+
+        if (comfort.BypassCooldown)
+        {
+            throw new InvalidOperationException("Upstairs sensors are not the thermostat: with the dining room at target they must not grant any urgency bypass.");
+        }
+
+        // Only when the dining room itself is above target may severe upstairs heat add urgency.
+        var warmRoom = new ThermostatReading("climate.dining_room", 25.2, 24.0, "cool", "idle", null, []);
+        var comfortWarm = store.ApplyComfortRules(warmRoom);
+        if (!comfortWarm.BypassCooldown)
+        {
+            throw new InvalidOperationException("Severe upstairs heat plus a warm dining room should skip quiet waits.");
         }
 
         AssertEqual(24.0, comfort.EffectiveTargetCelsius, "The cooling goal is always the user's own target — never lower.");

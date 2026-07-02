@@ -4737,11 +4737,13 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>
-    /// Upstairs Comfort Guard: while the hottest upstairs sensor is hot (and someone is home, if
-    /// required) it cools toward the comfort target and adds boost. The user's stored target is
-    /// NEVER modified — the override is transient and lifts itself when upstairs cools off.
+    /// Upstairs Comfort Guard — ADVISORY ONLY. Upstairs sensors are not the thermostat: they may
+    /// never start, prolong, or deepen cooling on their own (a permanently warm stairwell used to
+    /// mean non-stop urgency). All they can do is skip quiet-timing waits when the DINING ROOM
+    /// itself is already above the user's target, i.e. cooling is already justified by the real
+    /// thermostat. The user's stored target is never modified and no boost is added.
     /// </summary>
-    public ComfortRuleResult ApplyComfortRules()
+    public ComfortRuleResult ApplyComfortRules(ThermostatReading? reading = null)
     {
         lock (gate)
         {
@@ -4767,28 +4769,22 @@ public sealed class DefenderStateStore
             }
 
             var comfortTarget = EffectiveTargetTemperatureLocked();
-            state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
             if (!state.UpstairsComfortOverrideActive)
             {
                 state.UpstairsComfortOverrideActive = true;
-                comfortTarget = EffectiveTargetTemperatureLocked();
-                ClearNaturalCadence("Upstairs comfort took over, so natural cadence reset.");
-                ClearCommandCamouflage("Upstairs comfort took over, so command camouflage reset.");
-                ClearStealthGovernor("Upstairs comfort took over, so stealth governor reset.");
-                ClearNaturalChangePlanner("Upstairs comfort took over, so Comfort Pace reset.");
-                ClearComfortEnvelope("Upstairs comfort took over, so comfort envelope reset.");
-                ClearTugOfWarTruce("Upstairs comfort took over, so Tug-of-War Truce reset.");
-                ClearRepeatCommand("Upstairs comfort took over, so repeat quiet reset.");
-                ClearRemoteSettling("Upstairs comfort took over, so remote settling reset.");
-                ClearCoolingRunway("Upstairs comfort took over, so cooling runway reset.");
-                ClearComfortCompromise("Upstairs comfort took over, so comfort compromise reset.");
-                AddEvent("warning", $"Upstairs comfort guard is boosting cooling toward your {comfortTarget:0.0} C — never below the temp you want.");
+                AddEvent("info", "Upstairs is warm — advisory only: quiet waits may be skipped while the dining room itself is above your target, but upstairs never drives cooling.");
             }
 
             state.ComfortStatus = BuildComfortStatus();
             state.UpdatedAt = DateTimeOffset.UtcNow;
             SaveState();
-            var bypassCooldown = state.HottestUpstairsTemperatureCelsius is { } hottest
+
+            // Urgency requires BOTH severe upstairs heat AND the real dining-room thermostat being
+            // above the user's target. Upstairs alone can never bypass anything.
+            var diningRoomNeedsCooling = reading is not null
+                && reading.CurrentTemperatureCelsius > state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius;
+            var bypassCooldown = diningRoomNeedsCooling
+                && state.HottestUpstairsTemperatureCelsius is { } hottest
                 && hottest >= state.Settings.UpstairsMaxComfortCelsius + 1.0;
             return new ComfortRuleResult(true, bypassCooldown, comfortTarget, state.ComfortStatus);
         }
