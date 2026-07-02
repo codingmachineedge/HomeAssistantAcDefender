@@ -67,6 +67,7 @@ tests.EnforcerLearningModelsTrainInterferenceAndCadenceFromOverrides();
 tests.EnforcerConsumesTrainedInterferenceModel();
 tests.AppliedTargetPersistsAcrossStoreReloads();
 tests.InvalidLoadedTargetFallsBackToConfiguredDefault();
+tests.UserTargetSurvivesUpstairsComfortOverride();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -91,6 +92,41 @@ internal sealed class DefenderSetPointRegressionTests
         {
             DefenderStoreFixture.DeleteContentRoot(contentRoot);
         }
+    }
+
+    public void UserTargetSurvivesUpstairsComfortOverride()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(24.0);
+
+        // Upstairs turns hot (default hot threshold 24.0, comfort target 22.0): the guard must cool
+        // toward 22 WITHOUT rewriting the user's stored 24.0 target.
+        store.RecordComfortReadings(
+            [new TemperatureSensorReading("sensor.master_bedroom", "Master bedroom", 27.0, "27.0")],
+            []);
+        var comfort = store.ApplyComfortRules();
+        if (!comfort.Active)
+        {
+            throw new InvalidOperationException("Upstairs comfort guard should be active while upstairs is hot.");
+        }
+
+        AssertEqual(22.0, comfort.EffectiveTargetCelsius, "While upstairs is hot the guard cools toward the comfort target.");
+        AssertEqual(24.0, store.GetTargetTemperature(), "The comfort guard must never rewrite the user's target.");
+
+        var during = store.CalculateExpectedSetPoint(23.0, "cooling");
+        if (during >= 23.0)
+        {
+            throw new InvalidOperationException($"With the comfort override active, a 23.0 C room should still get cooling below the room, got {during:0.0} C.");
+        }
+
+        // Upstairs cools back off: the override lifts on its own and the user's 24.0 rules again.
+        store.RecordComfortReadings(
+            [new TemperatureSensorReading("sensor.master_bedroom", "Master bedroom", 23.0, "23.0")],
+            []);
+        store.ApplyComfortRules();
+        AssertEqual(24.0, store.GetTargetTemperature(), "The user's target must be untouched after the override lifts.");
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(23.0, "cooling"), "A 23.0 C room is satisfied again once the goal is back at the user's 24.0 C.");
     }
 
     public void InvalidLoadedTargetFallsBackToConfiguredDefault()

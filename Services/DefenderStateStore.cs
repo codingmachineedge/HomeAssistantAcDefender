@@ -4262,22 +4262,34 @@ public sealed class DefenderStateStore
             if (activeSchedule is not null)
             {
                 weatherMode = NormalizeWeatherMode(activeSchedule.WeatherActivationMode);
-                if (Math.Abs(state.TargetTemperatureCelsius - activeSchedule.TargetTemperatureCelsius) > 0.05)
+                // A schedule sets the target ONCE when its window becomes active. After that the
+                // user's word is final: a manual target change inside the window is not fought.
+                var scheduleKey = $"{activeSchedule.Name}|{activeSchedule.TargetTemperatureCelsius:0.0}";
+                if (!string.Equals(state.LastAppliedScheduleKey, scheduleKey, StringComparison.Ordinal))
                 {
-                    state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
-                    ResetCoolingDefenderStep();
-                    ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
-                    ClearCommandCamouflage($"Schedule {activeSchedule.Name} changed the target, so command camouflage reset.");
-                    ClearStealthGovernor($"Schedule {activeSchedule.Name} changed the target, so stealth governor reset.");
-                    ClearNaturalChangePlanner($"Schedule {activeSchedule.Name} changed the target, so Comfort Pace reset.");
-                    ClearComfortEnvelope($"Schedule {activeSchedule.Name} changed the target, so comfort envelope reset.");
-                    ClearTugOfWarTruce($"Schedule {activeSchedule.Name} changed the target, so Tug-of-War Truce reset.");
-                    ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
-                    ClearRemoteSettling($"Schedule {activeSchedule.Name} changed the target, so remote settling reset.");
-                    ClearCoolingRunway($"Schedule {activeSchedule.Name} changed the target, so cooling runway reset.");
-                    ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
-                    AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C.");
+                    state.LastAppliedScheduleKey = scheduleKey;
+                    if (Math.Abs(state.TargetTemperatureCelsius - activeSchedule.TargetTemperatureCelsius) > 0.05)
+                    {
+                        state.TargetTemperatureCelsius = Math.Round(activeSchedule.TargetTemperatureCelsius, 1);
+                        ResetCoolingDefenderStep();
+                        ClearNaturalCadence($"Schedule {activeSchedule.Name} changed the target, so natural cadence reset.");
+                        ClearCommandCamouflage($"Schedule {activeSchedule.Name} changed the target, so command camouflage reset.");
+                        ClearStealthGovernor($"Schedule {activeSchedule.Name} changed the target, so stealth governor reset.");
+                        ClearNaturalChangePlanner($"Schedule {activeSchedule.Name} changed the target, so Comfort Pace reset.");
+                        ClearComfortEnvelope($"Schedule {activeSchedule.Name} changed the target, so comfort envelope reset.");
+                        ClearTugOfWarTruce($"Schedule {activeSchedule.Name} changed the target, so Tug-of-War Truce reset.");
+                        ClearRepeatCommand($"Schedule {activeSchedule.Name} changed the target, so repeat quiet reset.");
+                        ClearRemoteSettling($"Schedule {activeSchedule.Name} changed the target, so remote settling reset.");
+                        ClearCoolingRunway($"Schedule {activeSchedule.Name} changed the target, so cooling runway reset.");
+                        ClearComfortCompromise($"Schedule {activeSchedule.Name} changed the target, so comfort compromise reset.");
+                        AddEvent("info", $"Schedule {activeSchedule.Name} set target to {state.TargetTemperatureCelsius:0.0} C (one-time; your manual changes win afterwards).");
+                    }
                 }
+            }
+            else
+            {
+                // Window over (or schedule off): forget the applied rule so the next window applies fresh.
+                state.LastAppliedScheduleKey = null;
             }
 
             var allowed = IsWeatherRuleAllowed(weatherMode, reading, state.Weather);
@@ -4287,49 +4299,53 @@ public sealed class DefenderStateStore
         }
     }
 
-    /// <summary>Upstairs Comfort Guard: lowers the target toward the comfort target and adds boost (and may bypass cooldown) when the hottest upstairs sensor is hot and someone is home.</summary>
+    /// <summary>
+    /// Upstairs Comfort Guard: while the hottest upstairs sensor is hot (and someone is home, if
+    /// required) it cools toward the comfort target and adds boost. The user's stored target is
+    /// NEVER modified — the override is transient and lifts itself when upstairs cools off.
+    /// </summary>
     public ComfortRuleResult ApplyComfortRules()
     {
         lock (gate)
         {
             if (!state.Settings.UpstairsComfortEnabled)
             {
+                DeactivateUpstairsComfortOverride("Upstairs comfort guard was disabled");
                 state.ComfortStatus = "Upstairs comfort guard is disabled.";
                 return new ComfortRuleResult(false, false, state.TargetTemperatureCelsius, state.ComfortStatus);
             }
 
             if (state.Settings.HomePresenceRequired && !state.IsHome)
             {
+                DeactivateUpstairsComfortOverride("Nobody is home");
                 state.ComfortStatus = "No one is home; upstairs comfort guard is watching only.";
                 return new ComfortRuleResult(false, false, state.TargetTemperatureCelsius, state.ComfortStatus);
             }
 
             if (!state.UpstairsTooHot)
             {
+                DeactivateUpstairsComfortOverride("Upstairs cooled back off");
                 state.ComfortStatus = BuildComfortStatus();
                 return new ComfortRuleResult(false, false, state.TargetTemperatureCelsius, state.ComfortStatus);
             }
 
-            var comfortTarget = Math.Min(state.TargetTemperatureCelsius, state.Settings.UpstairsComfortTargetCelsius);
-            if (Math.Abs(state.TargetTemperatureCelsius - comfortTarget) > 0.05)
+            var comfortTarget = EffectiveTargetTemperatureLocked();
+            state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
+            if (!state.UpstairsComfortOverrideActive)
             {
-                state.TargetTemperatureCelsius = Math.Round(comfortTarget, 1);
-                state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
-                ClearNaturalCadence("Upstairs comfort changed the target, so natural cadence reset.");
-                ClearCommandCamouflage("Upstairs comfort changed the target, so command camouflage reset.");
-                ClearStealthGovernor("Upstairs comfort changed the target, so stealth governor reset.");
-                ClearNaturalChangePlanner("Upstairs comfort changed the target, so Comfort Pace reset.");
-                ClearComfortEnvelope("Upstairs comfort changed the target, so comfort envelope reset.");
-                ClearTugOfWarTruce("Upstairs comfort changed the target, so Tug-of-War Truce reset.");
-                ClearRepeatCommand("Upstairs comfort changed the target, so repeat quiet reset.");
-                ClearRemoteSettling("Upstairs comfort changed the target, so remote settling reset.");
-                ClearCoolingRunway("Upstairs comfort changed the target, so cooling runway reset.");
-                ClearComfortCompromise("Upstairs comfort changed the target, so comfort compromise reset.");
-                AddEvent("warning", $"Upstairs comfort guard lowered target to {state.TargetTemperatureCelsius:0.0} C.");
-            }
-            else
-            {
-                state.BoostOffsetCelsius = Math.Max(state.BoostOffsetCelsius, state.Settings.UpstairsComfortBoostCelsius);
+                state.UpstairsComfortOverrideActive = true;
+                comfortTarget = EffectiveTargetTemperatureLocked();
+                ClearNaturalCadence("Upstairs comfort took over, so natural cadence reset.");
+                ClearCommandCamouflage("Upstairs comfort took over, so command camouflage reset.");
+                ClearStealthGovernor("Upstairs comfort took over, so stealth governor reset.");
+                ClearNaturalChangePlanner("Upstairs comfort took over, so Comfort Pace reset.");
+                ClearComfortEnvelope("Upstairs comfort took over, so comfort envelope reset.");
+                ClearTugOfWarTruce("Upstairs comfort took over, so Tug-of-War Truce reset.");
+                ClearRepeatCommand("Upstairs comfort took over, so repeat quiet reset.");
+                ClearRemoteSettling("Upstairs comfort took over, so remote settling reset.");
+                ClearCoolingRunway("Upstairs comfort took over, so cooling runway reset.");
+                ClearComfortCompromise("Upstairs comfort took over, so comfort compromise reset.");
+                AddEvent("warning", $"Upstairs comfort guard is temporarily cooling toward {comfortTarget:0.0} C; your target stays {state.TargetTemperatureCelsius:0.0} C.");
             }
 
             state.ComfortStatus = BuildComfortStatus();
@@ -4337,9 +4353,31 @@ public sealed class DefenderStateStore
             SaveState();
             var bypassCooldown = state.HottestUpstairsTemperatureCelsius is { } hottest
                 && hottest >= state.Settings.UpstairsMaxComfortCelsius + 1.0;
-            return new ComfortRuleResult(true, bypassCooldown, state.TargetTemperatureCelsius, state.ComfortStatus);
+            return new ComfortRuleResult(true, bypassCooldown, comfortTarget, state.ComfortStatus);
         }
     }
+
+    private void DeactivateUpstairsComfortOverride(string reason)
+    {
+        if (!state.UpstairsComfortOverrideActive)
+        {
+            return;
+        }
+
+        state.UpstairsComfortOverrideActive = false;
+        AddEvent("info", $"{reason}; cooling goal is back to your target {state.TargetTemperatureCelsius:0.0} C.");
+        SaveState();
+    }
+
+    /// <summary>
+    /// The temperature the defender actually cools toward right now. Equals the user's target
+    /// unless the upstairs comfort override is active, in which case the lower comfort target
+    /// wins for as long as (and only as long as) the override holds. Callers must hold the gate.
+    /// </summary>
+    private double EffectiveTargetTemperatureLocked() =>
+        state.UpstairsComfortOverrideActive
+            ? Math.Round(Math.Min(state.TargetTemperatureCelsius, state.Settings.UpstairsComfortTargetCelsius), 1)
+            : state.TargetTemperatureCelsius;
 
     public DefenderSettings GetSettings()
     {
@@ -4518,7 +4556,9 @@ public sealed class DefenderStateStore
 
     private double CalculateComfortMemoryTarget(double currentTemperatureCelsius, DateTimeOffset now)
     {
-        var target = state.TargetTemperatureCelsius;
+        // Cooling goal for commands: the user's target, or the transient upstairs-comfort target
+        // while that override is active. The stored user target itself is never rewritten.
+        var target = EffectiveTargetTemperatureLocked();
         if (!state.Settings.ComfortMemoryEnabled)
         {
             state.ComfortMemoryEffectiveTargetCelsius = null;
@@ -9056,6 +9096,15 @@ public sealed class DefenderStateStore
     private sealed class DefenderRuntimeState
     {
         public double TargetTemperatureCelsius { get; set; }
+
+        // True while the upstairs comfort guard is transiently cooling toward its lower comfort
+        // target. The user's TargetTemperatureCelsius is never modified by guards; this flag plus
+        // EffectiveTargetTemperature() carry the temporary override instead.
+        public bool UpstairsComfortOverrideActive { get; set; }
+
+        // Identity of the schedule rule whose target was last applied, so a schedule only sets the
+        // target once when its window starts. A manual target change inside the window then sticks.
+        public string? LastAppliedScheduleKey { get; set; }
 
         public bool DefenderEnabled { get; set; } = true;
 
