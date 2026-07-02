@@ -1080,6 +1080,7 @@ public sealed class DefenderStateStore
 
                 state.PeaceOfferingPendingSetPointCelsius = null;
                 state.PeaceOfferingHoldUntil = now.AddMinutes(holdMinutes);
+                state.PeaceHoldIsModeOffRespect = false;
                 sendSetPoint = gift;
                 until = state.PeaceOfferingHoldUntil;
                 message = $"Peace offering sent: {gift:0.0} C (their wish plus a little). Standing down until {until.Value.ToLocalTime():HH:mm:ss}.";
@@ -1098,10 +1099,18 @@ public sealed class DefenderStateStore
 
             if (state.PeaceOfferingHoldUntil is { } hold && hold > now)
             {
-                if (reading.CurrentTemperatureCelsius > state.TargetTemperatureCelsius + state.Settings.NaturalSafetyOverrideCelsius)
+                // A manual OFF earns a much higher break ceiling: the room drifting slightly warm
+                // minutes later must not instantly undo a deliberate human action (that is the
+                // "flipping the ac on and off" complaint). Only genuine overheating breaks it.
+                var breakCeiling = state.TargetTemperatureCelsius
+                    + (state.PeaceHoldIsModeOffRespect
+                        ? Math.Max(4.0, state.Settings.NaturalSafetyOverrideCelsius * 2)
+                        : state.Settings.NaturalSafetyOverrideCelsius);
+                if (reading.CurrentTemperatureCelsius > breakCeiling)
                 {
                     state.PeaceOfferingHoldUntil = null;
-                    AddEvent("warning", $"Room hit {reading.CurrentTemperatureCelsius:0.0} C during the peace-offering hold; comfort wins and normal duty resumes.");
+                    state.PeaceHoldIsModeOffRespect = false;
+                    AddEvent("warning", $"Room hit {reading.CurrentTemperatureCelsius:0.0} C during the peace hold (ceiling {breakCeiling:0.0} C); comfort wins and normal duty resumes.");
                     SaveState();
                     return false;
                 }
@@ -1272,6 +1281,47 @@ public sealed class DefenderStateStore
         state.AcRuntimeLastWasCooling = string.Equals(reading.HvacAction, "cooling", StringComparison.OrdinalIgnoreCase);
     }
 
+    private bool IsInNightWindow(DateTimeOffset now) =>
+        TryParseHourMinute(state.Settings.NightShutdownStartTime, out var nightStart)
+        && TryParseHourMinute(state.Settings.NightShutdownEndTime, out var nightEnd)
+        && nightStart != nightEnd
+        && IsInMinuteWindow(now, nightStart, nightEnd);
+
+    /// <summary>
+    /// Someone turned the AC OFF by hand (wall or app, not our own command echo). The old
+    /// behaviour restored cool mode within a minute — the exact "flipping the ac on and off"
+    /// complaint. Respect the human: arm the peace-offering hold (tripled at night) so the whole
+    /// pipeline, including cool-mode restore, stands down. A room rising past target + safety
+    /// override still breaks the hold, so comfort eventually wins.
+    /// </summary>
+    private void DetectExternalModeOff(ThermostatReading reading, string? previousMode, DateTimeOffset now)
+    {
+        if (!state.Settings.PeaceOfferingEnabled
+            || previousMode is null
+            || !string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(previousMode, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        // Our own OFF commands (night shutdown, front-door kill switch, too-cold, website button)
+        // echo back with a pending off command — those are not a human asking for peace.
+        if (string.Equals(state.PendingCommandHvacMode, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var holdMinutes = Math.Clamp(state.Settings.PeaceOfferingHoldMinutes, 1, 240);
+        if (IsInNightWindow(now))
+        {
+            holdMinutes = Math.Min(240, holdMinutes * 3);
+        }
+
+        state.PeaceOfferingHoldUntil = now.AddMinutes(holdMinutes);
+        state.PeaceHoldIsModeOffRespect = true;
+        AddEvent("info", $"Someone turned the AC off by hand — respecting it for {holdMinutes} min before any restore.");
+    }
+
     private static bool IsInMinuteWindow(DateTimeOffset now, int startMinutes, int endMinutes)
     {
         var minutes = now.ToLocalTime().Hour * 60 + now.ToLocalTime().Minute;
@@ -1327,13 +1377,15 @@ public sealed class DefenderStateStore
         }
     }
 
-    public DefenderSnapshot RecordHomeAssistantReading(ThermostatReading reading)
+    public DefenderSnapshot RecordHomeAssistantReading(ThermostatReading reading, DateTimeOffset? nowOverride = null)
     {
         lock (gate)
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
             var previousHvacAction = state.HomeAssistantThermostat?.HvacAction;
+            var previousHvacMode = state.HomeAssistantThermostat?.HvacMode;
             AccumulateAcRuntime(reading, now);
+            DetectExternalModeOff(reading, previousHvacMode, now);
             DetectExternalSetPointChange(reading, now);
             RecordRoomTemperatureSample(reading, now);
             RecordHomeAssistantReadingTime(now);
@@ -1407,12 +1459,13 @@ public sealed class DefenderStateStore
         string? commandedFanMode = null,
         string commandSourceKind = "defender-service",
         string commandSourceLabel = "AC Defender",
-        string commandSourceDetail = "AC Defender background service sent this Home Assistant command.")
+        string commandSourceDetail = "AC Defender background service sent this Home Assistant command.",
+        DateTimeOffset? nowOverride = null)
     {
         lock (gate)
         {
             state.LastCommand = message;
-            state.UpdatedAt = DateTimeOffset.UtcNow;
+            state.UpdatedAt = nowOverride ?? DateTimeOffset.UtcNow;
             if (commandedSetPointCelsius is not null
                 || !string.IsNullOrWhiteSpace(commandedHvacMode)
                 || !string.IsNullOrWhiteSpace(commandedFanMode))
@@ -1423,7 +1476,8 @@ public sealed class DefenderStateStore
                     commandedFanMode,
                     commandSourceKind,
                     commandSourceLabel,
-                    commandSourceDetail);
+                    commandSourceDetail,
+                    nowOverride);
             }
 
             // Adjustment statistics: log each setpoint command with its real context.
@@ -1600,11 +1654,11 @@ public sealed class DefenderStateStore
         }
     }
 
-    public DefenderSnapshot ActivateEmergencyQuiet(string protocol, TimeSpan duration, string status, bool pauseDefender)
+    public DefenderSnapshot ActivateEmergencyQuiet(string protocol, TimeSpan duration, string status, bool pauseDefender, DateTimeOffset? nowOverride = null)
     {
         lock (gate)
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
             var cleanProtocol = string.IsNullOrWhiteSpace(protocol) ? "Emergency quiet" : protocol.Trim();
             state.EmergencyProtocol = cleanProtocol;
             state.EmergencyQuietUntil = now.Add(duration <= TimeSpan.Zero ? TimeSpan.FromMinutes(30) : duration);
@@ -4863,11 +4917,11 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>Computes the defender target: applies Comfort Memory/Compromise modifiers, then the warm-room "approach below current room temperature" rule (DefenderOptions.WarmRoomApproachCelsius, default 0.5 C), stepping down by that approach per cycle while cooling stalls but never below the website target.</summary>
-    public double CalculateExpectedSetPoint(double currentTemperatureCelsius, string hvacAction, double? currentSetPointCelsius = null)
+    public double CalculateExpectedSetPoint(double currentTemperatureCelsius, string hvacAction, double? currentSetPointCelsius = null, DateTimeOffset? nowOverride = null)
     {
         lock (gate)
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
             var target = CalculateComfortMemoryTarget(currentTemperatureCelsius, now);
             target = CalculateComfortCompromiseTarget(target, currentTemperatureCelsius, now);
             // HARD FLOOR: the user's "temp I want" is the MINIMUM the defender may ever command.
@@ -5178,6 +5232,16 @@ public sealed class DefenderStateStore
             return;
         }
 
+        // Late-echo guard: a reading that lands exactly on our own last commanded setpoint is our
+        // command coming home, however late — never an external human touch.
+        if (state.LastDefenderCommandedSetPointCelsius is { } lastCommanded
+            && Math.Abs(reading.SetPointCelsius - lastCommanded) <= 0.05
+            && state.LastDefenderCommandedSetPointAt is { } commandedAt
+            && now - commandedAt <= TimeSpan.FromMinutes(10))
+        {
+            return;
+        }
+
         if (TryClassifyPendingThermostatCommandEcho(reading, now, out var pendingSource, out var pendingEchoDetail))
         {
             AddEvent(
@@ -5238,7 +5302,8 @@ public sealed class DefenderStateStore
                     "Brother upset (auto)",
                     TimeSpan.FromHours(2),
                     $"🙇 AUTO-APOLOGY ACTIVE: {reason} looks like someone is upset — no button needed. Corrections are stopped for 2 hours and the anger model is learning this hour.",
-                    pauseDefender: false);
+                    pauseDefender: false,
+                    now);
                 AddEvent("warning", $"Auto brother-mad triggered by {reason}; apologizing and standing down 2 hours automatically.");
             }
         }
@@ -9057,9 +9122,21 @@ public sealed class DefenderStateStore
         string? commandedFanMode,
         string commandSourceKind,
         string commandSourceLabel,
-        string commandSourceDetail)
+        string commandSourceDetail,
+        DateTimeOffset? nowOverride = null)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = nowOverride ?? DateTimeOffset.UtcNow;
+
+        // Long-lived echo memory: even when a Home Assistant echo arrives long after the pending
+        // grace window, a reading landing exactly on our last commanded setpoint must never be
+        // classified as an external human touch. Without this, a slow HA could make the defender
+        // mistake its OWN upward moves (gifts, rest ease-ups) for external raises and gift itself
+        // up in a runaway spiral.
+        if (commandedSetPointCelsius is { } commandedValue)
+        {
+            state.LastDefenderCommandedSetPointCelsius = Math.Round(commandedValue, 1);
+            state.LastDefenderCommandedSetPointAt = now;
+        }
         state.PendingCommandSetPointCelsius = commandedSetPointCelsius is { } requestedSetPoint
             ? Math.Round(requestedSetPoint, 1)
             : null;
@@ -9735,6 +9812,15 @@ public sealed class DefenderStateStore
         public DateTimeOffset? PeaceOfferingArmedAt { get; set; }
 
         public DateTimeOffset? PeaceOfferingHoldUntil { get; set; }
+
+        // True when the active peace hold is respecting a manual mode-OFF (higher break ceiling).
+        public bool PeaceHoldIsModeOffRespect { get; set; }
+
+        // Long-lived echo memory: the last setpoint the defender itself commanded, so late Home
+        // Assistant echoes are never misread as external human touches.
+        public double? LastDefenderCommandedSetPointCelsius { get; set; }
+
+        public DateTimeOffset? LastDefenderCommandedSetPointAt { get; set; }
 
         // Auto-resume flag: the front-door kill switch paused the defender and owes it a resume.
         public bool FrontDoorPausedDefender { get; set; }

@@ -78,6 +78,7 @@ tests.BrotherMadProtocolStandsDownForTwoHours();
 tests.AutoBrotherMadFiresOnRageWithoutAnyButton();
 tests.StandDownParkingRaisesOnlyWhenAppropriate();
 tests.AcRuntimeAccumulatesOnlyWhileCooling();
+tests.FullDayHouseholdSimulationRespectsEveryDiscordDemand();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -1126,6 +1127,239 @@ internal sealed class DefenderSetPointRegressionTests
         if (!burst.Emergency.Active || !burst.Emergency.Protocol.Contains("auto", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Three quick external touches must trigger the automatic brother-mad apology.");
+        }
+    }
+
+    /// <summary>
+    /// THE FULL HOUSEHOLD DAY: 24 simulated hours, minute by minute, mirroring the worker's gate
+    /// order, with the Discord contract as hard assertions: his 23 is the floor, the AC is off /
+    /// passive 01:00-08:00, no snap-backs (max 0.5 C per command, spaced), a manual OFF is
+    /// respected, a manual night re-enable is never fought, big raises earn an automatic apology,
+    /// an unreachable target forces a rest (never on 24/7), and there is no command runaway.
+    /// </summary>
+    public void FullDayHouseholdSimulationRespectsEveryDiscordDemand()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0); // "i'm trying to keep it at 23"
+
+        var settings = store.GetSettings();
+        settings.NightShutdownEnabled = true;
+        settings.NightShutdownStartTime = "01:00";
+        settings.NightShutdownEndTime = "08:00";
+        settings.NightShutdownOutdoorBelowCelsius = 24.0;
+        settings.NightMinimumSetPointCelsius = 23.0;
+        settings.CoolingStepMinimumGapSeconds = 60;
+        settings.CoolingRestEnabled = true;
+        settings.CoolingRunMaxMinutes = 180;
+        settings.CoolingRestMinutes = 30;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        // ---- simulated world ----
+        var start = new DateTimeOffset(DateTime.Now.Date.AddHours(20)); // today 20:00 local
+        double room = 26.0, outdoor = 30.0, wallSp = 24.0;
+        var mode = "cool";
+        string Action() => mode == "off" ? "off" : wallSp <= room - 0.2 ? "cooling" : "idle";
+
+        // ---- bookkeeping / invariants ----
+        var defenderSetpointCommands = 0;
+        var defenderOffCommands = 0;
+        var restoreCommands = 0;
+        DateTimeOffset? lastSetpointCommandAt = null;
+        var coolingStreakMinutes = 0;
+        var maxCoolingStreakMinutes = 0;
+        var restObserved = false;
+        DateTimeOffset? firstNightOffAt = null;
+        DateTimeOffset? manualNightReEnableAt = null;
+        var giftsSent = new List<double>();
+
+        void SendSetpoint(double value, DateTimeOffset at, string source)
+        {
+            if (value < 22.99)
+            {
+                throw new InvalidOperationException($"{source} commanded {value:0.0} C at {at:HH:mm} — below the 23.0 floor. Discord contract violated.");
+            }
+
+            if (Math.Abs(value - wallSp) > 0.55)
+            {
+                throw new InvalidOperationException($"{source} snapped the wall {wallSp:0.0} -> {value:0.0} at {at:HH:mm} — more than one 0.5 step.");
+            }
+
+            if (source == "walk" && lastSetpointCommandAt is { } last && (at - last).TotalSeconds < 55)
+            {
+                throw new InvalidOperationException($"Command burst: two walk commands {(at - last).TotalSeconds:0}s apart at {at:HH:mm}.");
+            }
+
+            wallSp = value;
+            lastSetpointCommandAt = at;
+            defenderSetpointCommands++;
+            store.RecordCommand($"sim {source} -> {value:0.0}", value, commandedHvacMode: "cool", nowOverride: at);
+        }
+
+        for (var minute = 0; minute < 24 * 60; minute++)
+        {
+            var now = start.AddMinutes(minute);
+            var localHour = now.Hour + now.Minute / 60.0;
+            var inNightWindow = localHour >= 1.0 && localHour < 8.0;
+
+            // ---- physics ----
+            if (Action() == "cooling")
+            {
+                room = Math.Max(outdoor >= 32 ? 24.4 : 22.4, room - 0.03); // hot afternoons: 23 is unreachable
+                coolingStreakMinutes++;
+                maxCoolingStreakMinutes = Math.Max(maxCoolingStreakMinutes, coolingStreakMinutes);
+            }
+            else
+            {
+                room = Math.Min(Math.Max(room, 22.0) + (outdoor > room ? 0.012 : -0.004), outdoor - 2.0 > room ? room + 0.012 : room);
+                coolingStreakMinutes = 0;
+            }
+
+            // ---- scripted events ----
+            switch (minute)
+            {
+                case 90: wallSp = 26.0; break;                                // 21:30 brother raises +2 (rage-sized)
+                case 180: mode = "off"; break;                                // 23:00 brother turns the AC OFF by hand
+                case 270: outdoor = 22.0; break;                              // 00:30 cool night
+                case 420: mode = "cool"; wallSp = 25.0; manualNightReEnableAt = now; break; // 03:00 manual re-enable
+                case 480: store.RecordWeatherReading(new WeatherReading("weather.home", null, "unavailable")); break; // 04:00 blip
+                case 485: store.RecordWeatherReading(new WeatherReading("weather.home", 22.0, "clear")); break;
+                case 600: wallSp = 27.0; break;                               // 06:00 brother raises again
+                case 840: outdoor = 33.0; break;                              // 10:00 heat wave: target unreachable
+            }
+
+            if (minute != 480 && minute != 485)
+            {
+                store.RecordWeatherReading(new WeatherReading("weather.home", outdoor, "sim"));
+            }
+
+            // ---- one worker cycle, in the real gate order ----
+            var reading = new ThermostatReading("climate.dining_room", Math.Round(room, 2), wallSp, mode, Action(), null, []);
+            var snapshot = store.RecordHomeAssistantReading(reading, now);
+
+            if (snapshot.DefenderEnabled
+                && store.TryBeginPeaceOffering(reading, now, out var gift, out _, out _))
+            {
+                if (gift is { } g && mode == "cool")
+                {
+                    if (g < wallSp)
+                    {
+                        throw new InvalidOperationException($"A peace gift lowered the setpoint ({wallSp:0.0} -> {g:0.0}).");
+                    }
+
+                    giftsSent.Add(g);
+                    wallSp = g;
+                    store.RecordCommand($"sim gift -> {g:0.0}", g, commandedHvacMode: "cool", nowOverride: now);
+                }
+
+                continue;
+            }
+
+            if (store.TryRespectEmergencyQuiet(now, out _, out _))
+            {
+                continue;
+            }
+
+            if (!snapshot.DefenderEnabled)
+            {
+                continue;
+            }
+
+            if (store.TryBeginCoolingRest(reading, now, out var easeUp, out _, out _))
+            {
+                restObserved = true;
+                if (easeUp is { } e)
+                {
+                    SendSetpoint(e, now, "rest");
+                }
+
+                continue;
+            }
+
+            if (store.TryBeginNightShutdown(reading, now, out _, out _, out var turnOff))
+            {
+                if (turnOff)
+                {
+                    defenderOffCommands++;
+                    firstNightOffAt ??= now;
+                    if (manualNightReEnableAt is not null)
+                    {
+                        throw new InvalidOperationException($"The defender turned the AC OFF again at {now:HH:mm} after the manual re-enable at {manualNightReEnableAt:HH:mm}. Discord contract violated.");
+                    }
+
+                    mode = "off";
+                    store.RecordCommand("sim night off", commandedHvacMode: "off", nowOverride: now);
+                }
+
+                continue;
+            }
+
+            if (!string.Equals(mode, "cool", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!store.TryDelayCoolModeRestore(reading, now, out _, out _))
+                {
+                    if (minute is >= 180 and < 200)
+                    {
+                        throw new InvalidOperationException($"Cool mode restored at {now:HH:mm}, within the respect window after a manual OFF at 23:00. Flapping.");
+                    }
+
+                    if (inNightWindow)
+                    {
+                        throw new InvalidOperationException($"Cool mode restored at {now:HH:mm}, inside the night window. Discord contract violated.");
+                    }
+
+                    mode = "cool";
+                    restoreCommands++;
+                    store.RecordCoolModeRestoreCommand("off");
+                    store.RecordCommand("sim restore cool", commandedHvacMode: "cool", nowOverride: now);
+                }
+
+                continue;
+            }
+
+            store.ApplyComfortRules(reading);
+            var expected = store.CalculateExpectedSetPoint(Math.Round(room, 2), Action(), wallSp, now);
+            if (Math.Abs(expected - wallSp) > 0.05)
+            {
+                if (inNightWindow)
+                {
+                    throw new InvalidOperationException($"The defender corrected the setpoint at {now:HH:mm}, inside the night window (passive watch should have held). Discord contract violated.");
+                }
+
+                SendSetpoint(expected, now, "walk");
+            }
+        }
+
+        // ---- day-level verdicts ----
+        if (defenderOffCommands != 1 || firstNightOffAt is null)
+        {
+            throw new InvalidOperationException($"Expected exactly one night OFF command, got {defenderOffCommands}.");
+        }
+
+        if (giftsSent.Count < 1)
+        {
+            throw new InvalidOperationException("The brother's raises earned no peace gift.");
+        }
+
+        if (!restObserved)
+        {
+            throw new InvalidOperationException("The unreachable 33 C afternoon never triggered the on-forever rest.");
+        }
+
+        if (maxCoolingStreakMinutes > 200)
+        {
+            throw new InvalidOperationException($"RUNAWAY: the AC cooled {maxCoolingStreakMinutes} minutes continuously — the run limit did not hold.");
+        }
+
+        if (defenderSetpointCommands > 200)
+        {
+            throw new InvalidOperationException($"RUNAWAY: {defenderSetpointCommands} setpoint commands in one day.");
+        }
+
+        var runtimeHours = store.GetSnapshot().AcRuntime?.LifetimeHours ?? 0;
+        if (runtimeHours >= 20.0)
+        {
+            throw new InvalidOperationException($"RUNAWAY: the AC ran {runtimeHours:0.0}h in a 24h day — effectively 24/7.");
         }
     }
 
