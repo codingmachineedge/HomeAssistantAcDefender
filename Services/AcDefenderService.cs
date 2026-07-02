@@ -48,6 +48,8 @@ public sealed class AcDefenderService
             await RefreshFrontDoorKillSwitchIfDueAsync(cancellationToken);
             await RefreshLearningIfDueAsync(cancellationToken);
 
+            await TryBackfillRuntimeFromHistoryAsync(reading, cancellationToken);
+
             var frontDoorNow = DateTimeOffset.UtcNow;
             if (stateStore.TryRespectFrontDoorKillSwitch(reading, frontDoorNow, out var shouldTurnOff, out var frontDoorUntil, out var frontDoorMessage))
             {
@@ -657,6 +659,31 @@ public sealed class AcDefenderService
             commandSourceLabel: "Stand-down parking",
             commandSourceDetail: "The defender was turned off; the setpoint was raised to the stand-down park value to save power while unguarded.");
         return $"Thermostat parked at {parkSetPoint:0.0} °C while the defender is off.";
+    }
+
+    private DateTimeOffset _lastRuntimeBackfillAttemptAt = DateTimeOffset.MinValue;
+
+    // One-time: seed the runtime counters from the recorder archive (past logs), retried at most
+    // every 10 minutes if Home Assistant is unreachable.
+    private async Task TryBackfillRuntimeFromHistoryAsync(ThermostatReading reading, CancellationToken cancellationToken)
+    {
+        if (!stateStore.NeedsAcRuntimeBackfill
+            || DateTimeOffset.UtcNow - _lastRuntimeBackfillAttemptAt < TimeSpan.FromMinutes(10))
+        {
+            return;
+        }
+
+        _lastRuntimeBackfillAttemptAt = DateTimeOffset.UtcNow;
+        try
+        {
+            var to = DateTimeOffset.UtcNow;
+            var samples = await homeAssistantClient.GetClimateHistoryAsync(reading.EntityId, to.AddDays(-31), to, cancellationToken);
+            stateStore.BackfillAcRuntimeFromHistory(samples, to);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Runtime history backfill failed; will retry.");
+        }
     }
 
     public async Task<HistoryLearningSnapshot> LearnFromHistoryAsync(CancellationToken cancellationToken)

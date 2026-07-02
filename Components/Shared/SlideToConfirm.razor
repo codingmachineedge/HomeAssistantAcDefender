@@ -1,6 +1,9 @@
-@* Slide-to-confirm for emergency actions: drag the knob all the way right to fire. Built on a
-   native range input so it works with mouse and touch without any JS interop; releasing early
-   snaps back to zero. *@
+@* Slide-to-confirm for emergency actions, guarded by TWO arming keys (missile-launch style):
+   both keys must be turned before the slider unlocks, so an accidental swipe can never fire.
+   Keys disarm automatically after 30 seconds, after a confirm, and after an early release is
+   not required — releasing the slider early just snaps it back. Pure Blazor, mouse + touch. *@
+@implements IDisposable
+
 @if (Dragging)
 {
     <div class="slide-drama" style="opacity: @DramaOpacity" aria-hidden="true">
@@ -10,14 +13,19 @@
 }
 
 <div class="@RootClass">
-    <div class="slide-confirm__track">
+    <div class="slide-keys">
+        <button type="button" class="@KeyClass(_key1)" @onclick="() => ToggleKey(1)" aria-label="Arming key 1" aria-pressed="@_key1">🗝</button>
+        <span class="@KeysStatusClass">@KeysStatus</span>
+        <button type="button" class="@KeyClass(_key2)" @onclick="() => ToggleKey(2)" aria-label="Arming key 2" aria-pressed="@_key2">🗝</button>
+    </div>
+    <div class="@TrackClass">
         <div class="slide-confirm__fill" style="width: @(_value)%"></div>
-        <span class="slide-confirm__label">@(_confirmed ? ConfirmedLabel : Label)</span>
+        <span class="slide-confirm__label">@(_confirmed ? ConfirmedLabel : Armed ? Label : "TURN BOTH KEYS TO ARM")</span>
         <span class="slide-confirm__chevrons" aria-hidden="true"><span>›</span><span>›</span><span>›</span></span>
-        <span class="slide-confirm__knob" style="left: calc(@(_value)% * (100% - 46px) / 100%);" aria-hidden="true">@(_confirmed ? "✓" : Glyph)</span>
+        <span class="slide-confirm__knob" style="left: calc(@(_value)% * (100% - 46px) / 100%);" aria-hidden="true">@(_confirmed ? "✓" : Armed ? Glyph : "🔒")</span>
         <input type="range" min="0" max="100" step="1" value="@_value"
                @oninput="OnInput" @onchange="OnRelease"
-               aria-label="@Label" disabled="@(_confirmed || Disabled)" />
+               aria-label="@Label" disabled="@(_confirmed || Disabled || !Armed)" />
     </div>
 </div>
 
@@ -30,7 +38,11 @@
 
     private int _value;
     private bool _confirmed;
+    private bool _key1;
+    private bool _key2;
+    private System.Threading.Timer? _disarmTimer;
 
+    private bool Armed => _key1 && _key2;
     private bool Dragging => _value > 0 && !_confirmed;
 
     private string DramaOpacity => (0.3 + _value / 140.0).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
@@ -39,9 +51,59 @@
         ? "slide-confirm slide-confirm--done"
         : Dragging ? "slide-confirm slide-confirm--dragging" : "slide-confirm";
 
+    private string TrackClass => Armed || _confirmed
+        ? "slide-confirm__track"
+        : "slide-confirm__track slide-confirm__track--locked";
+
+    private string KeyClass(bool on) => on ? "slide-key slide-key--on" : "slide-key";
+
+    private string KeysStatus => _confirmed
+        ? "FIRED"
+        : Armed ? "⚠ ARMED — SLIDE NOW" : _key1 || _key2 ? "ONE MORE KEY…" : "SAFETY LOCK";
+
+    private string KeysStatusClass => Armed && !_confirmed ? "slide-keys__status slide-keys__status--armed" : "slide-keys__status";
+
+    private void ToggleKey(int key)
+    {
+        if (_confirmed || Disabled)
+        {
+            return;
+        }
+
+        if (key == 1)
+        {
+            _key1 = !_key1;
+        }
+        else
+        {
+            _key2 = !_key2;
+        }
+
+        // Armed state expires: 30 seconds without a slide turns both keys back.
+        _disarmTimer?.Dispose();
+        _disarmTimer = null;
+        if (Armed)
+        {
+            _disarmTimer = new System.Threading.Timer(_ => InvokeAsync(Disarm), null, TimeSpan.FromSeconds(30), System.Threading.Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void Disarm()
+    {
+        if (_confirmed)
+        {
+            return;
+        }
+
+        _key1 = false;
+        _key2 = false;
+        _value = 0;
+        StateHasChanged();
+    }
+
     private async Task OnInput(ChangeEventArgs e)
     {
-        if (_confirmed || Disabled || !int.TryParse(e.Value?.ToString(), out var v))
+        if (_confirmed || Disabled || !Armed || !int.TryParse(e.Value?.ToString(), out var v))
         {
             return;
         }
@@ -70,6 +132,12 @@
         await Task.Delay(2200);
         _confirmed = false;
         _value = 0;
+        _key1 = false;
+        _key2 = false;
+        _disarmTimer?.Dispose();
+        _disarmTimer = null;
         await InvokeAsync(StateHasChanged);
     }
+
+    public void Dispose() => _disarmTimer?.Dispose();
 }

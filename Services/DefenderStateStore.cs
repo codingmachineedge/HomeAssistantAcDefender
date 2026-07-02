@@ -1322,6 +1322,73 @@ public sealed class DefenderStateStore
         AddEvent("info", $"Someone turned the AC off by hand — respecting it for {holdMinutes} min before any restore.");
     }
 
+    public bool NeedsAcRuntimeBackfill
+    {
+        get
+        {
+            lock (gate)
+            {
+                return state.AcRuntimeBackfilledAt is null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// One-time backfill: integrate cooling runtime from Home Assistant's recorder history (the
+    /// past logs) so today/month/lifetime do not start at zero. Only periods BEFORE live tracking
+    /// began are counted, so nothing is double-counted; gaps are capped at 15 minutes per pair.
+    /// </summary>
+    public string BackfillAcRuntimeFromHistory(IReadOnlyList<ClimateHistorySample> samples, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (state.AcRuntimeBackfilledAt is not null)
+            {
+                return "Runtime history was already backfilled.";
+            }
+
+            state.AcRuntimeBackfilledAt = now;
+            var cutoff = state.AcRuntimeTrackingSince ?? now;
+            var localNow = now.ToLocalTime();
+            var todayKey = localNow.ToString("yyyy-MM-dd");
+            var monthKey = localNow.ToString("yyyy-MM");
+            double lifetime = 0, month = 0, today = 0;
+
+            var ordered = samples.Where(s => s.Timestamp < cutoff).OrderBy(s => s.Timestamp).ToList();
+            for (var i = 0; i + 1 < ordered.Count; i++)
+            {
+                if (!string.Equals(ordered[i].HvacAction, "cooling", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var end = ordered[i + 1].Timestamp < cutoff ? ordered[i + 1].Timestamp : cutoff;
+                var seconds = Math.Clamp((end - ordered[i].Timestamp).TotalSeconds, 0, 900);
+                lifetime += seconds;
+                var local = ordered[i].Timestamp.ToLocalTime();
+                if (string.Equals(local.ToString("yyyy-MM"), monthKey, StringComparison.Ordinal))
+                {
+                    month += seconds;
+                }
+
+                if (string.Equals(local.ToString("yyyy-MM-dd"), todayKey, StringComparison.Ordinal))
+                {
+                    today += seconds;
+                }
+            }
+
+            state.AcRuntimeDayKey ??= todayKey;
+            state.AcRuntimeMonthKey ??= monthKey;
+            state.AcRuntimeSecondsToday += today;
+            state.AcRuntimeSecondsMonth += month;
+            state.AcRuntimeSecondsLifetime += lifetime;
+            var message = $"Backfilled AC runtime from {ordered.Count} recorder history states: +{lifetime / 3600.0:0.0}h lifetime, +{month / 3600.0:0.0}h this month, +{today / 3600.0:0.0}h today.";
+            AddEvent("info", message);
+            SaveState();
+            return message;
+        }
+    }
+
     private static bool IsInMinuteWindow(DateTimeOffset now, int startMinutes, int endMinutes)
     {
         var minutes = now.ToLocalTime().Hour * 60 + now.ToLocalTime().Minute;
@@ -9844,6 +9911,8 @@ public sealed class DefenderStateStore
         public bool AcRuntimeLastWasCooling { get; set; }
 
         public DateTimeOffset? AcRuntimeTrackingSince { get; set; }
+
+        public DateTimeOffset? AcRuntimeBackfilledAt { get; set; }
 
         // On-forever protection: when the current continuous cooling run started, and the active
         // rest window that stops an unreachable target from keeping the AC on for 24 hours.

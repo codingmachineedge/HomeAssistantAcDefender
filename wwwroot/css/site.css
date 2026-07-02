@@ -1166,6 +1166,51 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 
 .slide-confirm { width: 100%; }
 
+/* the two arming keys */
+.slide-keys { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+
+.slide-key {
+    width: 40px;
+    height: 40px;
+    border: 2px solid var(--line2);
+    background: var(--panel2);
+    color: var(--sub);
+    font-size: 17px;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.2s, box-shadow 0.2s;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 0;
+}
+
+.slide-key:hover { border-color: var(--warn); }
+
+.slide-key--on {
+    transform: rotate(90deg);
+    border-color: var(--bad);
+    color: var(--bad);
+    box-shadow: 0 0 14px rgba(255, 92, 71, 0.55);
+    animation: knobGlow 1.6s ease infinite;
+}
+
+.slide-keys__status {
+    flex: 1;
+    text-align: center;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.22em;
+    color: var(--sub);
+}
+
+.slide-keys__status--armed { color: var(--bad); animation: flash 0.7s ease infinite; }
+
+.slide-confirm__track--locked { border-color: var(--line2); opacity: 0.55; }
+.slide-confirm__track--locked .slide-confirm__label { animation: none; background: none; -webkit-text-fill-color: var(--sub); color: var(--sub); }
+.slide-confirm__track--locked .slide-confirm__chevrons { display: none; }
+.slide-confirm__track--locked .slide-confirm__knob { animation: none; border-color: var(--line2); }
+.slide-confirm__track--locked input[type="range"] { cursor: not-allowed; }
+
 .slide-confirm__track {
     position: relative;
     height: 52px;

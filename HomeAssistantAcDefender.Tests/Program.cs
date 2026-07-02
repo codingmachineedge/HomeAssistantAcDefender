@@ -79,6 +79,7 @@ tests.AutoBrotherMadFiresOnRageWithoutAnyButton();
 tests.StandDownParkingRaisesOnlyWhenAppropriate();
 tests.AcRuntimeAccumulatesOnlyWhileCooling();
 tests.FullDayHouseholdSimulationRespectsEveryDiscordDemand();
+tests.RuntimeBackfillSeedsCountersFromPastLogsOnce();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -1137,6 +1138,38 @@ internal sealed class DefenderSetPointRegressionTests
     /// respected, a manual night re-enable is never fought, big raises earn an automatic apology,
     /// an unreachable target forces a rest (never on 24/7), and there is no command runaway.
     /// </summary>
+    public void RuntimeBackfillSeedsCountersFromPastLogsOnce()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        var now = DateTimeOffset.UtcNow;
+
+        // Live tracking started 1h ago; history holds 2h of cooling before that plus 1h after
+        // (the after-cutoff hour must NOT be backfilled — live tracking owns it).
+        SetRuntimeProperty(store, "AcRuntimeTrackingSince", now.AddHours(-1));
+        var samples = new List<ClimateHistorySample>();
+        for (var i = 0; i < 24; i++)
+        {
+            var t = now.AddHours(-4).AddMinutes(i * 10);
+            samples.Add(new ClimateHistorySample(t, 23.0, 25.0, "cool", i < 12 ? "cooling" : "idle", null));
+        }
+
+        var message = store.BackfillAcRuntimeFromHistory(samples, now);
+        var runtime = store.GetSnapshot().AcRuntime!;
+        if (runtime.LifetimeHours < 1.7 || runtime.LifetimeHours > 2.2)
+        {
+            throw new InvalidOperationException($"Expected ~2h backfilled from past logs, got {runtime.LifetimeHours:0.00}h ({message}).");
+        }
+
+        // Second call is a no-op — never double-counted.
+        store.BackfillAcRuntimeFromHistory(samples, now);
+        var again = store.GetSnapshot().AcRuntime!;
+        if (Math.Abs(again.LifetimeHours - runtime.LifetimeHours) > 0.01)
+        {
+            throw new InvalidOperationException("Backfill ran twice and double-counted runtime.");
+        }
+    }
+
     public void FullDayHouseholdSimulationRespectsEveryDiscordDemand()
     {
         using var fixture = DefenderStoreFixture.Create();
