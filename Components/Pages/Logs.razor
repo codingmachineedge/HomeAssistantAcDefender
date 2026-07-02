@@ -2,6 +2,9 @@
 @implements IDisposable
 @using System.Text.Json
 @inject DefenderStateProvider State
+@inject HomeAssistantClient HomeAssistant
+@inject AcDefenderService Defender
+@inject ISnackbar Snackbar
 
 <PageTitle>Logs - AC Defender</PageTitle>
 
@@ -32,6 +35,81 @@
             </div>
         </div>
     }
+    @* ---------- HA full history + derived algorithm ---------- *@
+    <div class="ops-panel ops-panel--pad">
+        <div class="ops-panel__label">HOME ASSISTANT FULL HISTORY — RECORDER ARCHIVE</div>
+        <div class="helper-text" style="margin-bottom: 10px;">Pulls every climate state Home Assistant still remembers (asks for 31 days; the recorder returns whatever it has, start to end) and derives the algorithm from it.</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px;">
+            <button class="ops-btn ops-btn--solid" @onclick="FetchFullHistory" disabled="@_historyLoading">@(_historyLoading ? "PULLING ARCHIVE…" : "⇣ FETCH FULL HISTORY")</button>
+            <button class="ops-btn ops-btn--outline" @onclick="RunLearning" disabled="@_historyLoading">✦ RE-LEARN THE ALGORITHM</button>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_historyError))
+        {
+            <div class="ops-alert-row ops-alert-row--warn" style="margin-bottom: 10px;">
+                <span class="ops-alert-row__tag">ARCHIVE</span>
+                <span class="ops-alert-row__text">@_historyError</span>
+            </div>
+        }
+
+        @if (_history is { Count: > 0 })
+        {
+            <div class="ops-comfort-metrics" style="margin-bottom: 14px;">
+                <div class="ops-panel" style="padding: 12px 14px;">
+                    <div class="ops-panel__label">ARCHIVE SPAN</div>
+                    <div class="ops-comfort-metric__value" style="font-size: 14px;">@Format.DateTimeText(_history[0].Timestamp)<br />→ @Format.DateTimeText(_history[^1].Timestamp)</div>
+                </div>
+                <div class="ops-panel" style="padding: 12px 14px;">
+                    <div class="ops-panel__label">SAMPLES</div>
+                    <div class="ops-comfort-metric__value">@_history.Count</div>
+                    <div class="helper-text">Every state HA recorded.</div>
+                </div>
+                <div class="ops-panel" style="padding: 12px 14px;">
+                    <div class="ops-panel__label">SETPOINT CHANGES</div>
+                    <div class="ops-comfort-metric__value" style="color: var(--warn);">@SetpointChanges.Count</div>
+                    <div class="helper-text">@AppChangeCount from an app user · @(SetpointChanges.Count - AppChangeCount) wall/device/defender.</div>
+                </div>
+                <div class="ops-panel" style="padding: 12px 14px;">
+                    <div class="ops-panel__label">BUSIEST HOURS</div>
+                    <div class="ops-comfort-metric__value" style="font-size: 16px;">@BusiestHoursText</div>
+                    <div class="helper-text">When the thermostat gets touched most.</div>
+                </div>
+            </div>
+
+            <div class="ops-panel__label">SETPOINT CHANGES BY HOUR OF DAY (TORONTO)</div>
+            <div class="ops-usage-bars" style="height: 70px; margin-bottom: 4px;">
+                @foreach (var (hour, count) in HourHistogram)
+                {
+                    <div class="ops-usage-bars__bar @(count >= HistogramHotThreshold ? "ops-usage-bars__bar--hot" : "")"
+                         style="height: @(HistogramMax == 0 ? 2 : Math.Max(3, count * 100 / HistogramMax))%"
+                         title="@($"{hour:00}:00 — {count} changes")"></div>
+                }
+            </div>
+            <div class="ops-usage-scale" style="margin-bottom: 14px;"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+
+            <div class="ops-panel" style="padding: 14px 16px; border-left: 3px solid var(--accent); margin-bottom: 14px;">
+                <div class="ops-panel__label">THE ALGORITHM — WHAT THE DEFENDER LEARNED FROM THIS HISTORY</div>
+                @foreach (var line in AlgorithmLines)
+                {
+                    <div style="font-size: 11px; line-height: 1.8;">▸ @line</div>
+                }
+            </div>
+
+            <div class="ops-panel__label">FULL SAMPLE LOG (NEWEST FIRST@(_history.Count > 400 ? ", SHOWING 400" : ""))</div>
+            <MudStack Spacing="1" Class="scroll-list tall-list" Style="margin-top: 6px;">
+                @foreach (var sample in Enumerable.Reverse(_history).Take(400))
+                {
+                    <div class="ops-log-row" style="cursor: default;">
+                        <span class="ops-log-row__change">@(sample.SetPointCelsius is { } sp ? $"{sp:0.0}°C" : "--")</span>
+                        <span class="ops-log-row__source">@(string.IsNullOrWhiteSpace(sample.ContextUserId) ? (sample.HvacMode ?? "?").ToUpperInvariant() : "APP USER")</span>
+                        <span class="ops-log-row__context">room @(sample.CurrentTemperatureCelsius is { } rt ? $"{rt:0.0}°C" : "--") · @(sample.HvacAction ?? "--")</span>
+                        <span class="ops-log-row__time">@Format.DateTimeText(sample.Timestamp)</span>
+                    </div>
+                }
+            </MudStack>
+        }
+    </div>
+
     <MudGrid Spacing="3">
         <MudItem xs="12" lg="6">
             <SectionCard Title="Thermostat change log"
@@ -116,6 +194,137 @@
     private static readonly JsonSerializerOptions LogJsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     private DefenderSnapshot Snapshot => State.Snapshot;
+
+    // ---------- HA full history + derived algorithm ----------
+
+    private bool _historyLoading;
+    private string? _historyError;
+    private IReadOnlyList<ClimateHistorySample>? _history;
+
+    private async Task FetchFullHistory()
+    {
+        var entityId = Snapshot?.HomeAssistantEntityId;
+        if (string.IsNullOrWhiteSpace(entityId))
+        {
+            _historyError = "No climate entity known yet — the defender has to see the thermostat once first.";
+            return;
+        }
+
+        _historyLoading = true;
+        _historyError = null;
+        StateHasChanged();
+        try
+        {
+            var to = DateTimeOffset.UtcNow;
+            _history = (await HomeAssistant.GetClimateHistoryAsync(entityId, to.AddDays(-31), to, CancellationToken.None))
+                .OrderBy(s => s.Timestamp)
+                .ToList();
+            if (_history.Count == 0)
+            {
+                _historyError = "Home Assistant returned no history — the recorder may be empty for this entity.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _historyError = $"History fetch failed: {ex.Message}";
+        }
+
+        _historyLoading = false;
+    }
+
+    private async Task RunLearning()
+    {
+        try
+        {
+            var result = await Defender.LearnFromHistoryAsync(CancellationToken.None);
+            Snackbar.Add(result.Status, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Learning failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private IReadOnlyList<ClimateHistorySample> SetpointChanges =>
+        _history is null
+            ? Array.Empty<ClimateHistorySample>()
+            : _history.Zip(_history.Skip(1), (a, b) => (a, b))
+                .Where(p => p.a.SetPointCelsius is { } sa && p.b.SetPointCelsius is { } sb && Math.Abs(sa - sb) > 0.05)
+                .Select(p => p.b)
+                .ToList();
+
+    private int AppChangeCount => SetpointChanges.Count(s => !string.IsNullOrWhiteSpace(s.ContextUserId));
+
+    private IReadOnlyList<(int Hour, int Count)> HourHistogram
+    {
+        get
+        {
+            var counts = new int[24];
+            foreach (var change in SetpointChanges)
+            {
+                counts[Format.ToToronto(change.Timestamp).Hour]++;
+            }
+
+            return Enumerable.Range(0, 24).Select(h => (h, counts[h])).ToList();
+        }
+    }
+
+    private int HistogramMax => HourHistogram.Max(h => h.Count);
+    private int HistogramHotThreshold => Math.Max(1, (int)(HistogramMax * 0.7));
+
+    private string BusiestHoursText => string.Join(" · ",
+        HourHistogram.Where(h => h.Count > 0).OrderByDescending(h => h.Count).Take(3).Select(h => $"{h.Hour:00}:00"));
+
+    private IReadOnlyList<string> AlgorithmLines
+    {
+        get
+        {
+            var lines = new List<string>();
+            var changes = SetpointChanges;
+            if (_history is { Count: > 1 } h)
+            {
+                var span = h[^1].Timestamp - h[0].Timestamp;
+                lines.Add($"Across {span.TotalDays:0.0} days Home Assistant recorded {h.Count} climate states and {changes.Count} setpoint changes ({AppChangeCount} from app users, the rest wall/device/defender).");
+
+                var setpoints = h.Where(s => s.SetPointCelsius is not null).Select(s => s.SetPointCelsius!.Value).ToList();
+                var rooms = h.Where(s => s.CurrentTemperatureCelsius is not null).Select(s => s.CurrentTemperatureCelsius!.Value).ToList();
+                if (setpoints.Count > 0 && rooms.Count > 0)
+                {
+                    lines.Add($"Setpoint lived between {setpoints.Min():0.0} and {setpoints.Max():0.0} °C (average {setpoints.Average():0.0}); the room lived between {rooms.Min():0.0} and {rooms.Max():0.0} °C (average {rooms.Average():0.0}).");
+                }
+
+                var offSamples = h.Count(s => string.Equals(s.HvacMode, "off", StringComparison.OrdinalIgnoreCase));
+                lines.Add($"The unit was in OFF mode for {offSamples * 100.0 / h.Count:0}% of recorded states — the rest was cool/auto duty.");
+
+                if (BusiestHoursText.Length > 0)
+                {
+                    lines.Add($"The thermostat war peaks around {BusiestHoursText} — the defenders treat these hours as sensitive and act extra slowly there.");
+                }
+            }
+
+            if (Snapshot?.HistoryLearning is { } learning && learning.LearnedHourCount > 0)
+            {
+                lines.Add($"Learned comfort profile: {learning.Status}");
+                if (learning.MedianTouchIntervalMinutes is { } median)
+                {
+                    lines.Add($"Humans in this house touch the thermostat roughly every {median:0} minutes when active — defender corrections are paced to blend under that rhythm.");
+                }
+
+                if (learning.CurrentHourPreferredSetPointCelsius is { } preferred)
+                {
+                    lines.Add($"For the current hour the house historically prefers about {preferred:0.0} °C.");
+                }
+            }
+
+            if (Snapshot?.LearningModel is { } model)
+            {
+                lines.Add($"Anger model: trained on {model.AngerPositiveSamples + model.AngerNegativeSamples} labelled moments ({model.AngerPositiveSamples} upset). Comfort model: {model.ComfortSamples} samples. These shape how long the defender waits before acting at each hour.");
+            }
+
+            lines.Add("Standing rules regardless of history: \"the temp I want\" is a hard floor, every command is one 0.5 °C temperature-driven step, nights are protected by the shutdown window and the 23 °C night minimum, raises earn a peace offering, and 3 h of fruitless cooling forces a rest.");
+            return lines;
+        }
+    }
 
     private IEnumerable<ThermostatChangeAudit> FilteredThermostatChanges =>
         (Snapshot?.ThermostatChanges ?? Array.Empty<ThermostatChangeAudit>())

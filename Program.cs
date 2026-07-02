@@ -22,6 +22,7 @@ builder.Services.Configure<DefenderOptions>(builder.Configuration.GetSection(Def
 builder.Services.AddSingleton<DefenderStateStore>();
 builder.Services.AddSingleton<AcDefenderService>();
 builder.Services.AddSingleton<TwoFactorAuth>();
+builder.Services.AddSingleton<HomeAssistantTokenStore>();
 builder.Services.AddHttpClient<HomeAssistantClient>();
 builder.Services.AddHostedService<AcDefenderWorker>();
 builder.Services.AddScoped<DefenderStateProvider>();

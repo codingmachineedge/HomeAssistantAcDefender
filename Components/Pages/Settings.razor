@@ -2,6 +2,8 @@
 @inject DefenderStateStore StateStore
 @inject ISnackbar Snackbar
 @inject TwoFactorAuth TwoFactorAuth
+@inject HomeAssistantTokenStore TokenStore
+@inject Microsoft.Extensions.Options.IOptionsMonitor<HomeAssistantAcDefender.Options.HomeAssistantOptions> HaOptions
 
 <PageTitle>Settings - AC Defender</PageTitle>
 
@@ -18,6 +20,39 @@
                           Placeholder="Search settings (cooldown, walkback, upstairs, weather…)"
                           Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mt-1" />
         </ChildContent>
+    </SectionCard>
+
+    @* ───────────── Home Assistant connection ───────────── *@
+    <SectionCard Title="Home Assistant connection"
+                 Subtitle="@HaTokenSubtitle"
+                 Help="The defender needs a long-lived Home Assistant access token. Normally it comes from the server environment (.env). If none is configured there, you can paste one here — it is stored on the server, never shown again, and the environment token always wins when both exist.">
+        <MudGrid Spacing="2">
+            <MudItem xs="12">
+                @if (HaEnvTokenConfigured)
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true">Token is configured in the server environment — nothing to do here.</MudAlert>
+                }
+                else if (TokenStore.HasToken)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">A website-entered token is saved and in use. Paste a new one to replace it, or clear it below.</MudAlert>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">No Home Assistant token found — the defender cannot reach the thermostat. Paste a long-lived access token below (Home Assistant → your profile → Security → Long-lived access tokens).</MudAlert>
+                }
+            </MudItem>
+            <MudItem xs="12" md="8">
+                <MudTextField @bind-Value="_haTokenInput" Label="Long-lived access token" InputType="InputType.Password"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="Optional — only used when the environment has no token." />
+            </MudItem>
+            <MudItem xs="12" md="4" Class="d-flex align-center gap-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveHaToken" StartIcon="@Icons.Material.Filled.Key">Save token</MudButton>
+                @if (TokenStore.HasToken)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="ClearHaToken">Clear</MudButton>
+                }
+            </MudItem>
+        </MudGrid>
     </SectionCard>
 
     @* ───────────── Accounts ───────────── *@
@@ -731,6 +766,33 @@
 
     private string _settingsSearch = "";
     private string _registrationCode = "";
+    private string _haTokenInput = "";
+
+    private bool HaEnvTokenConfigured => !string.IsNullOrWhiteSpace(HaOptions.CurrentValue.AccessToken);
+
+    private string HaTokenSubtitle => HaEnvTokenConfigured
+        ? "Token from environment"
+        : TokenStore.HasToken ? "Token from website" : "No token — enter one";
+
+    private void SaveHaToken()
+    {
+        if (string.IsNullOrWhiteSpace(_haTokenInput))
+        {
+            Snackbar.Add("Paste a token first.", Severity.Warning);
+            return;
+        }
+
+        TokenStore.SetToken(_haTokenInput);
+        _haTokenInput = "";
+        Snackbar.Add("Home Assistant token saved. The next defender cycle will use it.", Severity.Success);
+    }
+
+    private void ClearHaToken()
+    {
+        TokenStore.SetToken(null);
+        Snackbar.Add("Website token cleared.", Severity.Info);
+    }
+
     private bool _scheduleEnabled;
     private bool _websiteCommandDebounceEnabled;
     private bool _nightShutdownEnabled;

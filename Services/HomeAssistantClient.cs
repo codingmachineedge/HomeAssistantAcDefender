@@ -14,17 +14,25 @@ public sealed class HomeAssistantClient
     private readonly HttpClient httpClient;
     private readonly IOptionsMonitor<HomeAssistantOptions> options;
     private readonly ILogger<HomeAssistantClient> logger;
+    private readonly HomeAssistantTokenStore? tokenStore;
     private string? discoveredClimateEntityId;
     private string? discoveredWeatherEntityId;
 
-    public HomeAssistantClient(HttpClient httpClient, IOptionsMonitor<HomeAssistantOptions> options, ILogger<HomeAssistantClient> logger)
+    public HomeAssistantClient(HttpClient httpClient, IOptionsMonitor<HomeAssistantOptions> options, ILogger<HomeAssistantClient> logger, HomeAssistantTokenStore? tokenStore = null)
     {
         this.httpClient = httpClient;
         this.options = options;
         this.logger = logger;
+        this.tokenStore = tokenStore;
     }
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(options.CurrentValue.AccessToken);
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(EffectiveAccessToken);
+
+    // The environment/config token always wins; the website-entered token only fills the gap.
+    private string? EffectiveAccessToken =>
+        !string.IsNullOrWhiteSpace(options.CurrentValue.AccessToken)
+            ? options.CurrentValue.AccessToken
+            : tokenStore?.Token;
 
     public async Task<ThermostatReading?> GetDiningRoomClimateAsync(CancellationToken cancellationToken)
     {
@@ -709,7 +717,7 @@ public sealed class HomeAssistantClient
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string relativePath, HttpContent? content, CancellationToken cancellationToken)
     {
         var request = new HttpRequestMessage(method, BuildUri(relativePath));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.CurrentValue.AccessToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", EffectiveAccessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Content = content;
         return await httpClient.SendAsync(request, cancellationToken);
