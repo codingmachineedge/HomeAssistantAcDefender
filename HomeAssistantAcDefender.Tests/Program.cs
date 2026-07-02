@@ -19,6 +19,7 @@ tests.SetpointStillnessWaitsForStableReadingsButBypassesHotRoom();
 tests.CommandCamouflageSpacesSafeFollowUpButBypassesHotRoom();
 tests.StealthGovernorHoldsSafeHighPressureButBypassesHotRoom();
 tests.HumanNudgeShapesOnlySafeCommandsAndBypassesHotRoom();
+tests.WebsiteCommandDebounceIsOffByDefault();
 tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
 tests.WebsiteCommandDebounceCanBypassNonThermostatButtons();
 tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
@@ -893,10 +894,36 @@ internal sealed class DefenderSetPointRegressionTests
         }
     }
 
+    public void WebsiteCommandDebounceIsOffByDefault()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+
+        var first = store.TryBeginWebsiteCommand("force cooling");
+        var second = store.TryBeginWebsiteCommand("force exact target");
+        if (!first.Accepted || !second.Accepted)
+        {
+            throw new InvalidOperationException("With debounce off (the default), every website command must be accepted immediately.");
+        }
+
+        if (second.Snapshot.WebsiteCommandDebounce.Active)
+        {
+            throw new InvalidOperationException("With debounce off, no debounce window may be armed.");
+        }
+    }
+
+    private static void EnableWebsiteDebounce(DefenderStateStore store)
+    {
+        var s = store.GetSettings();
+        s.WebsiteCommandDebounceEnabled = true;
+        SetRuntimeProperty(store, "Settings", s);
+    }
+
     public void WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes()
     {
         using var fixture = DefenderStoreFixture.Create();
         var store = fixture.Store;
+        EnableWebsiteDebounce(store);
 
         var first = store.TryBeginWebsiteCommand("force cooling");
         if (!first.Accepted)
@@ -936,6 +963,7 @@ internal sealed class DefenderSetPointRegressionTests
     {
         using var fixture = DefenderStoreFixture.Create();
         var store = fixture.Store;
+        EnableWebsiteDebounce(store);
 
         var first = store.TryBeginWebsiteCommand("force cooling");
         if (!first.Accepted)
@@ -959,6 +987,14 @@ internal sealed class DefenderSetPointRegressionTests
         if (!defenderToggle.Accepted)
         {
             throw new InvalidOperationException("Defender toggle should bypass the thermostat debounce.");
+        }
+
+        // Target adjustments are website-only state changes; the adjust-then-save flow must never
+        // be blocked by an armed debounce window.
+        var adjustTarget = store.TryBeginWebsiteCommand("set target", bypassDebounce: true);
+        if (!adjustTarget.Accepted)
+        {
+            throw new InvalidOperationException("Target adjustments should bypass the thermostat debounce.");
         }
 
         var nextThermostatCommand = store.TryBeginWebsiteCommand("force exact target");

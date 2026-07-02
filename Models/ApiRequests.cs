@@ -240,4 +240,5 @@ public sealed record SettingsRequest(
     string? EnforcerEndTime = null,
     bool? EnforcerRequirePresence = null,
     bool? EnforcerNotifyEnabled = null,
-    bool? EnforcerUseLearning = null);
+    bool? EnforcerUseLearning = null,
+    bool? WebsiteCommandDebounceEnabled = null);

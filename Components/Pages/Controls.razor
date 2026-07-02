@@ -309,7 +309,7 @@
 
     private void GenerateTarget()
     {
-        if (!TryBeginWebsiteCommand("generate target"))
+        if (!TryBeginWebsiteCommand("generate target", bypassDebounce: true))
         {
             return;
         }
@@ -323,7 +323,7 @@
 
     private void ApplyTarget()
     {
-        if (!TryBeginWebsiteCommand("set target"))
+        if (!TryBeginWebsiteCommand("set target", bypassDebounce: true))
         {
             return;
         }

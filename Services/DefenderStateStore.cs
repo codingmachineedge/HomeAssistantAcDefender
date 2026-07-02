@@ -415,6 +415,16 @@ public sealed class DefenderStateStore
             state.Settings.PresenceEntityIds = request.PresenceEntityIds?.Trim() ?? string.Empty;
             state.Settings.DefenderRunsContinuously = true;
 
+            if (request.WebsiteCommandDebounceEnabled is { } websiteDebounceEnabled)
+            {
+                state.Settings.WebsiteCommandDebounceEnabled = websiteDebounceEnabled;
+                if (!websiteDebounceEnabled)
+                {
+                    state.WebsiteCommandDebounceUntil = null;
+                    state.WebsiteCommandDebounceStatus = "Website debounce is off; controls respond immediately.";
+                }
+            }
+
             // Desired-State Enforcer. Apply only the values that are present so a partial save never resets it.
             if (request.EnforcerModeEnabled is { } enforcerEnabled)
             {
@@ -1087,6 +1097,17 @@ public sealed class DefenderStateStore
             var cleanName = string.IsNullOrWhiteSpace(commandName)
                 ? "website command"
                 : commandName.Trim();
+
+            if (!state.Settings.WebsiteCommandDebounceEnabled)
+            {
+                state.LastWebsiteCommandName = cleanName;
+                state.LastWebsiteCommandAt = now;
+                state.WebsiteCommandDebounceUntil = null;
+                state.WebsiteCommandDebounceStatus = "Website debounce is off; controls respond immediately.";
+                state.UpdatedAt = now;
+                SaveState();
+                return new WebsiteCommandGateResult(true, state.WebsiteCommandDebounceStatus, CreateSnapshot());
+            }
 
             if (!bypassDebounce
                 && state.WebsiteCommandDebounceUntil is { } activeUntil

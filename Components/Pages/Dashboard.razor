@@ -470,7 +470,7 @@
 
     private void SaveTarget(double value)
     {
-        if (!TryBeginWebsiteCommand("set target"))
+        if (!TryBeginWebsiteCommand("set target", bypassDebounce: true))
         {
             return;
         }
@@ -483,7 +483,7 @@
 
     private void GenerateTarget()
     {
-        if (!TryBeginWebsiteCommand("generate target"))
+        if (!TryBeginWebsiteCommand("generate target", bypassDebounce: true))
         {
             return;
         }
@@ -497,7 +497,7 @@
 
     private async Task ApplyTarget()
     {
-        if (!TryBeginWebsiteCommand("set target"))
+        if (!TryBeginWebsiteCommand("set target", bypassDebounce: true))
         {
             return;
         }

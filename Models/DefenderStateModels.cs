@@ -691,6 +691,10 @@ public sealed record ThermostatChangeAudit(
 
 public sealed class DefenderSettings
 {
+    // Off by default: the website debounce blocked normal adjust-then-save flows. Users who want
+    // the 120s rest between website thermostat commands can switch it on in Standing Orders.
+    public bool WebsiteCommandDebounceEnabled { get; set; }
+
     public bool ScheduleEnabled { get; set; }
 
     public string WeatherActivationMode { get; set; } = "always";

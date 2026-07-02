@@ -52,6 +52,13 @@
     @* ───────────── Automation ───────────── *@
     <SectionCard Title="Automation" Help="Schedule, weather activation, cooldown, cool restore, conflict quiet, and weather drift.">
         <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
+            @if (Show("website debounce buttons rest command spam")) {
+                <MudExpansionPanel Text="Website debounce" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Website command debounce" Value="_websiteCommandDebounceEnabled" ValueChanged="@(v => SetDirty(v, x => _websiteCommandDebounceEnabled = x))" Help="Off by default. When on, website thermostat buttons rest 120 seconds after each command. Adjusting targets and saving settings is never debounced." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("schedule weather activation always automation")) {
                 <MudExpansionPanel Text="Schedule & weather" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -685,6 +692,7 @@
     private string _settingsSearch = "";
     private string _registrationCode = "";
     private bool _scheduleEnabled;
+    private bool _websiteCommandDebounceEnabled;
     private string _weatherActivationMode = "always";
     private int _baseCooldownSeconds = 45;
     private int _maxCooldownSeconds = 600;
@@ -967,6 +975,7 @@
     {
         var settings = snapshot.Settings;
         _scheduleEnabled = settings.ScheduleEnabled;
+        _websiteCommandDebounceEnabled = settings.WebsiteCommandDebounceEnabled;
         _weatherActivationMode = settings.WeatherActivationMode;
         _baseCooldownSeconds = settings.BaseCooldownSeconds;
         _maxCooldownSeconds = settings.MaxCooldownSeconds;
@@ -1493,7 +1502,8 @@
             _enforcerEndTime,
             _enforcerRequirePresence,
             _enforcerNotifyEnabled,
-            _enforcerUseLearning);
+            _enforcerUseLearning,
+            _websiteCommandDebounceEnabled);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

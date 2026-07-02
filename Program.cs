@@ -148,7 +148,7 @@ api.MapGet("/status/stream", async (HttpContext context, DefenderStateStore stor
 
 api.MapPost("/target/generate", (DefenderStateStore store) =>
 {
-    var gate = store.TryBeginWebsiteCommand("generate target");
+    var gate = store.TryBeginWebsiteCommand("generate target", bypassDebounce: true);
     if (!gate.Accepted)
     {
         return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
@@ -160,7 +160,7 @@ api.MapPost("/target/generate", (DefenderStateStore store) =>
 
 api.MapPost("/target", (TargetTemperatureRequest request, DefenderStateStore store) =>
 {
-    var gate = store.TryBeginWebsiteCommand("set target");
+    var gate = store.TryBeginWebsiteCommand("set target", bypassDebounce: true);
     if (!gate.Accepted)
     {
         return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
