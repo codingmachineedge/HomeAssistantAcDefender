@@ -1134,11 +1134,19 @@ internal sealed class DefenderSetPointRegressionTests
             throw new InvalidOperationException("The off command must be sent only once per window; manual re-enables are respected.");
         }
 
-        // Hot night: no shutdown at all.
+        // Hot night: no shutdown, but PASSIVE WATCH — the defender holds (no off command) and
+        // sends no corrections, because history shows night-time fights are the angriest.
         store.RecordWeatherReading(new WeatherReading("weather.home", 27.0, "hot"));
-        if (store.TryBeginNightShutdown(coolReading, night.AddMinutes(20), out _, out _, out _))
+        if (!store.TryBeginNightShutdown(coolReading, night.AddMinutes(20), out _, out _, out var hotNightOff) || hotNightOff)
         {
-            throw new InvalidOperationException("A hot night (outdoor above the threshold) must keep the AC available.");
+            throw new InvalidOperationException("A hot night must enter passive watch (hold, no off command) instead of normal fighting.");
+        }
+
+        // But a genuinely overheating room breaks passive watch so comfort can win.
+        var overheating = new ThermostatReading("climate.dining_room", 26.5, 23.0, "cool", "cooling", null, []);
+        if (store.TryBeginNightShutdown(overheating, night.AddMinutes(25), out _, out _, out _))
+        {
+            throw new InvalidOperationException("A room far above target must break night passive watch.");
         }
 
         // Outside the window: normal duty.

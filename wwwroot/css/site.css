@@ -356,8 +356,60 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
     .ops-mobile-nav { display: flex; }
     .ops-main { padding: 14px 12px 92px 12px; }
     .ops-clock { display: none; }
-    .ops-header { gap: 10px; padding: 0 12px; }
+    .ops-header { gap: 8px; padding: 0 10px; }
     .ops-brand__sub { display: none; }
+    .ops-brand__name { font-size: 13px; }
+    .ops-mood { padding: 5px 8px; }
+    .ops-mood__label { font-size: 9.5px; letter-spacing: 0.08em; }
+
+    /* page heading */
+    .ops-page-head h1 { font-size: 17px; }
+    .ops-page-head { margin-bottom: 12px; gap: 8px; }
+
+    /* alert banner */
+    .ops-alert-banner__title { font-size: 17px; }
+    .ops-alert-banner__body { padding: 12px; gap: 10px; }
+
+    /* dashboard */
+    .ops-floor { min-height: 380px; }
+    .ops-floor__map { min-height: 330px; }
+    .ops-target__value { font-size: 42px; }
+    .ops-dash-grid { gap: 10px; }
+    .ops-dash-col, .ops-dash-stack { gap: 10px; }
+    .ops-panel--pad { padding: 12px; }
+
+    /* roster: search full width, category chips scroll in one row */
+    .ops-roster-tools { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+    .ops-roster-tools .ops-input { min-width: 150px; flex: 0 0 46vw; }
+    .ops-roster-tools .ops-chip { flex-shrink: 0; }
+    .guard-grid { grid-template-columns: 1fr; }
+
+    /* tiles/grids squeeze */
+    .ops-comfort-metrics { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+    .ops-comfort-metric__value { font-size: 18px; }
+
+    /* wide Mud tables scroll instead of squishing */
+    .ops-root .mud-table-container { overflow-x: auto; }
+
+    /* settings save bar clears the bottom nav */
+    .save-bar { bottom: 62px; }
+
+    /* apology overlay */
+    .ops-apology__title { font-size: 19px; }
+    .ops-apology__box { padding: 24px 18px; }
+
+    /* log rows stack cleanly */
+    .ops-log-row { gap: 8px; padding: 9px 10px; }
+    .ops-log-row__context { flex-basis: 100%; order: 4; min-width: 0; }
+}
+
+@media (max-width: 420px) {
+    .ops-want { padding: 4px 8px; gap: 6px; }
+    .ops-want__value { font-size: 13px; }
+    .ops-mood__label { max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
+    .ops-target__value { font-size: 36px; }
+    .ops-stat-grid { font-size: 8.5px; }
+    .ops-stat-grid__cell { padding: 5px 4px; }
 }
 
 /* ---------- 7. Atmosphere overlays ---------- */

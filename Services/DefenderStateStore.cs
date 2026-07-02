@@ -943,6 +943,19 @@ public sealed class DefenderStateStore
                     SaveState();
                 }
 
+                // NIGHT PASSIVE WATCH: 10 days of history show almost every thermostat fight lands
+                // between 22:00 and 08:00. Even on warm nights (no shutdown) the defender sends NO
+                // corrections during the window — it only observes, unless the room truly
+                // overheats past the safety override. Whoever touches the wall at night wins.
+                if (inWindow
+                    && s.NightShutdownEnabled
+                    && reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + s.NaturalSafetyOverrideCelsius)
+                {
+                    until = NextWindowEnd(now, TryParseHourMinute(s.NightShutdownEndTime, out var passiveEnd) ? passiveEnd : 480);
+                    message = $"Night passive watch until {s.NightShutdownEndTime}: observing only — night wall changes are not fought unless the room passes {state.TargetTemperatureCelsius + s.NaturalSafetyOverrideCelsius:0.0} C.";
+                    return true;
+                }
+
                 return false;
             }
 
@@ -996,8 +1009,19 @@ public sealed class DefenderStateStore
 
             if (state.PeaceOfferingPendingSetPointCelsius is { } gift)
             {
+                // History shows raises at night are the angriest ones — the concession holds
+                // three times longer during the night window so nobody wakes up to a fight.
+                var holdMinutes = Math.Clamp(state.Settings.PeaceOfferingHoldMinutes, 1, 240);
+                if (TryParseHourMinute(state.Settings.NightShutdownStartTime, out var peaceNightStart)
+                    && TryParseHourMinute(state.Settings.NightShutdownEndTime, out var peaceNightEnd)
+                    && peaceNightStart != peaceNightEnd
+                    && IsInMinuteWindow(now, peaceNightStart, peaceNightEnd))
+                {
+                    holdMinutes = Math.Min(240, holdMinutes * 3);
+                }
+
                 state.PeaceOfferingPendingSetPointCelsius = null;
-                state.PeaceOfferingHoldUntil = now.AddMinutes(Math.Clamp(state.Settings.PeaceOfferingHoldMinutes, 1, 240));
+                state.PeaceOfferingHoldUntil = now.AddMinutes(holdMinutes);
                 sendSetPoint = gift;
                 until = state.PeaceOfferingHoldUntil;
                 message = $"Peace offering sent: {gift:0.0} C (their wish plus a little). Standing down until {until.Value.ToLocalTime():HH:mm:ss}.";
