@@ -28,6 +28,11 @@
 
         <div class="ops-header__spacer"></div>
 
+        <a class="ops-want" href="/" title="The temp you want — the defenders hold this number until you change it">
+            <span class="ops-want__label">TEMP I WANT</span>
+            <span class="ops-want__value">@WantText</span>
+        </a>
+
         <div class="ops-mood" role="status">
             <span class="ops-mood__dot"></span>
             <span class="ops-mood__label">@MoodLabel</span>
@@ -215,6 +220,8 @@
     };
 
     private DefenderSnapshot? Snapshot => State.Snapshot;
+
+    private string WantText => Snapshot is null ? "--" : $"{Snapshot.TargetTemperatureCelsius:0.0}°C";
 
     // ---------- mood (drives the accent colour of the whole shell) ----------
 

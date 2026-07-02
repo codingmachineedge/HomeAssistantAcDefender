@@ -86,7 +86,7 @@
                                 <button class="ops-step-btn" @onclick="TargetDown" aria-label="Lower target">−</button>
                                 <div>
                                     <div class="ops-thermo-pop__value">@TargetText</div>
-                                    <div class="ops-thermo-pop__value-label">TARGET</div>
+                                    <div class="ops-thermo-pop__value-label">TEMP I WANT</div>
                                 </div>
                                 <button class="ops-step-btn" @onclick="TargetUp" aria-label="Raise target">+</button>
                             </div>
@@ -180,28 +180,29 @@
                     </div>
                 </div>
                 <div class="ops-dial-scale"><span>16°</span><span>LIVE WALL UNIT</span><span>30°</span></div>
+                <div class="ops-dial-controls__label">TEMP I WANT</div>
                 <div class="ops-dial-controls">
                     <input type="number" min="10" max="35" step="0.5" value="@TargetInputText"
-                           @onchange="OnTargetInputChanged" aria-label="Target temperature" />
+                           @onchange="OnTargetInputChanged" aria-label="The temp I want" />
                     <button class="ops-btn ops-btn--outline" @onclick="ForceTarget">⌖ SEND</button>
                     <button class="ops-btn ops-btn--danger" @onclick="TurnOff">⏻ OFF</button>
                 </div>
                 <div class="@ThermoNoteClass" style="margin-top: 10px;">@ThermoNote</div>
             </div>
 
-            @* generated target *@
-            <div class="ops-panel ops-panel--pad">
-                <div class="ops-panel__label">GENERATED TARGET</div>
+            @* the temp I want *@
+            <div class="ops-panel ops-panel--pad ops-want-panel">
+                <div class="ops-panel__label">⌖ TEMP I WANT — MY NUMBER</div>
                 <div class="ops-target__row">
                     <div class="ops-target__value">@TargetShort</div>
                     <div class="ops-target__steppers">
-                        <button @onclick="TargetUp" aria-label="Raise target">▲</button>
-                        <button @onclick="TargetDown" aria-label="Lower target">▼</button>
+                        <button @onclick="TargetUp" aria-label="Raise the temp I want">▲</button>
+                        <button @onclick="TargetDown" aria-label="Lower the temp I want">▼</button>
                     </div>
                 </div>
-                <div class="ops-target__help">The cool number the defenders are holding for the dining room.</div>
+                <div class="ops-target__help">Yours until you change it — the defenders hold this number for the dining room and never touch it themselves. APPLY sends it to the wall unit right now.</div>
                 <div class="ops-target__actions">
-                    <button class="ops-btn ops-btn--solid" @onclick="ApplyTarget">APPLY</button>
+                    <button class="ops-btn ops-btn--solid" @onclick="ApplyTarget">APPLY MY TEMP</button>
                     <button class="ops-btn ops-btn--outline" @onclick="GenerateTarget">✦ GENERATE</button>
                 </div>
             </div>
@@ -234,7 +235,7 @@
                     </button>
                     <button class="ops-order-btn" @onclick="ForceTarget">
                         <span aria-hidden="true">⌖</span>
-                        <span class="ops-order-btn__label">FORCE EXACT TARGET</span>
+                        <span class="ops-order-btn__label">FORCE THE TEMP I WANT</span>
                         <span class="ops-order-btn__hint">@TargetText now</span>
                     </button>
                     <button class="ops-order-btn ops-order-btn--solid" @onclick="ForceBoost">

@@ -158,6 +158,28 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 
 .ops-header__spacer { flex: 1; }
 
+/* "Temp I want" chip — the user's number, visible on every page */
+.ops-want {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 5px 12px;
+    border: 1px solid var(--line2);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    background: var(--panel2);
+    text-decoration: none;
+    color: var(--ink);
+}
+
+.ops-want:hover { border-color: var(--accent); text-decoration: none; color: var(--ink); }
+.ops-want__label { font-size: 8.5px; color: var(--sub); letter-spacing: 0.22em; font-weight: 700; }
+.ops-want__value { font-size: 15px; font-weight: 800; color: var(--accent); letter-spacing: 0.04em; }
+
+@media (max-width: 560px) {
+    .ops-want__label { display: none; }
+}
+
 .ops-mood {
     display: flex;
     align-items: center;
@@ -983,7 +1005,12 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 
 .ops-dial-controls input[type="number"]:focus { border-color: var(--accent); }
 
-/* generated target module */
+/* "temp I want" module */
+.ops-want-panel { border-left: 3px solid var(--accent); }
+.ops-want-panel .ops-panel__label { color: var(--accent); font-weight: 800; }
+
+.ops-dial-controls__label { font-size: 8.5px; color: var(--accent); letter-spacing: 0.22em; font-weight: 800; margin-bottom: 5px; }
+
 .ops-target__row { display: flex; align-items: center; gap: 12px; }
 
 .ops-target__value {
