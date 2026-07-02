@@ -17,17 +17,30 @@
     </SectionCard>
 
     <SectionCard Title="Warm-room cooling"
-                 Subtitle="The “1 °C below room” rule">
+                 Subtitle="Temperature-driven 0.5 °C steps — never snaps, never below “my temp”">
         <MudText Typo="Typo.body2">
-            When the room is above target, a fresh correction commands a setpoint exactly <strong>1 °C below the current room
-            temperature</strong> to force cooling — not 1 °C below the wall setting. If Home Assistant reports cooling is
-            idle/off while the room is still above target, it lowers the setpoint one more degree each cycle. It never goes
-            below the website target, and once the room reaches target the setpoint returns to the exact target.
+            When the room is above the target, the first correction lands <strong>0.5 °C below the current room
+            temperature</strong>. Every step after that is <strong>earned by the room actually dropping</strong> to the
+            current setpoint — while the AC is still cooling, so the compressor keeps one continuous quiet run instead of
+            cycling on and off. No step is ever driven by a clock, no command ever moves the wall more than 0.5 °C from its
+            current reading (in either direction), and nothing may ever be commanded <strong>below the user's target</strong>
+            — "the temp I want" is a hard floor for every guard, boost, and learned offset.
         </MudText>
         <MudText Typo="Typo.body2" Class="mt-2 helper-text">
-            Example: room 25.0 °C, website target 22.0 °C, wall moved to 26.0 °C → the first command is 24.0 °C (room − 1),
-            then 23.0 °C, then 22.0 °C if cooling keeps stalling.
+            Example: room 25.0 °C, target 23.0 °C, wall moved to 26.0 °C → the wall is walked 25.5 → 25.0 → 24.5 as the
+            room drops, and the walk stops dead at 23.0 °C. A wall left below 23.0 is walked back UP 0.5 °C at a time.
         </MudText>
+    </SectionCard>
+
+    <SectionCard Title="Household peace treaty"
+                 Subtitle="The rules that stop thermostat wars">
+        <MudList T="string" Dense="true" Class="cycle-list">
+            <MudListItem T="string" Icon="@Icons.Material.Filled.Handshake"><strong>Your target is yours.</strong> No guard, schedule re-assert, comfort override, or learned model ever rewrites "the temp I want" — only you change it, and it is the minimum the defender may ever command.</MudListItem>
+            <MudListItem T="string" Icon="@Icons.Material.Filled.VolunteerActivism"><strong>Peace offering.</strong> When anyone raises the setpoint (wall, Nest, or app), the defender immediately concedes a small extra step UP beyond their number and stands down for a while — they see the system agreeing, not fighting.</MudListItem>
+            <MudListItem T="string" Icon="@Icons.Material.Filled.Bedtime"><strong>Night shutdown.</strong> During the night window (default 01:00–08:00), if it is cool outside the AC is turned off once and everything stands down; turning it back on manually is respected. On warmer nights nothing below the night minimum (default 23.0 °C) may be commanded.</MudListItem>
+            <MudListItem T="string" Icon="@Icons.Material.Filled.HourglassBottom"><strong>Never on forever.</strong> If the AC cools continuously past the run limit (default 3 h) without reaching the target, the defender eases the setpoint above the room and rests (default 30 min) — an unreachable target can never mean 24 hours of runtime.</MudListItem>
+            <MudListItem T="string" Icon="@Icons.Material.Filled.SentimentVeryDissatisfied"><strong>🚨 Brother mad.</strong> The emergency apology button: the AC is eased up 1.0 °C immediately, all corrections stop for 2 hours, and the anger model records this hour as sensitive so the defenders grow more hands-off at this time of day.</MudListItem>
+        </MudList>
     </SectionCard>
 
     <SectionCard Title="Quiet levels"
@@ -82,18 +95,19 @@
     [
         "Pull weather and outdoor temperature from Home Assistant.",
         "Pull the real dining-room climate entity.",
-        "Emergency protocols — stand down if a too-cold, someone-upset, or suspicion window is active.",
+        "Front-door kill switch and emergency protocols (too-cold, someone-upset, suspicion, 🚨 brother-mad) — stand down while any is active.",
         "If the defender is paused, keep reading 24/7 but send nothing.",
+        "Night shutdown — inside the night window with cool outdoor air, turn the AC off once and stand down; manual re-enables are respected.",
+        "Peace offering — if someone raised the setpoint (wall or app), concede a small extra step UP and stand down for the hold window.",
+        "On-forever protection — after the continuous-run limit without reaching the target, ease the setpoint above the room and rest.",
         "Cool Mode Restore — bring the HVAC mode back to cool (after a short safe delay).",
-        "Apply the active schedule target and evaluate the weather activation rule.",
-        "Upstairs Comfort Guard — lower the target and add boost when upstairs is hot.",
-        "Decide whether severe upstairs heat or Cooler Intent should bypass quiet timing.",
+        "Apply the active schedule target ONCE at window start (a manual change inside the window is never fought) and evaluate the weather rule.",
+        "Upstairs Comfort Guard — add urgency (cooldown bypass) when upstairs is hot; it never lowers the goal below the user's target.",
         "Wall Settling, Conflict Quiet, Manual Comfort Grace, and Dynamic Cooldown each may hold.",
-        "Alectra Peak Power Saver — make safe cooling more chill during On-peak, high-price, or high-power usage.",
-        "Fan Energy Saver — move the fan to a saver mode when near target.",
-        "Compute the expected setpoint (1 °C below room when the room is warm).",
-        "If the setpoint needs to change, walk the timing guards: Alectra Peak Power Saver, Comfort Envelope, Room Trend, Thermal Momentum, Weather Drift, Setpoint Echo, Setpoint Stillness, Remote Settling Guard, Cooling Runway, Sensor Rhythm, HVAC Alibi, Comfort Sync, Comfort Pace, Routine Timing, Comfort Budget, Command Camouflage, Stealth Governor, Visibility Guard, Natural Cadence.",
-        "Shape the command size with Natural Walkback, Touch Signature, and Human Nudge, then Repeat Quiet.",
+        "Alectra Peak Power Saver and Fan Energy Saver adjust safe cooling and the fan.",
+        "Compute the expected setpoint: 0.5 °C temperature-driven steps, at most one step per command from the current wall reading, floored at \"the temp I want\" (and the night minimum during night hours).",
+        "If the setpoint needs to change, walk the timing guards (Comfort Envelope, Room Trend, Thermal Momentum, Weather Drift, Setpoint Echo, Setpoint Stillness, Remote Settling, Cooling Runway, Sensor Rhythm, HVAC Alibi, Comfort Sync, Comfort Pace, Routine Timing, Comfort Budget, Command Camouflage, Stealth Governor, Visibility Guard, Natural Cadence).",
+        "Shape the command with Natural Walkback, Touch Signature, and Human Nudge, then Repeat Quiet.",
         "Send the corrected setpoint to Home Assistant.",
         "Cooling Failure Watch runs alongside: a mega-alert if cooling is demanded but not real, escalating to a full-site OMEGA alert when a rising room confirms the breaker is off.",
     ];

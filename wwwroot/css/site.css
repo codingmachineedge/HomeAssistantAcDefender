@@ -1079,6 +1079,81 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 .ops-order-btn--solid:hover { color: var(--accent-ink); filter: brightness(1.12); }
 .ops-order-btn--solid .ops-order-btn__hint { color: var(--accent-ink); opacity: 0.7; }
 
+.ops-order-btn--brother {
+    border: 2px solid var(--bad);
+    color: var(--bad);
+    font-weight: 800;
+    animation: pulse 2.4s ease infinite;
+}
+
+.ops-order-btn--brother:hover { background: var(--bad); color: #fff; animation: none; }
+.ops-order-btn--brother .ops-order-btn__hint { color: var(--bad); opacity: 0.75; }
+.ops-order-btn--brother:hover .ops-order-btn__hint { color: #fff; }
+
+/* very apologetic overlay */
+@keyframes apologyBow {
+    0%, 100% { transform: rotate(0deg) translateY(0); }
+    20% { transform: rotate(0deg) translateY(0); }
+    45% { transform: rotate(75deg) translateY(14px); }
+    70% { transform: rotate(75deg) translateY(14px); }
+    95% { transform: rotate(0deg) translateY(0); }
+}
+
+@keyframes apologyIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes apologyBoxIn {
+    from { opacity: 0; transform: translateY(24px) scale(0.94); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.ops-apology {
+    position: fixed;
+    inset: 0;
+    z-index: 130;
+    background: rgba(2, 4, 6, 0.88);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: apologyIn 0.4s ease;
+    cursor: pointer;
+    padding: 20px;
+}
+
+.ops-apology__box {
+    width: min(560px, 92vw);
+    border: 1px solid var(--accent);
+    background: var(--panel);
+    padding: 34px 30px;
+    text-align: center;
+    box-shadow: 0 0 60px var(--accent-soft);
+    animation: apologyBoxIn 0.5s ease;
+}
+
+.ops-apology__bow {
+    font-size: 54px;
+    color: var(--accent);
+    display: inline-block;
+    animation: apologyBow 2.6s ease-in-out infinite;
+    transform-origin: 50% 90%;
+    margin-bottom: 14px;
+}
+
+.ops-apology__title {
+    font-family: 'Archivo', sans-serif;
+    font-weight: 900;
+    font-size: 26px;
+    letter-spacing: 0.1em;
+    margin-bottom: 16px;
+    animation: riseIn 0.6s ease;
+}
+
+.ops-apology__line { font-size: 12px; color: var(--ink); line-height: 1.7; margin-bottom: 8px; animation: riseIn 0.8s ease; }
+.ops-apology__line strong { color: var(--accent); }
+.ops-apology__line--small { font-size: 10px; color: var(--sub); margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 12px; }
+
 /* standby panel */
 .ops-standby { border: 1px dashed var(--line2); background: var(--panel); padding: 26px; text-align: center; }
 .ops-standby__glyph { font-size: 30px; color: var(--sub); }

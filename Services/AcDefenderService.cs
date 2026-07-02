@@ -102,6 +102,19 @@ public sealed class AcDefenderService
                 return;
             }
 
+            // On-forever protection: an unreachable target must never keep the AC running for
+            // 24 hours straight. After the run limit, ease up and rest before trying again.
+            if (stateStore.TryBeginCoolingRest(reading, DateTimeOffset.UtcNow, out var restSetPoint, out var restUntil, out var restMessage))
+            {
+                if (restSetPoint is { } easeUp)
+                {
+                    await homeAssistantClient.SetCoolingAsync(reading.EntityId, easeUp, cancellationToken);
+                }
+
+                stateStore.SetNextAction(restMessage, restUntil);
+                return;
+            }
+
             // Desired-State Enforcer: the assertive layer that makes the owner's chosen state win. When it
             // acts (or holds), it short-circuits the cycle; when Inactive it falls through to the stealth
             // pipeline unchanged.
@@ -577,6 +590,32 @@ public sealed class AcDefenderService
                     TimeSpan.FromMinutes(90),
                     "Suspicion quiet mode active; defender is standing down corrections and only reading the real thermostat.",
                     pauseDefender: false);
+                break;
+            case "brother-mad":
+                // The apology protocol. "Brother upset" contains "upset" so the anger learning
+                // model records this hour as a sensitive one and grows more hands-off over time.
+                stateStore.ActivateEmergencyQuiet(
+                    "Brother upset",
+                    TimeSpan.FromHours(2),
+                    "🙇 BROTHER-MAD APOLOGY ACTIVE: the defenders are bowing deeply, all corrections are stopped for 2 hours, and the AC was eased up as a peace gesture.",
+                    pauseDefender: false);
+                var apologyReading = await RequireReadingAsync(cancellationToken);
+                if (string.Equals(apologyReading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+                {
+                    var relief = Math.Round(Math.Min(apologyReading.SetPointCelsius + 1.0, 30.0), 1);
+                    if (relief > apologyReading.SetPointCelsius + 0.05)
+                    {
+                        await homeAssistantClient.SetCoolingAsync(apologyReading.EntityId, relief, cancellationToken);
+                        stateStore.RecordCommand(
+                            $"Brother-mad apology: setpoint eased up to {relief:0.0} C as an immediate peace gesture.",
+                            relief,
+                            commandedHvacMode: "cool",
+                            commandSourceKind: "brother-mad-apology",
+                            commandSourceLabel: "Brother-mad apology",
+                            commandSourceDetail: "The BROTHER MAD emergency button eased the AC up 1.0 C so the apology is felt immediately.");
+                    }
+                }
+
                 break;
             default:
                 throw new InvalidOperationException("Pick an emergency protocol first.");

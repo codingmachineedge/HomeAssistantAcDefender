@@ -68,6 +68,15 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("on forever cooling rest run limit continuous breather 24 hours")) {
+                <MudExpansionPanel Text="On-forever protection" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Rest after very long cooling runs" Value="_coolingRestEnabled" ValueChanged="@(v => SetDirty(v, x => _coolingRestEnabled = x))" Help="If the AC cools continuously past the run limit and the room still has not reached the target (an unreachable target), the defender eases the setpoint above the room and rests — it must never be on for 24 hours." />
+                        <SettingInt Label="Maximum continuous run (minutes)" Value="_coolingRunMaxMinutes" ValueChanged="@(v => SetDirty(v, x => _coolingRunMaxMinutes = x))" Min="30" Max="1440" Help="How long the AC may cool non-stop before a forced breather." />
+                        <SettingInt Label="Rest length (minutes)" Value="_coolingRestMinutes" ValueChanged="@(v => SetDirty(v, x => _coolingRestMinutes = x))" Min="5" Max="240" Help="How long the breather lasts before cooling may resume." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("night shutdown off overnight sleep window outdoor cheap power")) {
                 <MudExpansionPanel Text="Night shutdown" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -730,6 +739,9 @@
     private double _nightShutdownOutdoorBelowCelsius = 24.0;
     private int _coolingStepMinimumGapSeconds = 60;
     private double _nightMinimumSetPointCelsius = 23.0;
+    private bool _coolingRestEnabled = true;
+    private int _coolingRunMaxMinutes = 180;
+    private int _coolingRestMinutes = 30;
     private bool _peaceOfferingEnabled = true;
     private double _peaceOfferingStepCelsius = 0.5;
     private int _peaceOfferingHoldMinutes = 20;
@@ -1022,6 +1034,9 @@
         _nightShutdownOutdoorBelowCelsius = settings.NightShutdownOutdoorBelowCelsius;
         _coolingStepMinimumGapSeconds = settings.CoolingStepMinimumGapSeconds;
         _nightMinimumSetPointCelsius = settings.NightMinimumSetPointCelsius;
+        _coolingRestEnabled = settings.CoolingRestEnabled;
+        _coolingRunMaxMinutes = settings.CoolingRunMaxMinutes;
+        _coolingRestMinutes = settings.CoolingRestMinutes;
         _peaceOfferingEnabled = settings.PeaceOfferingEnabled;
         _peaceOfferingStepCelsius = settings.PeaceOfferingStepCelsius;
         _peaceOfferingHoldMinutes = settings.PeaceOfferingHoldMinutes;
@@ -1561,7 +1576,10 @@
             _peaceOfferingEnabled,
             _peaceOfferingStepCelsius,
             _peaceOfferingHoldMinutes,
-            _nightMinimumSetPointCelsius);
+            _nightMinimumSetPointCelsius,
+            _coolingRestEnabled,
+            _coolingRunMaxMinutes,
+            _coolingRestMinutes);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

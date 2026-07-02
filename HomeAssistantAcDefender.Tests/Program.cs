@@ -73,6 +73,8 @@ tests.NightShutdownTurnsAcOffOnceAndStandsDown();
 tests.GentleSteppingPacesWalkDownAndPreemptsCompressorStop();
 tests.StepperNeverSnapsTheWallAndWalksBothWaysTowardMyTemp();
 tests.PeaceOfferingConcedesUpwardOnAppRaiseThenStandsDown();
+tests.CoolingRestStopsAnUnreachableTargetFromRunningForever();
+tests.BrotherMadProtocolStandsDownForTwoHours();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -1024,12 +1026,82 @@ internal sealed class DefenderSetPointRegressionTests
             throw new InvalidOperationException("Lowering the setpoint from the app must not trigger a peace offering.");
         }
 
-        // A wall change (no user_id) must not arm anything either.
+        // A wall/device raise (no user_id) DOES arm the offering too — household changes arrive as
+        // "thermostat-device" in the live logs, and they deserve the same concession.
         store.RecordHomeAssistantReading(new ThermostatReading(
             "climate.dining_room", 23.5, 24.0, "cool", "idle", null, []));
-        if (store.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out _, out _, out _))
+        if (!store.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out var wallGift, out _, out _) || wallGift is null)
         {
-            throw new InvalidOperationException("A wall/device change must not trigger the app peace offering.");
+            throw new InvalidOperationException("A wall/device raise must also trigger the peace offering.");
+        }
+
+        AssertEqual(24.5, wallGift.Value, "The wall raise 23.0 -> 24.0 earns a 24.5 C gift.");
+    }
+
+    public void CoolingRestStopsAnUnreachableTargetFromRunningForever()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        // The AC has been cooling for 4 hours straight and the room is still hot: rest kicks in.
+        SetRuntimeProperty(store, "CoolingRunStartedAt", DateTimeOffset.UtcNow.AddHours(-4));
+        var hotReading = new ThermostatReading("climate.dining_room", 26.5, 26.0, "cool", "cooling", null, []);
+        if (!store.TryBeginCoolingRest(hotReading, DateTimeOffset.UtcNow, out _, out var until, out _) || until is null)
+        {
+            throw new InvalidOperationException("Four hours of continuous cooling without reaching the target must trigger a rest.");
+        }
+
+        // During the rest the setpoint is eased gently ABOVE the room (0.5 C steps) so the unit stops.
+        if (!store.TryBeginCoolingRest(hotReading, DateTimeOffset.UtcNow, out var easeUp, out _, out _) || easeUp is not { } step)
+        {
+            throw new InvalidOperationException("The rest must ease the setpoint upward so the AC actually stops.");
+        }
+
+        AssertEqual(26.5, step, "The ease-up moves 0.5 C at a time toward just above the room.");
+
+        // After the rest window, normal duty resumes with a fresh run clock.
+        SetRuntimeProperty(store, "CoolingRestUntil", DateTimeOffset.UtcNow.AddSeconds(-1));
+        if (store.TryBeginCoolingRest(hotReading, DateTimeOffset.UtcNow, out _, out _, out _))
+        {
+            throw new InvalidOperationException("An expired rest must release the worker back to normal duty.");
+        }
+
+        // A satisfied room never triggers a rest — the AC stops on its own.
+        SetRuntimeProperty(store, "CoolingRunStartedAt", DateTimeOffset.UtcNow.AddHours(-9));
+        var satisfiedReading = new ThermostatReading("climate.dining_room", 22.8, 23.0, "cool", "cooling", null, []);
+        if (store.TryBeginCoolingRest(satisfiedReading, DateTimeOffset.UtcNow, out _, out _, out _))
+        {
+            throw new InvalidOperationException("A room at target must not trigger a rest; the AC stops naturally.");
+        }
+    }
+
+    public void BrotherMadProtocolStandsDownForTwoHours()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        store.ActivateEmergencyQuiet(
+            "Brother upset",
+            TimeSpan.FromHours(2),
+            "Brother-mad apology active.",
+            pauseDefender: false);
+
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.Emergency.Active || snapshot.Emergency.SecondsRemaining < 7000)
+        {
+            throw new InvalidOperationException("The brother-mad apology must hold an emergency quiet window of about 2 hours.");
+        }
+
+        if (!snapshot.DefenderEnabled)
+        {
+            throw new InvalidOperationException("Brother-mad stands down corrections but must not fully pause the defender.");
+        }
+
+        if (!store.TryRespectEmergencyQuiet(DateTimeOffset.UtcNow, out var quietUntil, out _) || quietUntil <= DateTimeOffset.UtcNow)
+        {
+            throw new InvalidOperationException("The worker must hold the whole cycle while the brother-mad window is active.");
         }
     }
 

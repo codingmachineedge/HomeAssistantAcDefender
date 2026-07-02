@@ -250,4 +250,7 @@ public sealed record SettingsRequest(
     bool? PeaceOfferingEnabled = null,
     double? PeaceOfferingStepCelsius = null,
     int? PeaceOfferingHoldMinutes = null,
-    double? NightMinimumSetPointCelsius = null);
+    double? NightMinimumSetPointCelsius = null,
+    bool? CoolingRestEnabled = null,
+    int? CoolingRunMaxMinutes = null,
+    int? CoolingRestMinutes = null);

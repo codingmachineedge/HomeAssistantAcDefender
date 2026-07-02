@@ -719,6 +719,15 @@ public sealed class DefenderSettings
 
     public int PeaceOfferingHoldMinutes { get; set; } = 20;
 
+    // On-forever protection: if the AC has been cooling continuously for this long and the room
+    // still has not reached the target, the defender eases the setpoint above the room and rests —
+    // an unreachable target must never mean "the AC is on for 24 hours".
+    public bool CoolingRestEnabled { get; set; } = true;
+
+    public int CoolingRunMaxMinutes { get; set; } = 180;
+
+    public int CoolingRestMinutes { get; set; } = 30;
+
     // Anti-flap: minimum spacing between step commands. Steps are driven by the room temperature
     // actually moving (never by a schedule); this only stops command bursts and short-cycling.
     public int CoolingStepMinimumGapSeconds { get; set; } = 60;

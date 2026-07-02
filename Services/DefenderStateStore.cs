@@ -442,6 +442,25 @@ public sealed class DefenderStateStore
                     : Math.Round(Math.Clamp(nightMin, 16.0, 30.0), 1);
             }
 
+            if (request.CoolingRestEnabled is { } restEnabled)
+            {
+                state.Settings.CoolingRestEnabled = restEnabled;
+                if (!restEnabled)
+                {
+                    state.CoolingRestUntil = null;
+                }
+            }
+
+            if (request.CoolingRunMaxMinutes is { } runMax)
+            {
+                state.Settings.CoolingRunMaxMinutes = Math.Clamp(runMax, 30, 1440);
+            }
+
+            if (request.CoolingRestMinutes is { } restMinutes)
+            {
+                state.Settings.CoolingRestMinutes = Math.Clamp(restMinutes, 5, 240);
+            }
+
             if (request.CoolingStepMinimumGapSeconds is { } stepGapSeconds)
             {
                 state.Settings.CoolingStepMinimumGapSeconds = Math.Clamp(stepGapSeconds, 0, 3600);
@@ -1011,6 +1030,110 @@ public sealed class DefenderStateStore
             }
 
             return false;
+        }
+    }
+
+    /// <summary>
+    /// On-forever protection. Tracks how long the AC has been cooling continuously; if it exceeds
+    /// the configured maximum while the room STILL has not reached the target (an unreachable
+    /// target — hot day, undersized unit), the defender eases the setpoint just above the room and
+    /// rests. Returns true while the worker should idle; stepUpSetPoint is a gentle 0.5 C move.
+    /// </summary>
+    public bool TryBeginCoolingRest(ThermostatReading reading, DateTimeOffset now, out double? stepUpSetPoint, out DateTimeOffset? until, out string message)
+    {
+        lock (gate)
+        {
+            stepUpSetPoint = null;
+            until = null;
+            message = string.Empty;
+
+            if (!state.Settings.CoolingRestEnabled)
+            {
+                state.CoolingRunStartedAt = null;
+                state.CoolingRestUntil = null;
+                return false;
+            }
+
+            var isCooling = string.Equals(reading.HvacAction, "cooling", StringComparison.OrdinalIgnoreCase);
+
+            if (state.CoolingRestUntil is { } rest)
+            {
+                if (rest <= now)
+                {
+                    state.CoolingRestUntil = null;
+                    state.CoolingRunStartedAt = null;
+                    AddEvent("info", "Cooling rest finished; normal guard duty resumes.");
+                    SaveState();
+                    return false;
+                }
+
+                until = rest;
+                message = $"Cooling rest until {rest.ToLocalTime():HH:mm:ss}: the AC ran a very long time without reaching the target, so it gets a breather instead of running forever.";
+
+                // Ease the wall gently above the room so the unit actually stops (0.5 C per step).
+                var restCeiling = Math.Round(reading.CurrentTemperatureCelsius + 0.5, 1);
+                var antiFlap = TimeSpan.FromSeconds(Math.Clamp(state.Settings.CoolingStepMinimumGapSeconds, 0, 3600));
+                var stepReady = state.LastWalkStepAt is not { } lastStep || now - lastStep >= antiFlap;
+                if (reading.SetPointCelsius < restCeiling - 0.05 && stepReady)
+                {
+                    stepUpSetPoint = Math.Round(Math.Min(restCeiling, reading.SetPointCelsius + 0.5), 1);
+                    state.LastWalkStepAt = now;
+                    RecordPendingThermostatCommand(
+                        commandedSetPointCelsius: stepUpSetPoint,
+                        commandedHvacMode: null,
+                        commandedFanMode: null,
+                        commandSourceKind: "cooling-rest",
+                        commandSourceLabel: "Cooling rest",
+                        commandSourceDetail: "The AC ran past the continuous-run limit without reaching the target; AC Defender eased the setpoint up for a rest.");
+                    SaveState();
+                }
+
+                return true;
+            }
+
+            var satisfied = reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius;
+            if (!isCooling || satisfied)
+            {
+                state.CoolingRunStartedAt = null;
+                return false;
+            }
+
+            state.CoolingRunStartedAt ??= now;
+            var runMinutes = (now - state.CoolingRunStartedAt.Value).TotalMinutes;
+            if (runMinutes < Math.Clamp(state.Settings.CoolingRunMaxMinutes, 30, 1440))
+            {
+                return false;
+            }
+
+            state.CoolingRestUntil = now.AddMinutes(Math.Clamp(state.Settings.CoolingRestMinutes, 5, 240));
+            until = state.CoolingRestUntil;
+            message = $"The AC has been cooling {runMinutes:0} min straight without reaching {state.TargetTemperatureCelsius:0.0} C — resting {state.Settings.CoolingRestMinutes} min so it is not on forever.";
+            AddEvent("warning", message);
+            SaveState();
+            return true;
+        }
+    }
+
+    // Durable event log on disk, next to the state file (the /data volume in production). The
+    // in-memory/state-file list keeps only the recent tail; this file keeps everything, capped at
+    // ~5 MB with a single .1 rollover so it can never fill the disk.
+    private void AppendEventToDiskLog(string level, string message)
+    {
+        try
+        {
+            var logPath = Path.Combine(Path.GetDirectoryName(stateFilePath) ?? ".", "defender-events.log");
+            if (File.Exists(logPath) && new FileInfo(logPath).Length > 5_000_000)
+            {
+                var rollover = logPath + ".1";
+                File.Delete(rollover);
+                File.Move(logPath, rollover);
+            }
+
+            File.AppendAllText(logPath, $"{DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss.fff zzz} [{level}] {message}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Never let disk logging break the defender.
         }
     }
 
@@ -4924,11 +5047,14 @@ public sealed class DefenderStateStore
         state.LastChangeContextUserId = reading.Context?.UserId;
         TrackSuperDefenderSource(source, now);
 
-        // Peace offering: an app/phone user RAISED the setpoint — concede one extra step upward
-        // so they see the system agreeing. Skipped when the room genuinely needs cooling.
+        // Peace offering: someone RAISED the setpoint (wall, Nest app, or HA app — live logs show
+        // household changes arrive as "thermostat-device", so all external raises count). Concede
+        // one extra step upward so they see the system agreeing. Skipped when the room genuinely
+        // needs cooling, and ignored for nonsense readings (mode-off events report setpoint 0).
         if (state.Settings.PeaceOfferingEnabled
-            && string.Equals(source.Kind, "home-assistant-user", StringComparison.OrdinalIgnoreCase)
             && reading.SetPointCelsius > previous + 0.05
+            && previous > 5.0
+            && reading.SetPointCelsius > 5.0
             && reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + state.Settings.NaturalSafetyOverrideCelsius)
         {
             var deviceMax = state.DeviceMaxSetPointCelsius ?? 30.0;
@@ -8541,10 +8667,12 @@ public sealed class DefenderStateStore
         }
 
         state.Events.Insert(0, new DefenderEvent(DateTimeOffset.UtcNow, level, message));
-        if (state.Events.Count > 40)
+        if (state.Events.Count > 200)
         {
-            state.Events.RemoveRange(40, state.Events.Count - 40);
+            state.Events.RemoveRange(200, state.Events.Count - 200);
         }
+
+        AppendEventToDiskLog(level, message);
     }
 
     private void ResetNaturalRecovery(string status)
@@ -9390,6 +9518,12 @@ public sealed class DefenderStateStore
         public double? PeaceOfferingPendingSetPointCelsius { get; set; }
 
         public DateTimeOffset? PeaceOfferingHoldUntil { get; set; }
+
+        // On-forever protection: when the current continuous cooling run started, and the active
+        // rest window that stops an unreachable target from keeping the AC on for 24 hours.
+        public DateTimeOffset? CoolingRunStartedAt { get; set; }
+
+        public DateTimeOffset? CoolingRestUntil { get; set; }
 
         public bool DefenderEnabled { get; set; } = true;
 

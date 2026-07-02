@@ -248,11 +248,31 @@
                         <span class="ops-order-btn__label">ALL CONTROLS</span>
                         <span class="ops-order-btn__hint">STN-06 →</span>
                     </a>
+                    <button class="ops-order-btn ops-order-btn--brother" @onclick="BrotherMad">
+                        <span aria-hidden="true">🚨</span>
+                        <span class="ops-order-btn__label">BROTHER MAD</span>
+                        <span class="ops-order-btn__hint">apologize + stand down 2h</span>
+                    </button>
                 </div>
             </div>
         </div>
     </div>
 </div>
+
+@* very apologetic overlay *@
+@if (_apologyVisible)
+{
+    <div class="ops-apology" @onclick="() => _apologyVisible = false">
+        <div class="ops-apology__box">
+            <div class="ops-apology__bow" aria-hidden="true">❆</div>
+            <div class="ops-apology__title">WE ARE SO, SO SORRY</div>
+            <div class="ops-apology__line">The defenders are bowing as deeply as tiny snowflakes can bow.</div>
+            <div class="ops-apology__line">The AC has been eased up <strong>+1.0 °C</strong> immediately as a peace gesture.</div>
+            <div class="ops-apology__line">All corrections are <strong>stopped for 2 hours</strong>. The thermostat is yours.</div>
+            <div class="ops-apology__line ops-apology__line--small">The anger model has recorded this hour as sensitive — the defenders will be more hands-off at this time from now on. Please forgive us. 🙇</div>
+        </div>
+    </div>
+}
 
 @code {
     private double _targetInput = 22.0;
@@ -508,6 +528,27 @@
         _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
         await RunThermostatAction(() => Defender.ForceTargetAsync(CancellationToken.None), "Target applied to the wall unit.", "force exact target");
+    }
+
+    private bool _apologyVisible;
+
+    private async Task BrotherMad()
+    {
+        _apologyVisible = true;
+        StateHasChanged();
+        await RunThermostatAction(
+            () => Defender.ApplyEmergencyProtocolAsync("brother-mad", CancellationToken.None),
+            "Apology sent. Standing down for 2 hours.",
+            "emergency brother-mad",
+            bypassDebounce: true);
+        _ = HideApologyAfterDelayAsync();
+    }
+
+    private async Task HideApologyAfterDelayAsync()
+    {
+        await Task.Delay(9000);
+        _apologyVisible = false;
+        await InvokeAsync(StateHasChanged);
     }
 
     private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat", bypassDebounce: true);
