@@ -80,6 +80,7 @@ tests.StandDownParkingRaisesOnlyWhenAppropriate();
 tests.AcRuntimeAccumulatesOnlyWhileCooling();
 tests.FullDayHouseholdSimulationRespectsEveryDiscordDemand();
 tests.RuntimeBackfillSeedsCountersFromPastLogsOnce();
+tests.NightCoolingBudgetStopsWarmNightRunaway();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -1131,6 +1132,67 @@ internal sealed class DefenderSetPointRegressionTests
         }
     }
 
+    public void NightCoolingBudgetStopsWarmNightRunaway()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        var s = store.GetSettings();
+        s.NightShutdownEnabled = true;
+        s.NightShutdownStartTime = "01:00";
+        s.NightShutdownEndTime = "08:00";
+        s.NightShutdownOutdoorBelowCelsius = 24.0;
+        s.NightCoolingBudgetMinutes = 90;
+        s.CoolingStepMinimumGapSeconds = 0;
+        SetRuntimeProperty(store, "Settings", s);
+
+        // WARM night (27 C outside → no shutdown) with the AC cooling. Feed 2h of cooling in 2-min
+        // steps; after the 90-minute budget the defender must ease the setpoint UP to stop it.
+        store.RecordWeatherReading(new WeatherReading("weather.home", 27.0, "hot"));
+        var nightStart = new DateTimeOffset(DateTime.Now.Date.AddHours(2)); // 02:00 local
+        double wall = 22.0;
+        var easedAt = -1;
+        for (var step = 0; step < 60; step++) // 60 * 2 min = 120 min
+        {
+            var now = nightStart.AddMinutes(step * 2);
+            var reading = new ThermostatReading("climate.dining_room", 24.0, wall, "cool", "cooling", null, []);
+            store.RecordHomeAssistantReading(reading, now);
+            if (store.TryBeginNightShutdown(reading, now, out _, out _, out var off, out var easeUp))
+            {
+                if (off)
+                {
+                    throw new InvalidOperationException("A 27 C night must not trigger a full shutdown.");
+                }
+
+                if (easeUp is { } e)
+                {
+                    if (e <= wall)
+                    {
+                        throw new InvalidOperationException($"The budget ease-up must RAISE the setpoint ({wall:0.0} -> {e:0.0}).");
+                    }
+
+                    wall = e;
+                    store.RecordCommand($"ease {e:0.0}", e, commandedHvacMode: "cool", nowOverride: now);
+                    if (easedAt < 0)
+                    {
+                        easedAt = step * 2;
+                    }
+                }
+            }
+        }
+
+        if (easedAt < 0)
+        {
+            throw new InvalidOperationException("The night cooling budget never eased the AC to a stop on a warm night.");
+        }
+
+        if (easedAt < 80 || easedAt > 100)
+        {
+            throw new InvalidOperationException($"The budget should trip near 90 min of cooling, first eased at {easedAt} min.");
+        }
+    }
+
     /// <summary>
     /// THE FULL HOUSEHOLD DAY: 24 simulated hours, minute by minute, mirroring the worker's gate
     /// order, with the Discord contract as hard assertions: his 23 is the floor, the AC is off /
@@ -1309,7 +1371,7 @@ internal sealed class DefenderSetPointRegressionTests
                 continue;
             }
 
-            if (store.TryBeginNightShutdown(reading, now, out _, out _, out var turnOff))
+            if (store.TryBeginNightShutdown(reading, now, out _, out _, out var turnOff, out _))
             {
                 if (turnOff)
                 {
@@ -1515,13 +1577,13 @@ internal sealed class DefenderSetPointRegressionTests
         var night = new DateTimeOffset(DateTime.Now.Date.AddHours(2)); // 02:00 local
         var coolReading = new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "cooling", null, []);
 
-        if (!store.TryBeginNightShutdown(coolReading, night, out _, out _, out var turnOff) || !turnOff)
+        if (!store.TryBeginNightShutdown(coolReading, night, out _, out _, out var turnOff, out _) || !turnOff)
         {
             throw new InvalidOperationException("Entering the night window with a cool outdoor reading must trigger a single AC-off command.");
         }
 
         // Someone turns the AC back on mid-window: respected — no second off command, but still standing down.
-        if (!store.TryBeginNightShutdown(coolReading, night.AddMinutes(10), out _, out _, out var secondOff) || secondOff)
+        if (!store.TryBeginNightShutdown(coolReading, night.AddMinutes(10), out _, out _, out var secondOff, out _) || secondOff)
         {
             throw new InvalidOperationException("The off command must be sent only once per window; manual re-enables are respected.");
         }
@@ -1529,14 +1591,14 @@ internal sealed class DefenderSetPointRegressionTests
         // Hot night: no shutdown, but PASSIVE WATCH — the defender holds (no off command) and
         // sends no corrections, because history shows night-time fights are the angriest.
         store.RecordWeatherReading(new WeatherReading("weather.home", 27.0, "hot"));
-        if (!store.TryBeginNightShutdown(coolReading, night.AddMinutes(20), out _, out _, out var hotNightOff) || hotNightOff)
+        if (!store.TryBeginNightShutdown(coolReading, night.AddMinutes(20), out _, out _, out var hotNightOff, out _) || hotNightOff)
         {
             throw new InvalidOperationException("A hot night must enter passive watch (hold, no off command) instead of normal fighting.");
         }
 
         // But a genuinely overheating room breaks passive watch so comfort can win.
         var overheating = new ThermostatReading("climate.dining_room", 26.5, 23.0, "cool", "cooling", null, []);
-        if (store.TryBeginNightShutdown(overheating, night.AddMinutes(25), out _, out _, out _))
+        if (store.TryBeginNightShutdown(overheating, night.AddMinutes(25), out _, out _, out _, out _))
         {
             throw new InvalidOperationException("A room far above target must break night passive watch.");
         }
@@ -1544,7 +1606,7 @@ internal sealed class DefenderSetPointRegressionTests
         // Outside the window: normal duty.
         store.RecordWeatherReading(new WeatherReading("weather.home", 20.0, "clear"));
         var morning = new DateTimeOffset(DateTime.Now.Date.AddHours(9)); // 09:00 local
-        if (store.TryBeginNightShutdown(coolReading, morning, out _, out _, out _))
+        if (store.TryBeginNightShutdown(coolReading, morning, out _, out _, out _, out _))
         {
             throw new InvalidOperationException("Night shutdown must not hold outside its window.");
         }

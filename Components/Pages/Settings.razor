@@ -142,6 +142,7 @@
                         </MudItem>
                         <SettingDouble Label="Only when outdoor below (C)" Value="_nightShutdownOutdoorBelowCelsius" ValueChanged="@(v => SetDirty(v, x => _nightShutdownOutdoorBelowCelsius = x))" Min="0" Max="40" Step="0.5" Help="Safety valve: on a hot night the AC keeps running. Unknown outdoor also keeps it running." />
                         <SettingDouble Label="Night minimum setpoint (C)" Value="_nightMinimumSetPointCelsius" ValueChanged="@(v => SetDirty(v, x => _nightMinimumSetPointCelsius = x))" Min="0" Max="30" Step="0.5" Help="During the night window the defender never commands below this — even if the daytime target is lower. Set 0 to disable." />
+                        <SettingInt Label="Night cooling budget (minutes)" Value="_nightCoolingBudgetMinutes" ValueChanged="@(v => SetDirty(v, x => _nightCoolingBudgetMinutes = x))" Min="0" Max="420" Help="Even on a warm night, the AC may cool at most this long inside the window; then it eases to a stop and only observes — so it is never humming all night (a brother-mad trigger). Set 0 to disable." />
                     </MudGrid>
                 </MudExpansionPanel>
             }
@@ -819,6 +820,7 @@
     private double _nightShutdownOutdoorBelowCelsius = 24.0;
     private int _coolingStepMinimumGapSeconds = 60;
     private double _nightMinimumSetPointCelsius = 23.0;
+    private int _nightCoolingBudgetMinutes = 90;
     private bool _coolingRestEnabled = true;
     private int _coolingRunMaxMinutes = 180;
     private int _coolingRestMinutes = 30;
@@ -1120,6 +1122,7 @@
         _nightShutdownOutdoorBelowCelsius = settings.NightShutdownOutdoorBelowCelsius;
         _coolingStepMinimumGapSeconds = settings.CoolingStepMinimumGapSeconds;
         _nightMinimumSetPointCelsius = settings.NightMinimumSetPointCelsius;
+        _nightCoolingBudgetMinutes = settings.NightCoolingBudgetMinutes;
         _coolingRestEnabled = settings.CoolingRestEnabled;
         _coolingRunMaxMinutes = settings.CoolingRunMaxMinutes;
         _coolingRestMinutes = settings.CoolingRestMinutes;
@@ -1677,7 +1680,8 @@
             _autoBrotherMadEnabled,
             _autoBrotherMadTouches,
             _autoBrotherMadWindowMinutes,
-            _autoBrotherMadBigRaiseCelsius);
+            _autoBrotherMadBigRaiseCelsius,
+            _nightCoolingBudgetMinutes);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

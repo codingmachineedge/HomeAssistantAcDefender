@@ -110,11 +110,17 @@ public sealed class AcDefenderService
             // Night shutdown / night passive watch: cheap cool night = AC off; warm night =
             // observe only. Runs before the enforcer and cool-mode restore so nothing turns the
             // unit back on during the window.
-            if (stateStore.TryBeginNightShutdown(reading, DateTimeOffset.UtcNow, out var nightUntil, out var nightMessage, out var nightTurnOff))
+            if (stateStore.TryBeginNightShutdown(reading, DateTimeOffset.UtcNow, out var nightUntil, out var nightMessage, out var nightTurnOff, out var nightEaseUp))
             {
                 if (nightTurnOff)
                 {
                     await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
+                }
+                else if (nightEaseUp is { } budgetEase)
+                {
+                    // Night cooling budget spent: ease the setpoint up (leave the mode on cool) so
+                    // the compressor stops without a jarring mode change.
+                    await homeAssistantClient.SetCoolingAsync(reading.EntityId, budgetEase, cancellationToken);
                 }
 
                 stateStore.SetNextAction(nightMessage, nightUntil);

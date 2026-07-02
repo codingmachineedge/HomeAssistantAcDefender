@@ -472,6 +472,11 @@ public sealed class DefenderStateStore
                 state.Settings.StandDownParkSetPointCelsius = Math.Round(Math.Clamp(parkSetPoint, 20.0, 30.0), 1);
             }
 
+            if (request.NightCoolingBudgetMinutes is { } nightBudget)
+            {
+                state.Settings.NightCoolingBudgetMinutes = Math.Clamp(nightBudget, 0, 420);
+            }
+
             if (request.AutoBrotherMadEnabled is { } autoMadEnabled)
             {
                 state.Settings.AutoBrotherMadEnabled = autoMadEnabled;
@@ -953,20 +958,86 @@ public sealed class DefenderStateStore
     /// then stands down completely — no cool-mode restore, no corrections, no enforcer. Someone
     /// turning the AC back on mid-window is respected. Returns true while the worker should idle.
     /// </summary>
-    public bool TryBeginNightShutdown(ThermostatReading reading, DateTimeOffset now, out DateTimeOffset? until, out string message, out bool turnOff)
+    public bool TryBeginNightShutdown(ThermostatReading reading, DateTimeOffset now, out DateTimeOffset? until, out string message, out bool turnOff, out double? easeUpSetPoint)
     {
         lock (gate)
         {
             until = null;
             message = string.Empty;
             turnOff = false;
+            easeUpSetPoint = null;
 
             var s = state.Settings;
-            var inWindow = s.NightShutdownEnabled
-                && TryParseHourMinute(s.NightShutdownStartTime, out var startMinutes)
-                && TryParseHourMinute(s.NightShutdownEndTime, out var endMinutes)
-                && startMinutes != endMinutes
-                && IsInMinuteWindow(now, startMinutes, endMinutes);
+            var haveWindow = false;
+            int startMinutes = 0, endMinutes = 0;
+            if (s.NightShutdownEnabled
+                && TryParseHourMinute(s.NightShutdownStartTime, out startMinutes)
+                && TryParseHourMinute(s.NightShutdownEndTime, out endMinutes)
+                && startMinutes != endMinutes)
+            {
+                haveWindow = true;
+            }
+
+            var inWindow = haveWindow && IsInMinuteWindow(now, startMinutes, endMinutes);
+
+            // NIGHT COOLING BUDGET: even on warm nights the AC may cool at most this many minutes
+            // inside the window. Once the budget is spent the defender eases the unit to a stop
+            // ONCE and then only observes — a later deliberate manual re-enable is respected,
+            // because "it hummed all night" is itself a brother-mad trigger.
+            if (inWindow && s.NightCoolingBudgetMinutes > 0)
+            {
+                var budgetWindowKey = NextWindowEnd(now, endMinutes).ToLocalTime().ToString("yyyy-MM-dd");
+                if (!string.Equals(state.NightCoolingWindowKey, budgetWindowKey, StringComparison.Ordinal))
+                {
+                    state.NightCoolingWindowKey = budgetWindowKey;
+                    state.NightCoolingSecondsThisWindow = 0;
+                    state.NightCoolingLastSampleAt = null;
+                }
+
+                var isCoolingNow = string.Equals(reading.HvacAction, "cooling", StringComparison.OrdinalIgnoreCase);
+                if (state.NightCoolingLastSampleAt is { } lastNightSample && isCoolingNow)
+                {
+                    state.NightCoolingSecondsThisWindow += Math.Clamp((now - lastNightSample).TotalSeconds, 0, 120);
+                }
+
+                state.NightCoolingLastSampleAt = now;
+
+                var budgetSpent = state.NightCoolingSecondsThisWindow >= s.NightCoolingBudgetMinutes * 60.0;
+                var alreadyEased = string.Equals(state.NightBudgetEasedWindowKey, budgetWindowKey, StringComparison.Ordinal);
+                if (budgetSpent && !alreadyEased)
+                {
+                    until = NextWindowEnd(now, endMinutes);
+                    message = $"Night cooling budget spent ({s.NightCoolingBudgetMinutes} min of cooling this window): easing the AC to a stop so it is not on all night.";
+                    if (isCoolingNow && string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var restCeiling = Math.Round(reading.CurrentTemperatureCelsius + 0.5, 1);
+                        var budgetAntiFlap = TimeSpan.FromSeconds(Math.Clamp(s.CoolingStepMinimumGapSeconds, 0, 3600));
+                        var budgetStepReady = state.LastWalkStepAt is not { } lastStep || now - lastStep >= budgetAntiFlap;
+                        if (reading.SetPointCelsius < restCeiling - 0.05 && budgetStepReady)
+                        {
+                            easeUpSetPoint = Math.Round(Math.Min(restCeiling, reading.SetPointCelsius + 0.5), 1);
+                            state.LastWalkStepAt = now;
+                            RecordPendingThermostatCommand(
+                                commandedSetPointCelsius: easeUpSetPoint,
+                                commandedHvacMode: "cool",
+                                commandedFanMode: null,
+                                commandSourceKind: "night-budget",
+                                commandSourceLabel: "Night cooling budget",
+                                commandSourceDetail: "The nightly cooling budget was spent; AC Defender eased the setpoint up so the unit stops.");
+                        }
+                    }
+                    else
+                    {
+                        // The unit has stopped: the one-shot is complete. From here the night is
+                        // observe-only — someone manually cooling again is left alone.
+                        state.NightBudgetEasedWindowKey = budgetWindowKey;
+                        AddEvent("info", "Night cooling budget: the AC has stopped; observing for the rest of the night. Manual changes are respected.");
+                    }
+
+                    SaveState();
+                    return true;
+                }
+            }
 
             // The outdoor check is a safeguard against shutting down on a genuinely hot night. An
             // unknown outdoor reading keeps the AC running rather than blindly turning it off.
@@ -992,7 +1063,7 @@ public sealed class DefenderStateStore
                     && s.NightShutdownEnabled
                     && reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + s.NaturalSafetyOverrideCelsius)
                 {
-                    until = NextWindowEnd(now, TryParseHourMinute(s.NightShutdownEndTime, out var passiveEnd) ? passiveEnd : 480);
+                    until = NextWindowEnd(now, endMinutes);
                     message = $"Night passive watch until {s.NightShutdownEndTime}: observing only — night wall changes are not fought unless the room passes {state.TargetTemperatureCelsius + s.NaturalSafetyOverrideCelsius:0.0} C.";
                     return true;
                 }
@@ -1000,7 +1071,7 @@ public sealed class DefenderStateStore
                 return false;
             }
 
-            until = NextWindowEnd(now, TryParseHourMinute(s.NightShutdownEndTime, out var end) ? end : 480);
+            until = NextWindowEnd(now, endMinutes);
             var modeOff = string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase);
             if (!state.NightShutdownActive)
             {
@@ -7656,6 +7727,7 @@ public sealed class DefenderStateStore
         saved.PeaceOfferingArmedAt = null;
         saved.NightShutdownActive = false;
         saved.AcRuntimeLastSampleAt = null; // downtime must not count as compressor runtime
+        saved.NightCoolingLastSampleAt = null;
 
         saved.Settings ??= new DefenderSettings();
         saved.Settings.MaximumNaturalDelaySeconds = Math.Max(
@@ -9913,6 +9985,15 @@ public sealed class DefenderStateStore
         public DateTimeOffset? AcRuntimeTrackingSince { get; set; }
 
         public DateTimeOffset? AcRuntimeBackfilledAt { get; set; }
+
+        // Night cooling budget accounting (per night window, keyed by window end date).
+        public string? NightCoolingWindowKey { get; set; }
+
+        public double NightCoolingSecondsThisWindow { get; set; }
+
+        public DateTimeOffset? NightCoolingLastSampleAt { get; set; }
+
+        public string? NightBudgetEasedWindowKey { get; set; }
 
         // On-forever protection: when the current continuous cooling run started, and the active
         // rest window that stops an unreachable target from keeping the AC on for 24 hours.

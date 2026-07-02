@@ -718,6 +718,10 @@ public sealed class DefenderSettings
     // setpoint below this — cheap nights beat cold nights. 0 disables the night floor.
     public double NightMinimumSetPointCelsius { get; set; } = 23.0;
 
+    // Even on warm nights, the AC may cool at most this many minutes inside the night window;
+    // then it is eased to a stop once and the rest of the night is observe-only. 0 disables.
+    public int NightCoolingBudgetMinutes { get; set; } = 90;
+
     // Peace offering: when someone raises the setpoint from the phone/Home Assistant app, the
     // defender immediately concedes a small extra step UP (their number + step) and stands down
     // for the hold window — they see the system agreeing with them instead of fighting back.

@@ -259,4 +259,5 @@ public sealed record SettingsRequest(
     bool? AutoBrotherMadEnabled = null,
     int? AutoBrotherMadTouches = null,
     int? AutoBrotherMadWindowMinutes = null,
-    double? AutoBrotherMadBigRaiseCelsius = null);
+    double? AutoBrotherMadBigRaiseCelsius = null,
+    int? NightCoolingBudgetMinutes = null);
