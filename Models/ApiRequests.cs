@@ -253,4 +253,10 @@ public sealed record SettingsRequest(
     double? NightMinimumSetPointCelsius = null,
     bool? CoolingRestEnabled = null,
     int? CoolingRunMaxMinutes = null,
-    int? CoolingRestMinutes = null);
+    int? CoolingRestMinutes = null,
+    bool? StandDownParkEnabled = null,
+    double? StandDownParkSetPointCelsius = null,
+    bool? AutoBrotherMadEnabled = null,
+    int? AutoBrotherMadTouches = null,
+    int? AutoBrotherMadWindowMinutes = null,
+    double? AutoBrotherMadBigRaiseCelsius = null);

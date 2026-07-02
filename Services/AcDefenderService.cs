@@ -61,6 +61,22 @@ public sealed class AcDefenderService
                 return;
             }
 
+            // Peace offering runs BEFORE emergency quiet on purpose: when the rage detector fires
+            // an auto-apology, the friendly "goes up a bit" gift from the same raise must still
+            // land. The gift only ever raises the setpoint and only in cool mode.
+            var peaceSnapshot = stateStore.GetSnapshot();
+            if (peaceSnapshot.DefenderEnabled
+                && stateStore.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out var peaceSetPoint, out var peaceUntil, out var peaceMessage))
+            {
+                if (peaceSetPoint is { } gift && string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+                {
+                    await homeAssistantClient.SetCoolingAsync(reading.EntityId, gift, cancellationToken);
+                }
+
+                stateStore.SetNextAction(peaceMessage, peaceUntil);
+                return;
+            }
+
             var emergencyNow = DateTimeOffset.UtcNow;
             if (stateStore.TryRespectEmergencyQuiet(emergencyNow, out var emergencyUntil, out var emergencyMessage))
             {
@@ -75,35 +91,9 @@ public sealed class AcDefenderService
                 return;
             }
 
-            // Night shutdown: cheap cool night = AC off and everyone stands down. Runs before the
-            // enforcer and cool-mode restore so nothing turns the unit back on during the window.
-            if (stateStore.TryBeginNightShutdown(reading, DateTimeOffset.UtcNow, out var nightUntil, out var nightMessage, out var nightTurnOff))
-            {
-                if (nightTurnOff)
-                {
-                    await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
-                }
-
-                stateStore.SetNextAction(nightMessage, nightUntil);
-                return;
-            }
-
-            // Peace offering: an app user raised the setpoint — concede a small extra step upward
-            // once, then leave their choice alone for the hold window. Runs before the enforcer
-            // and the correction pipeline so nothing undoes the gesture.
-            if (stateStore.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out var peaceSetPoint, out var peaceUntil, out var peaceMessage))
-            {
-                if (peaceSetPoint is { } gift)
-                {
-                    await homeAssistantClient.SetCoolingAsync(reading.EntityId, gift, cancellationToken);
-                }
-
-                stateStore.SetNextAction(peaceMessage, peaceUntil);
-                return;
-            }
-
-            // On-forever protection: an unreachable target must never keep the AC running for
-            // 24 hours straight. After the run limit, ease up and rest before trying again.
+            // On-forever protection runs BEFORE the night gates: the run clock must keep counting
+            // through night passive watch, otherwise a warm night could hide 7+ hours of
+            // continuous cooling from the limit. During a rest, ease up and wait.
             if (stateStore.TryBeginCoolingRest(reading, DateTimeOffset.UtcNow, out var restSetPoint, out var restUntil, out var restMessage))
             {
                 if (restSetPoint is { } easeUp)
@@ -112,6 +102,20 @@ public sealed class AcDefenderService
                 }
 
                 stateStore.SetNextAction(restMessage, restUntil);
+                return;
+            }
+
+            // Night shutdown / night passive watch: cheap cool night = AC off; warm night =
+            // observe only. Runs before the enforcer and cool-mode restore so nothing turns the
+            // unit back on during the window.
+            if (stateStore.TryBeginNightShutdown(reading, DateTimeOffset.UtcNow, out var nightUntil, out var nightMessage, out var nightTurnOff))
+            {
+                if (nightTurnOff)
+                {
+                    await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
+                }
+
+                stateStore.SetNextAction(nightMessage, nightUntil);
                 return;
             }
 
@@ -523,7 +527,7 @@ public sealed class AcDefenderService
     public async Task ForceCoolingBoostAsync(CancellationToken cancellationToken)
     {
         var reading = await RequireReadingAsync(cancellationToken);
-        var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, "idle", reading.SetPointCelsius);
+        var expectedSetPoint = stateStore.CalculateExpectedSetPoint(reading.CurrentTemperatureCelsius, reading.HvacAction, reading.SetPointCelsius);
         await homeAssistantClient.SetCoolingAsync(reading.EntityId, expectedSetPoint, cancellationToken);
         stateStore.RecordCommand(
             $"Home Assistant {reading.EntityId} cooling boost set to {expectedSetPoint:0.0} C.",
@@ -631,6 +635,30 @@ public sealed class AcDefenderService
     /// Pulls the real Home Assistant thermostat history and learns a human comfort profile + touch
     /// cadence from it (see <see cref="DefenderStateStore.LearnFromThermostatHistory"/>).
     /// </summary>
+    /// <summary>
+    /// Called right after the defender is turned OFF: parks the thermostat at the configured
+    /// stand-down setpoint (default 28 C) when appropriate, so the unguarded AC barely runs.
+    /// Returns a human message when a park command was sent, null when nothing was appropriate.
+    /// </summary>
+    public async Task<string?> ParkThermostatForStandDownAsync(CancellationToken cancellationToken)
+    {
+        var reading = await RequireReadingAsync(cancellationToken);
+        if (!stateStore.TryGetStandDownPark(reading, out var parkSetPoint))
+        {
+            return null;
+        }
+
+        await homeAssistantClient.SetCoolingAsync(reading.EntityId, parkSetPoint, cancellationToken);
+        stateStore.RecordCommand(
+            $"Defender stood down; thermostat parked at {parkSetPoint:0.0} C so the AC barely runs unguarded.",
+            parkSetPoint,
+            commandedHvacMode: "cool",
+            commandSourceKind: "stand-down-park",
+            commandSourceLabel: "Stand-down parking",
+            commandSourceDetail: "The defender was turned off; the setpoint was raised to the stand-down park value to save power while unguarded.");
+        return $"Thermostat parked at {parkSetPoint:0.0} °C while the defender is off.";
+    }
+
     public async Task<HistoryLearningSnapshot> LearnFromHistoryAsync(CancellationToken cancellationToken)
     {
         var reading = await RequireReadingAsync(cancellationToken);

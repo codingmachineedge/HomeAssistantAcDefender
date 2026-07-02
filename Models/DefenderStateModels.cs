@@ -719,6 +719,23 @@ public sealed class DefenderSettings
 
     public int PeaceOfferingHoldMinutes { get; set; } = 20;
 
+    // AUTO brother-mad (rage detector): nobody has to remember the emergency button. A burst of
+    // external thermostat touches or one big angry raise triggers the full 2-hour apology
+    // stand-down automatically and teaches the anger model.
+    public bool AutoBrotherMadEnabled { get; set; } = true;
+
+    public int AutoBrotherMadTouches { get; set; } = 3;
+
+    public int AutoBrotherMadWindowMinutes { get; set; } = 10;
+
+    public double AutoBrotherMadBigRaiseCelsius { get; set; } = 2.0;
+
+    // Stand-down parking: when the defender is turned OFF, park the thermostat at this setpoint
+    // (raise only, cool mode only) so the unguarded AC barely runs instead of cooling hard.
+    public bool StandDownParkEnabled { get; set; } = true;
+
+    public double StandDownParkSetPointCelsius { get; set; } = 28.0;
+
     // On-forever protection: if the AC has been cooling continuously for this long and the room
     // still has not reached the target, the defender eases the setpoint above the room and rests —
     // an unreachable target must never mean "the AC is on for 24 hours".

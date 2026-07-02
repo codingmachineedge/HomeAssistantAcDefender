@@ -181,7 +181,7 @@ api.MapPost("/target", (TargetTemperatureRequest request, DefenderStateStore sto
     return Results.Ok(snapshot);
 });
 
-api.MapPost("/defender", (DefenderEnabledRequest request, DefenderStateStore store) =>
+api.MapPost("/defender", async (DefenderEnabledRequest request, DefenderStateStore store, AcDefenderService defender) =>
 {
     var gate = store.TryBeginWebsiteCommand(request.Enabled ? "turn defender on" : "pause defender", bypassDebounce: true);
     if (!gate.Accepted)
@@ -190,6 +190,19 @@ api.MapPost("/defender", (DefenderEnabledRequest request, DefenderStateStore sto
     }
 
     var snapshot = store.SetDefenderEnabled(request.Enabled);
+    if (!request.Enabled)
+    {
+        try
+        {
+            await defender.ParkThermostatForStandDownAsync(CancellationToken.None);
+            snapshot = store.GetSnapshot();
+        }
+        catch
+        {
+            // Parking is best-effort.
+        }
+    }
+
     return Results.Ok(snapshot);
 });
 

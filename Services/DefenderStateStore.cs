@@ -93,6 +93,7 @@ public sealed class DefenderStateStore
     {
         lock (gate)
         {
+            state.FrontDoorPausedDefender = false; // the user's word overrides any auto-resume plan
             state.DefenderEnabled = enabled;
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", enabled ? "Defender enabled." : "Defender paused.");
@@ -461,6 +462,36 @@ public sealed class DefenderStateStore
                 state.Settings.CoolingRestMinutes = Math.Clamp(restMinutes, 5, 240);
             }
 
+            if (request.StandDownParkEnabled is { } parkEnabled)
+            {
+                state.Settings.StandDownParkEnabled = parkEnabled;
+            }
+
+            if (request.StandDownParkSetPointCelsius is { } parkSetPoint)
+            {
+                state.Settings.StandDownParkSetPointCelsius = Math.Round(Math.Clamp(parkSetPoint, 20.0, 30.0), 1);
+            }
+
+            if (request.AutoBrotherMadEnabled is { } autoMadEnabled)
+            {
+                state.Settings.AutoBrotherMadEnabled = autoMadEnabled;
+            }
+
+            if (request.AutoBrotherMadTouches is { } autoMadTouches)
+            {
+                state.Settings.AutoBrotherMadTouches = Math.Clamp(autoMadTouches, 2, 20);
+            }
+
+            if (request.AutoBrotherMadWindowMinutes is { } autoMadWindow)
+            {
+                state.Settings.AutoBrotherMadWindowMinutes = Math.Clamp(autoMadWindow, 2, 120);
+            }
+
+            if (request.AutoBrotherMadBigRaiseCelsius is { } autoMadRaise)
+            {
+                state.Settings.AutoBrotherMadBigRaiseCelsius = Math.Round(Math.Clamp(autoMadRaise, 0.5, 10.0), 1);
+            }
+
             if (request.CoolingStepMinimumGapSeconds is { } stepGapSeconds)
             {
                 state.Settings.CoolingStepMinimumGapSeconds = Math.Clamp(stepGapSeconds, 0, 3600);
@@ -795,6 +826,11 @@ public sealed class DefenderStateStore
                 state.FrontDoorKillSwitchTriggeredAt = now;
                 state.FrontDoorKillSwitchUntil = now.AddMinutes(holdMinutes);
                 state.FrontDoorKillSwitchLastDetector = $"{detected.Name} ({detected.EntityId})";
+                if (state.DefenderEnabled)
+                {
+                    state.FrontDoorPausedDefender = true;
+                }
+
                 state.DefenderEnabled = false;
                 var offPlan = state.Settings.FrontDoorKillSwitchTurnsThermostatOff
                     ? "thermostat off order is ready"
@@ -868,6 +904,11 @@ public sealed class DefenderStateStore
                 ? "Front-door kill switch is active; defender is paused."
                 : state.FrontDoorKillSwitchStatus;
             state.FrontDoorKillSwitchStatus = message;
+            if (state.DefenderEnabled)
+            {
+                state.FrontDoorPausedDefender = true;
+            }
+
             state.DefenderEnabled = false;
             state.NextAction = message;
             state.NextActionAt = waitUntil;
@@ -963,8 +1004,16 @@ public sealed class DefenderStateStore
             var modeOff = string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase);
             if (!state.NightShutdownActive)
             {
+                // ONE off command per night, keyed to this window's end date — an outdoor blip or a
+                // restart mid-window must never re-send OFF over a deliberate manual re-enable.
+                var windowKey = until.Value.ToLocalTime().ToString("yyyy-MM-dd");
+                var alreadyShutThisWindow = string.Equals(state.NightShutdownLastOffWindowKey, windowKey, StringComparison.Ordinal);
                 state.NightShutdownActive = true;
-                turnOff = !modeOff;
+                turnOff = !modeOff && !alreadyShutThisWindow;
+                if (turnOff)
+                {
+                    state.NightShutdownLastOffWindowKey = windowKey;
+                }
                 AddEvent("info", $"Night shutdown ({s.NightShutdownStartTime}-{s.NightShutdownEndTime}, outdoor {state.Weather?.OutdoorTemperatureCelsius:0.0} C < {s.NightShutdownOutdoorBelowCelsius:0.0} C): AC off, defenders standing down.");
                 if (turnOff)
                 {
@@ -1005,6 +1054,15 @@ public sealed class DefenderStateStore
                 state.PeaceOfferingPendingSetPointCelsius = null;
                 state.PeaceOfferingHoldUntil = null;
                 return false;
+            }
+
+            // A gift is only meaningful moments after the raise that earned it. A pending gift
+            // older than 15 minutes (defender was paused/offline meanwhile) is stale — drop it
+            // rather than surprise-raising the setpoint long after the person walked away.
+            if (state.PeaceOfferingPendingSetPointCelsius is not null
+                && (state.PeaceOfferingArmedAt is not { } armedAt || now - armedAt > TimeSpan.FromMinutes(15)))
+            {
+                state.PeaceOfferingPendingSetPointCelsius = null;
             }
 
             if (state.PeaceOfferingPendingSetPointCelsius is { } gift)
@@ -1054,6 +1112,23 @@ public sealed class DefenderStateStore
             }
 
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Stand-down parking: decides whether turning the defender OFF should park the thermostat
+    /// at the configured setpoint (default 28 C). Appropriate only when the unit is in cool mode
+    /// and the park would RAISE the setpoint — parking never cools harder and never fights a
+    /// warmer manual setting.
+    /// </summary>
+    public bool TryGetStandDownPark(ThermostatReading reading, out double parkSetPoint)
+    {
+        lock (gate)
+        {
+            parkSetPoint = Math.Round(Math.Clamp(state.Settings.StandDownParkSetPointCelsius, 20.0, 30.0), 1);
+            return state.Settings.StandDownParkEnabled
+                && string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase)
+                && reading.SetPointCelsius < parkSetPoint - 0.05;
         }
     }
 
@@ -4784,6 +4859,13 @@ public sealed class DefenderStateStore
             var antiFlap = TimeSpan.FromSeconds(Math.Clamp(state.Settings.CoolingStepMinimumGapSeconds, 0, 3600));
             var stepReady = state.LastWalkStepAt is not { } lastStepAt || now - lastStepAt >= antiFlap;
 
+            // Global anti-flap: between steps the defender sends NOTHING — expected == wall means
+            // no command. Previously moves within one step of the goal skipped this spacing.
+            if (!stepReady && currentSetPointCelsius is { } wallHold)
+            {
+                return Math.Round(wallHold, 1);
+            }
+
             double goal;
             if (currentTemperatureCelsius <= target + options.TemperatureToleranceCelsius)
             {
@@ -5055,6 +5137,14 @@ public sealed class DefenderStateStore
             return;
         }
 
+        // Mode-off noise: a unit turning off/on reports setpoint 0 for a few polls. Those 23->0->23
+        // swings are not human touches — counting them poisoned the touch counters, the rage
+        // detector, the audit log, and the quiet guards. Mode changes are tracked separately.
+        if (previous <= 5.0 || reading.SetPointCelsius <= 5.0)
+        {
+            return;
+        }
+
         if (TryClassifyPendingThermostatCommandEcho(reading, now, out var pendingSource, out var pendingEchoDetail))
         {
             AddEvent(
@@ -5086,12 +5176,40 @@ public sealed class DefenderStateStore
             if (gift > reading.SetPointCelsius + 0.05)
             {
                 state.PeaceOfferingPendingSetPointCelsius = gift;
-                AddEvent("info", $"Peace offering armed: someone asked for {reading.SetPointCelsius:0.0} C from the app — gifting {gift:0.0} C and standing down {state.Settings.PeaceOfferingHoldMinutes} min.");
+                state.PeaceOfferingArmedAt = now;
+                AddEvent("info", $"Peace offering armed: someone asked for {reading.SetPointCelsius:0.0} C — gifting {gift:0.0} C and standing down {state.Settings.PeaceOfferingHoldMinutes} min.");
             }
         }
 
         PruneTouchTimes(now);
         state.ExternalTouchTimes.Add(now);
+
+        // AUTO BROTHER-MAD (rage detector): the household must never need to remember a button.
+        // A burst of external touches or one big angry raise triggers the full 2-hour apology
+        // stand-down automatically and teaches the anger model about this hour.
+        if (state.Settings.AutoBrotherMadEnabled
+            && (state.EmergencyQuietUntil is not { } quietUntil || quietUntil <= now))
+        {
+            var rageWindow = TimeSpan.FromMinutes(Math.Clamp(state.Settings.AutoBrotherMadWindowMinutes, 2, 120));
+            var recentTouches = state.ExternalTouchTimes.Count(t => now - t <= rageWindow);
+            var raiseDelta = reading.SetPointCelsius - previous;
+            var bigRaise = previous > 5.0
+                && reading.SetPointCelsius > 5.0
+                && raiseDelta >= Math.Max(0.5, state.Settings.AutoBrotherMadBigRaiseCelsius);
+            if (bigRaise || recentTouches >= Math.Clamp(state.Settings.AutoBrotherMadTouches, 2, 20))
+            {
+                var reason = bigRaise
+                    ? $"a {raiseDelta:0.0} C jump to {reading.SetPointCelsius:0.0} C"
+                    : $"{recentTouches} thermostat touches in {rageWindow.TotalMinutes:0} minutes";
+                ActivateEmergencyQuiet(
+                    "Brother upset (auto)",
+                    TimeSpan.FromHours(2),
+                    $"🙇 AUTO-APOLOGY ACTIVE: {reason} looks like someone is upset — no button needed. Corrections are stopped for 2 hours and the anger model is learning this hour.",
+                    pauseDefender: false);
+                AddEvent("warning", $"Auto brother-mad triggered by {reason}; apologizing and standing down 2 hours automatically.");
+            }
+        }
+
         RecordVisibilityNoticeIfNeeded(now);
         ResetCoolingDefenderStep();
         state.NaturalHoldUntil = null;
@@ -7365,6 +7483,14 @@ public sealed class DefenderStateStore
             saved.ConnectionState = "unavailable";
         }
 
+        // Point-in-time trackers must not survive a restart: a stale cooling-run start would count
+        // downtime as runtime and trigger a spurious rest; a stale pending gift would fire a
+        // surprise raise; the night latch re-evaluates cleanly from live readings.
+        saved.CoolingRunStartedAt = null;
+        saved.PeaceOfferingPendingSetPointCelsius = null;
+        saved.PeaceOfferingArmedAt = null;
+        saved.NightShutdownActive = false;
+
         saved.Settings ??= new DefenderSettings();
         saved.Settings.MaximumNaturalDelaySeconds = Math.Max(
             saved.Settings.MinimumNaturalDelaySeconds,
@@ -8993,6 +9119,26 @@ public sealed class DefenderStateStore
     {
         state.FrontDoorKillSwitchUntil = null;
         state.FrontDoorKillSwitchStatus = status;
+        ResumeDefenderAfterFrontDoorIfNeeded();
+    }
+
+    // The kill switch only PAUSES the defender for its hold window. Without this, the pause was
+    // permanent (DefenderEnabled=false was never restored) — a single delivery driver at the door
+    // silently disabled all defense until a human noticed. Manual toggles always win: SetDefenderEnabled
+    // clears the flag.
+    private void ResumeDefenderAfterFrontDoorIfNeeded()
+    {
+        if (!state.FrontDoorPausedDefender)
+        {
+            return;
+        }
+
+        state.FrontDoorPausedDefender = false;
+        if (!state.DefenderEnabled)
+        {
+            state.DefenderEnabled = true;
+            AddEvent("info", "Front door is clear and the hold expired; the defender resumed automatically.");
+        }
     }
 
     private bool IsFrontDoorKillSwitchActive(DateTimeOffset now)
@@ -9006,6 +9152,7 @@ public sealed class DefenderStateStore
         if (state.FrontDoorKillSwitchUntil is not { } until || until <= now)
         {
             state.FrontDoorKillSwitchUntil = null;
+            ResumeDefenderAfterFrontDoorIfNeeded();
             return false;
         }
 
@@ -9148,7 +9295,12 @@ public sealed class DefenderStateStore
                 Directory.CreateDirectory(directory);
             }
 
-            File.WriteAllText(stateFilePath, JsonSerializer.Serialize(state, jsonOptions));
+            // Atomic write: WriteAllText truncates first, so a crash mid-write used to leave a
+            // torn file — LoadState would then silently fall back to defaults (target 22,
+            // defender re-enabled). Temp file + move keeps the last good state intact.
+            var tempPath = stateFilePath + ".tmp";
+            File.WriteAllText(tempPath, JsonSerializer.Serialize(state, jsonOptions));
+            File.Move(tempPath, stateFilePath, overwrite: true);
         }
         catch (Exception ex)
         {
@@ -9541,7 +9693,15 @@ public sealed class DefenderStateStore
         // stand-down window that follows it.
         public double? PeaceOfferingPendingSetPointCelsius { get; set; }
 
+        public DateTimeOffset? PeaceOfferingArmedAt { get; set; }
+
         public DateTimeOffset? PeaceOfferingHoldUntil { get; set; }
+
+        // Auto-resume flag: the front-door kill switch paused the defender and owes it a resume.
+        public bool FrontDoorPausedDefender { get; set; }
+
+        // The night window (keyed by its end date) whose one-and-only OFF command was already sent.
+        public string? NightShutdownLastOffWindowKey { get; set; }
 
         // On-forever protection: when the current continuous cooling run started, and the active
         // rest window that stops an unreachable target from keeping the AC on for 24 hours.

@@ -267,7 +267,7 @@
             <div class="ops-apology__bow" aria-hidden="true">❆</div>
             <div class="ops-apology__title">WE ARE SO, SO SORRY</div>
             <div class="ops-apology__line">The defenders are bowing as deeply as tiny snowflakes can bow.</div>
-            <div class="ops-apology__line">The AC has been eased up <strong>+1.0 °C</strong> immediately as a peace gesture.</div>
+            <div class="ops-apology__line">@(_apologyAuto ? "The upset was detected automatically — nobody needed to press anything." : "The AC has been eased up ") @(_apologyAuto ? "" : "+1.0 °C immediately as a peace gesture.")</div>
             <div class="ops-apology__line">All corrections are <strong>stopped for 2 hours</strong>. The thermostat is yours.</div>
             <div class="ops-apology__line ops-apology__line--small">The anger model has recorded this hour as sensitive — the defenders will be more hands-off at this time from now on. Please forgive us. 🙇</div>
         </div>
@@ -531,10 +531,13 @@
     }
 
     private bool _apologyVisible;
+    private bool _apologyAuto;
+    private DateTimeOffset? _lastAutoApologyUntil;
 
     private async Task BrotherMad()
     {
         _apologyVisible = true;
+        _apologyAuto = false;
         StateHasChanged();
         await RunThermostatAction(
             () => Defender.ApplyEmergencyProtocolAsync("brother-mad", CancellationToken.None),
@@ -619,6 +622,18 @@
         if (!_targetDirty && Snapshot is not null)
         {
             _targetInput = Snapshot.TargetTemperatureCelsius;
+        }
+
+        // The rage detector fired: show the apologetic overlay without anyone pressing anything.
+        if (Snapshot?.Emergency is { Active: true } emergency
+            && emergency.Protocol.Contains("auto", StringComparison.OrdinalIgnoreCase)
+            && emergency.Until is { } until
+            && until != _lastAutoApologyUntil)
+        {
+            _lastAutoApologyUntil = until;
+            _apologyVisible = true;
+            _apologyAuto = true;
+            _ = HideApologyAfterDelayAsync();
         }
 
         InvokeAsync(StateHasChanged);

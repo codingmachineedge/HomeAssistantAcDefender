@@ -75,6 +75,8 @@ tests.StepperNeverSnapsTheWallAndWalksBothWaysTowardMyTemp();
 tests.PeaceOfferingConcedesUpwardOnAppRaiseThenStandsDown();
 tests.CoolingRestStopsAnUnreachableTargetFromRunningForever();
 tests.BrotherMadProtocolStandsDownForTwoHours();
+tests.AutoBrotherMadFiresOnRageWithoutAnyButton();
+tests.StandDownParkingRaisesOnlyWhenAppropriate();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -1073,6 +1075,71 @@ internal sealed class DefenderSetPointRegressionTests
         if (store.TryBeginCoolingRest(satisfiedReading, DateTimeOffset.UtcNow, out _, out _, out _))
         {
             throw new InvalidOperationException("A room at target must not trigger a rest; the AC stops naturally.");
+        }
+    }
+
+    public void AutoBrotherMadFiresOnRageWithoutAnyButton()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        // One big angry raise (>= 2.0 C) triggers the auto-apology on its own.
+        store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "idle", null, []));
+        store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 26.5, "cool", "idle", null, []));
+        var snapshot = store.GetSnapshot();
+        if (!snapshot.Emergency.Active || !snapshot.Emergency.Protocol.Contains("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("A single big raise must trigger the automatic brother-mad apology.");
+        }
+
+        if (!snapshot.DefenderEnabled)
+        {
+            throw new InvalidOperationException("The auto-apology stands down corrections but must not fully pause the defender.");
+        }
+
+        // Touch-burst variant: three external changes inside the window on a fresh store.
+        using var fixture2 = DefenderStoreFixture.Create();
+        var store2 = fixture2.Store;
+        store2.SetTarget(23.0);
+        store2.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "idle", null, []));
+        store2.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 23.5, "cool", "idle", null, []));
+        store2.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 24.0, "cool", "idle", null, []));
+        store2.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 24.5, "cool", "idle", null, []));
+        var burst = store2.GetSnapshot();
+        if (!burst.Emergency.Active || !burst.Emergency.Protocol.Contains("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Three quick external touches must trigger the automatic brother-mad apology.");
+        }
+    }
+
+    public void StandDownParkingRaisesOnlyWhenAppropriate()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        // Cool mode with a low setpoint: park at 28.
+        var cool = new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "idle", null, []);
+        if (!store.TryGetStandDownPark(cool, out var park))
+        {
+            throw new InvalidOperationException("Standing down in cool mode with a low setpoint must park the thermostat.");
+        }
+
+        AssertEqual(28.0, park, "The default park setpoint is 28.0 C.");
+
+        // Already above the park value: leave it alone (never lower).
+        var warm = new ThermostatReading("climate.dining_room", 24.0, 29.0, "cool", "idle", null, []);
+        if (store.TryGetStandDownPark(warm, out _))
+        {
+            throw new InvalidOperationException("Parking must never lower a setpoint that is already above the park value.");
+        }
+
+        // Mode off: nothing to park (never turn the unit on).
+        var off = new ThermostatReading("climate.dining_room", 24.0, 23.0, "off", "off", null, []);
+        if (store.TryGetStandDownPark(off, out _))
+        {
+            throw new InvalidOperationException("Parking must not touch a unit that is off.");
         }
     }
 

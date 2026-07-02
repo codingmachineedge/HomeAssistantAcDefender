@@ -2,6 +2,7 @@
 @implements IDisposable
 @inject DefenderStateProvider State
 @inject DefenderStateStore StateStore
+@inject AcDefenderService Defender
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -318,7 +319,7 @@
     private string MasterBtnClass => DefenderIsEnabled ? "ops-master__btn" : "ops-master__btn ops-master__btn--off";
     private string MasterHelp => DefenderIsEnabled ? "The guard post is awake and caffeinated." : "Paused. Tap to wake the tiny guard shift.";
 
-    private void ToggleDefender()
+    private async Task ToggleDefender()
     {
         var enable = !DefenderIsEnabled;
         var gate = StateStore.TryBeginWebsiteCommand(enable ? "turn defender on" : "pause defender", bypassDebounce: true);
@@ -332,6 +333,22 @@
         StateStore.SetDefenderEnabled(enable);
         State.Refresh();
         Snackbar.Add(enable ? "Defender turned on." : "Defender paused. The real thermostat can be turned off from Controls.", Severity.Info);
+
+        if (!enable)
+        {
+            try
+            {
+                if (await Defender.ParkThermostatForStandDownAsync(CancellationToken.None) is { } parked)
+                {
+                    State.Refresh();
+                    Snackbar.Add(parked, Severity.Info);
+                }
+            }
+            catch
+            {
+                // Parking is best-effort; a Home Assistant hiccup must not block standing down.
+            }
+        }
     }
 
     // ---------- dramatic alert banner ----------

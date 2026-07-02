@@ -356,13 +356,27 @@
 
         var turnOff = await DialogService.ShowMessageBoxAsync(
             "Turn off the real thermostat too?",
-            "The defender is paused now. Do you also want to send a real Home Assistant command to turn the thermostat off?",
+            "The defender is paused now. Turn the thermostat fully off, or leave it on parked at the stand-down setpoint so it barely runs?",
             yesText: "Turn thermostat off",
-            cancelText: "Leave thermostat on");
+            cancelText: "Leave on (parked)");
 
         if (turnOff == true)
         {
             await TurnThermostatOff();
+            return;
+        }
+
+        try
+        {
+            if (await Defender.ParkThermostatForStandDownAsync(CancellationToken.None) is { } parked)
+            {
+                State.Refresh();
+                Snackbar.Add(parked, Severity.Info);
+            }
+        }
+        catch
+        {
+            // Parking is best-effort; a Home Assistant hiccup must not block standing down.
         }
     }
 

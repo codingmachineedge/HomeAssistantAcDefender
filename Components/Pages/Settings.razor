@@ -96,6 +96,24 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("auto apology rage brother mad detector foolproof adhd")) {
+                <MudExpansionPanel Text="Auto apology (rage detector)" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Detect upset automatically" Value="_autoBrotherMadEnabled" ValueChanged="@(v => SetDirty(v, x => _autoBrotherMadEnabled = x))" Help="Foolproof: a burst of thermostat touches or one big angry raise triggers the full brother-mad apology automatically — nobody has to remember a button." />
+                        <SettingInt Label="Touches to trigger" Value="_autoBrotherMadTouches" ValueChanged="@(v => SetDirty(v, x => _autoBrotherMadTouches = x))" Min="2" Max="20" Help="External thermostat changes within the window that count as rage." />
+                        <SettingInt Label="Window (minutes)" Value="_autoBrotherMadWindowMinutes" ValueChanged="@(v => SetDirty(v, x => _autoBrotherMadWindowMinutes = x))" Min="2" Max="120" Help="How close together the touches must be." />
+                        <SettingDouble Label="Big raise trigger (C)" Value="_autoBrotherMadBigRaiseCelsius" ValueChanged="@(v => SetDirty(v, x => _autoBrotherMadBigRaiseCelsius = x))" Min="0.5" Max="10" Step="0.5" Help="A single raise this large counts as rage on its own." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("stand down park 28 off save power unguarded")) {
+                <MudExpansionPanel Text="Stand-down parking" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Park the thermostat when the defender is turned off" Value="_standDownParkEnabled" ValueChanged="@(v => SetDirty(v, x => _standDownParkEnabled = x))" Help="Standing down raises the setpoint to the park value (cool mode, raise only) so the unguarded AC barely runs." />
+                        <SettingDouble Label="Park setpoint (C)" Value="_standDownParkSetPointCelsius" ValueChanged="@(v => SetDirty(v, x => _standDownParkSetPointCelsius = x))" Min="20" Max="30" Step="0.5" Help="Default 28." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("gentle stepping pace walk step gap fight slow")) {
                 <MudExpansionPanel Text="Gentle stepping" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -804,6 +822,12 @@
     private bool _coolingRestEnabled = true;
     private int _coolingRunMaxMinutes = 180;
     private int _coolingRestMinutes = 30;
+    private bool _standDownParkEnabled = true;
+    private double _standDownParkSetPointCelsius = 28.0;
+    private bool _autoBrotherMadEnabled = true;
+    private int _autoBrotherMadTouches = 3;
+    private int _autoBrotherMadWindowMinutes = 10;
+    private double _autoBrotherMadBigRaiseCelsius = 2.0;
     private bool _peaceOfferingEnabled = true;
     private double _peaceOfferingStepCelsius = 0.5;
     private int _peaceOfferingHoldMinutes = 20;
@@ -1099,6 +1123,12 @@
         _coolingRestEnabled = settings.CoolingRestEnabled;
         _coolingRunMaxMinutes = settings.CoolingRunMaxMinutes;
         _coolingRestMinutes = settings.CoolingRestMinutes;
+        _standDownParkEnabled = settings.StandDownParkEnabled;
+        _standDownParkSetPointCelsius = settings.StandDownParkSetPointCelsius;
+        _autoBrotherMadEnabled = settings.AutoBrotherMadEnabled;
+        _autoBrotherMadTouches = settings.AutoBrotherMadTouches;
+        _autoBrotherMadWindowMinutes = settings.AutoBrotherMadWindowMinutes;
+        _autoBrotherMadBigRaiseCelsius = settings.AutoBrotherMadBigRaiseCelsius;
         _peaceOfferingEnabled = settings.PeaceOfferingEnabled;
         _peaceOfferingStepCelsius = settings.PeaceOfferingStepCelsius;
         _peaceOfferingHoldMinutes = settings.PeaceOfferingHoldMinutes;
@@ -1641,7 +1671,13 @@
             _nightMinimumSetPointCelsius,
             _coolingRestEnabled,
             _coolingRunMaxMinutes,
-            _coolingRestMinutes);
+            _coolingRestMinutes,
+            _standDownParkEnabled,
+            _standDownParkSetPointCelsius,
+            _autoBrotherMadEnabled,
+            _autoBrotherMadTouches,
+            _autoBrotherMadWindowMinutes,
+            _autoBrotherMadBigRaiseCelsius);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);
