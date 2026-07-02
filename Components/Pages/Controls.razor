@@ -189,7 +189,7 @@
                 </MudSelect>
             </MudItem>
             <MudItem xs="12" md="5" Class="d-flex align-center">
-                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Error" OnClick="RunEmergencyProtocol" StartIcon="@Icons.Material.Filled.ReportProblem">Run emergency</MudButton>
+                <SlideToConfirm Label="@($"SLIDE TO RUN {SelectedEmergencyLabel.ToUpperInvariant()}")" ConfirmedLabel="EMERGENCY RUNNING" Glyph="⚠" OnConfirmed="RunEmergencyProtocol" />
             </MudItem>
         </MudGrid>
         @if (Snapshot?.Emergency.Active == true)
@@ -245,6 +245,7 @@
 
     private DefenderSnapshot? Snapshot => State.Snapshot;
     private string EmergencyProtocolHelp => EmergencyProtocols.FirstOrDefault(o => o.Value == _emergencyProtocol).Help ?? "Pick an emergency action.";
+    private string SelectedEmergencyLabel => EmergencyProtocols.FirstOrDefault(o => o.Value == _emergencyProtocol).Label ?? "emergency";
 
     private string EnforcerSubtitle => Snapshot?.Enforcer switch
     {

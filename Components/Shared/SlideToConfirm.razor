@@ -1,0 +1,61 @@
+@* Slide-to-confirm for emergency actions: drag the knob all the way right to fire. Built on a
+   native range input so it works with mouse and touch without any JS interop; releasing early
+   snaps back to zero. *@
+<div class="@RootClass">
+    <div class="slide-confirm__track">
+        <div class="slide-confirm__fill" style="width: @(_value)%"></div>
+        <span class="slide-confirm__label">@(_confirmed ? ConfirmedLabel : Label)</span>
+        <span class="slide-confirm__chevrons" aria-hidden="true"><span>›</span><span>›</span><span>›</span></span>
+        <span class="slide-confirm__knob" style="left: calc(@(_value)% * (100% - 46px) / 100%);" aria-hidden="true">@(_confirmed ? "✓" : Glyph)</span>
+        <input type="range" min="0" max="100" step="1" value="@_value"
+               @oninput="OnInput" @onchange="OnRelease"
+               aria-label="@Label" disabled="@(_confirmed || Disabled)" />
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = "SLIDE TO CONFIRM";
+    [Parameter] public string ConfirmedLabel { get; set; } = "CONFIRMED";
+    [Parameter] public string Glyph { get; set; } = "🚨";
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback OnConfirmed { get; set; }
+
+    private int _value;
+    private bool _confirmed;
+
+    private string RootClass => _confirmed ? "slide-confirm slide-confirm--done" : "slide-confirm";
+
+    private async Task OnInput(ChangeEventArgs e)
+    {
+        if (_confirmed || Disabled || !int.TryParse(e.Value?.ToString(), out var v))
+        {
+            return;
+        }
+
+        _value = Math.Clamp(v, 0, 100);
+        if (_value >= 96)
+        {
+            _confirmed = true;
+            _value = 100;
+            StateHasChanged();
+            await OnConfirmed.InvokeAsync();
+            _ = ResetAfterDelayAsync();
+        }
+    }
+
+    private void OnRelease()
+    {
+        if (!_confirmed)
+        {
+            _value = 0; // released early: snap back
+        }
+    }
+
+    private async Task ResetAfterDelayAsync()
+    {
+        await Task.Delay(2200);
+        _confirmed = false;
+        _value = 0;
+        await InvokeAsync(StateHasChanged);
+    }
+}

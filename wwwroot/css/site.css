@@ -1142,6 +1142,123 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 .ops-order-btn--brother .ops-order-btn__hint { color: var(--bad); opacity: 0.75; }
 .ops-order-btn--brother:hover .ops-order-btn__hint { color: #fff; }
 
+/* slide-to-confirm for emergency actions */
+@keyframes slideShimmer {
+    0% { background-position: -180px 0; }
+    100% { background-position: 180px 0; }
+}
+
+@keyframes chevronMarch {
+    0% { opacity: 0.15; transform: translateX(0); }
+    40% { opacity: 1; }
+    100% { opacity: 0.15; transform: translateX(7px); }
+}
+
+@keyframes knobGlow {
+    0%, 100% { box-shadow: 0 0 0 1px var(--bad), 0 0 10px rgba(255, 92, 71, 0.5); }
+    50% { box-shadow: 0 0 0 2px var(--bad), 0 0 22px rgba(255, 92, 71, 0.9); }
+}
+
+@keyframes confirmBurst {
+    0% { box-shadow: 0 0 0 0 rgba(61, 220, 151, 0.7); }
+    100% { box-shadow: 0 0 0 26px rgba(61, 220, 151, 0); }
+}
+
+.slide-confirm { width: 100%; }
+
+.slide-confirm__track {
+    position: relative;
+    height: 52px;
+    border: 2px solid var(--bad);
+    background: var(--panel2);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.slide-confirm__fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, rgba(255, 92, 71, 0.18), rgba(255, 92, 71, 0.42));
+    transition: width 0.08s linear;
+    pointer-events: none;
+}
+
+.slide-confirm__label {
+    position: relative;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.22em;
+    color: var(--bad);
+    background: linear-gradient(90deg, var(--bad) 30%, #ffffff 50%, var(--bad) 70%);
+    background-size: 180px 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: slideShimmer 2.2s linear infinite;
+    pointer-events: none;
+    padding-left: 34px;
+}
+
+.slide-confirm__chevrons { position: absolute; right: 14px; display: flex; gap: 2px; pointer-events: none; }
+
+.slide-confirm__chevrons span {
+    color: var(--bad);
+    font-size: 18px;
+    font-weight: 800;
+    animation: chevronMarch 1.1s ease infinite;
+}
+
+.slide-confirm__chevrons span:nth-child(2) { animation-delay: 0.18s; }
+.slide-confirm__chevrons span:nth-child(3) { animation-delay: 0.36s; }
+
+.slide-confirm__knob {
+    position: absolute;
+    top: 3px;
+    width: 42px;
+    height: 42px;
+    background: var(--panel);
+    border: 2px solid var(--bad);
+    border-radius: 4px;
+    display: grid;
+    place-items: center;
+    font-size: 17px;
+    animation: knobGlow 1.6s ease infinite;
+    pointer-events: none;
+    transition: left 0.08s linear;
+}
+
+.slide-confirm__track input[type="range"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: grab;
+    margin: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    touch-action: none;
+}
+
+.slide-confirm__track input[type="range"]:active { cursor: grabbing; }
+.slide-confirm__track input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 46px; height: 52px; }
+.slide-confirm__track input[type="range"]::-moz-range-thumb { width: 46px; height: 52px; border: none; background: transparent; }
+
+.slide-confirm--done .slide-confirm__track {
+    border-color: var(--good);
+    animation: confirmBurst 0.7s ease;
+}
+
+.slide-confirm--done .slide-confirm__fill { background: linear-gradient(90deg, rgba(61, 220, 151, 0.25), rgba(61, 220, 151, 0.5)); width: 100% !important; }
+.slide-confirm--done .slide-confirm__label { animation: none; background: none; -webkit-text-fill-color: var(--good); color: var(--good); }
+.slide-confirm--done .slide-confirm__knob { border-color: var(--good); color: var(--good); animation: none; left: calc(100% - 46px) !important; }
+.slide-confirm--done .slide-confirm__chevrons { display: none; }
+
 /* very apologetic overlay */
 @keyframes apologyBow {
     0%, 100% { transform: rotate(0deg) translateY(0); }

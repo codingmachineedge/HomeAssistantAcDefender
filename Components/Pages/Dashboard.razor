@@ -248,11 +248,10 @@
                         <span class="ops-order-btn__label">ALL CONTROLS</span>
                         <span class="ops-order-btn__hint">STN-06 →</span>
                     </a>
-                    <button class="ops-order-btn ops-order-btn--brother" @onclick="BrotherMad">
-                        <span aria-hidden="true">🚨</span>
-                        <span class="ops-order-btn__label">BROTHER MAD</span>
-                        <span class="ops-order-btn__hint">apologize + stand down 2h</span>
-                    </button>
+                    <div style="margin-top: 4px;">
+                        <div class="ops-panel__label" style="color: var(--bad); margin-bottom: 5px;">🚨 BROTHER MAD — apologize + stand down 2h</div>
+                        <SlideToConfirm Label="SLIDE TO APOLOGIZE" ConfirmedLabel="APOLOGY SENT 🙇" Glyph="🚨" OnConfirmed="BrotherMad" />
+                    </div>
                 </div>
             </div>
         </div>
