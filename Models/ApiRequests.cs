@@ -241,4 +241,8 @@ public sealed record SettingsRequest(
     bool? EnforcerRequirePresence = null,
     bool? EnforcerNotifyEnabled = null,
     bool? EnforcerUseLearning = null,
-    bool? WebsiteCommandDebounceEnabled = null);
+    bool? WebsiteCommandDebounceEnabled = null,
+    bool? NightShutdownEnabled = null,
+    string? NightShutdownStartTime = null,
+    string? NightShutdownEndTime = null,
+    double? NightShutdownOutdoorBelowCelsius = null);

@@ -415,6 +415,26 @@ public sealed class DefenderStateStore
             state.Settings.PresenceEntityIds = request.PresenceEntityIds?.Trim() ?? string.Empty;
             state.Settings.DefenderRunsContinuously = true;
 
+            if (request.NightShutdownEnabled is { } nightShutdownEnabled)
+            {
+                state.Settings.NightShutdownEnabled = nightShutdownEnabled;
+            }
+
+            if (request.NightShutdownStartTime is { } nightStart && TryParseHourMinute(nightStart, out _))
+            {
+                state.Settings.NightShutdownStartTime = nightStart.Trim();
+            }
+
+            if (request.NightShutdownEndTime is { } nightEnd && TryParseHourMinute(nightEnd, out _))
+            {
+                state.Settings.NightShutdownEndTime = nightEnd.Trim();
+            }
+
+            if (request.NightShutdownOutdoorBelowCelsius is { } nightOutdoor)
+            {
+                state.Settings.NightShutdownOutdoorBelowCelsius = Math.Round(Math.Clamp(nightOutdoor, 0.0, 40.0), 1);
+            }
+
             if (request.WebsiteCommandDebounceEnabled is { } websiteDebounceEnabled)
             {
                 state.Settings.WebsiteCommandDebounceEnabled = websiteDebounceEnabled;
@@ -833,6 +853,88 @@ public sealed class DefenderStateStore
             SaveState();
             return CreateSnapshot();
         }
+    }
+
+    /// <summary>
+    /// Night shutdown: inside the configured window (container-local Toronto time) with the outdoor
+    /// temperature below the threshold, the defender turns the AC off ONCE (on window entry) and
+    /// then stands down completely — no cool-mode restore, no corrections, no enforcer. Someone
+    /// turning the AC back on mid-window is respected. Returns true while the worker should idle.
+    /// </summary>
+    public bool TryBeginNightShutdown(ThermostatReading reading, DateTimeOffset now, out DateTimeOffset? until, out string message, out bool turnOff)
+    {
+        lock (gate)
+        {
+            until = null;
+            message = string.Empty;
+            turnOff = false;
+
+            var s = state.Settings;
+            var inWindow = s.NightShutdownEnabled
+                && TryParseHourMinute(s.NightShutdownStartTime, out var startMinutes)
+                && TryParseHourMinute(s.NightShutdownEndTime, out var endMinutes)
+                && startMinutes != endMinutes
+                && IsInMinuteWindow(now, startMinutes, endMinutes);
+
+            // The outdoor check is a safeguard against shutting down on a genuinely hot night. An
+            // unknown outdoor reading keeps the AC running rather than blindly turning it off.
+            var outdoorOk = state.Weather?.OutdoorTemperatureCelsius is { } outdoor
+                && outdoor < s.NightShutdownOutdoorBelowCelsius;
+
+            if (!inWindow || !outdoorOk)
+            {
+                if (state.NightShutdownActive)
+                {
+                    state.NightShutdownActive = false;
+                    AddEvent("info", !inWindow
+                        ? "Night shutdown window ended; normal guard duty resumes."
+                        : $"Outdoor rose to {state.Weather?.OutdoorTemperatureCelsius:0.0} C during the night window; cooling is allowed again.");
+                    SaveState();
+                }
+
+                return false;
+            }
+
+            until = NextWindowEnd(now, TryParseHourMinute(s.NightShutdownEndTime, out var end) ? end : 480);
+            var modeOff = string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase);
+            if (!state.NightShutdownActive)
+            {
+                state.NightShutdownActive = true;
+                turnOff = !modeOff;
+                AddEvent("info", $"Night shutdown ({s.NightShutdownStartTime}-{s.NightShutdownEndTime}, outdoor {state.Weather?.OutdoorTemperatureCelsius:0.0} C < {s.NightShutdownOutdoorBelowCelsius:0.0} C): AC off, defenders standing down.");
+                if (turnOff)
+                {
+                    RecordPendingThermostatCommand(
+                        commandedSetPointCelsius: null,
+                        commandedHvacMode: "off",
+                        commandedFanMode: null,
+                        commandSourceKind: "night-shutdown",
+                        commandSourceLabel: "Night shutdown",
+                        commandSourceDetail: "The night shutdown window started with cool outdoor air; AC Defender turned the AC off to save power.");
+                    state.LastCommand = $"Home Assistant {reading.EntityId} thermostat turned off for the night shutdown window.";
+                }
+            }
+
+            message = $"Night shutdown until {s.NightShutdownEndTime}: AC stays off while it is {state.Weather?.OutdoorTemperatureCelsius:0.0} C outside. Turning it back on manually is respected.";
+            state.UpdatedAt = now;
+            SaveState();
+            return true;
+        }
+    }
+
+    private static bool IsInMinuteWindow(DateTimeOffset now, int startMinutes, int endMinutes)
+    {
+        var minutes = now.ToLocalTime().Hour * 60 + now.ToLocalTime().Minute;
+        return startMinutes < endMinutes
+            ? minutes >= startMinutes && minutes < endMinutes
+            : minutes >= startMinutes || minutes < endMinutes;
+    }
+
+    private static DateTimeOffset NextWindowEnd(DateTimeOffset now, int endMinutes)
+    {
+        var local = now.ToLocalTime();
+        var end = new DateTimeOffset(local.Year, local.Month, local.Day, endMinutes / 60, endMinutes % 60, 0, local.Offset);
+        return end <= local ? end.AddDays(1) : end;
     }
 
     public DefenderSnapshot RecordComfortReadings(
@@ -4366,7 +4468,7 @@ public sealed class DefenderStateStore
                 ClearRemoteSettling("Upstairs comfort took over, so remote settling reset.");
                 ClearCoolingRunway("Upstairs comfort took over, so cooling runway reset.");
                 ClearComfortCompromise("Upstairs comfort took over, so comfort compromise reset.");
-                AddEvent("warning", $"Upstairs comfort guard is temporarily cooling toward {comfortTarget:0.0} C; your target stays {state.TargetTemperatureCelsius:0.0} C.");
+                AddEvent("warning", $"Upstairs comfort guard is boosting cooling toward your {comfortTarget:0.0} C — never below the temp you want.");
             }
 
             state.ComfortStatus = BuildComfortStatus();
@@ -4391,14 +4493,11 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>
-    /// The temperature the defender actually cools toward right now. Equals the user's target
-    /// unless the upstairs comfort override is active, in which case the lower comfort target
-    /// wins for as long as (and only as long as) the override holds. Callers must hold the gate.
+    /// The temperature the defender cools toward. The user's "temp I want" is a hard floor — the
+    /// upstairs comfort override adds urgency (cooldown bypass) but may never cool below it.
+    /// Callers must hold the gate.
     /// </summary>
-    private double EffectiveTargetTemperatureLocked() =>
-        state.UpstairsComfortOverrideActive
-            ? Math.Round(Math.Min(state.TargetTemperatureCelsius, state.Settings.UpstairsComfortTargetCelsius), 1)
-            : state.TargetTemperatureCelsius;
+    private double EffectiveTargetTemperatureLocked() => state.TargetTemperatureCelsius;
 
     public DefenderSettings GetSettings()
     {
@@ -4424,6 +4523,9 @@ public sealed class DefenderStateStore
             var now = DateTimeOffset.UtcNow;
             var target = CalculateComfortMemoryTarget(currentTemperatureCelsius, now);
             target = CalculateComfortCompromiseTarget(target, currentTemperatureCelsius, now);
+            // HARD FLOOR: the user's "temp I want" is the MINIMUM the defender may ever command.
+            // No guard, learned offset, boost, or comfort override is allowed to cool below it.
+            target = Math.Max(target, state.TargetTemperatureCelsius);
             if (currentTemperatureCelsius <= target + options.TemperatureToleranceCelsius)
             {
                 ResetCoolingDefenderStep();
@@ -9126,6 +9228,10 @@ public sealed class DefenderStateStore
         // Identity of the schedule rule whose target was last applied, so a schedule only sets the
         // target once when its window starts. A manual target change inside the window then sticks.
         public string? LastAppliedScheduleKey { get; set; }
+
+        // True while the night-shutdown window is holding the AC off; used for edge events and so
+        // the off command is sent only once per window (manual re-enables are respected).
+        public bool NightShutdownActive { get; set; }
 
         public bool DefenderEnabled { get; set; } = true;
 

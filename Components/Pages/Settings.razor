@@ -52,6 +52,20 @@
     @* ───────────── Automation ───────────── *@
     <SectionCard Title="Automation" Help="Schedule, weather activation, cooldown, cool restore, conflict quiet, and weather drift.">
         <MudExpansionPanels MultiExpansion="true" Class="setting-panels">
+            @if (Show("night shutdown off overnight sleep window outdoor cheap power")) {
+                <MudExpansionPanel Text="Night shutdown" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Turn the AC off overnight" Value="_nightShutdownEnabled" ValueChanged="@(v => SetDirty(v, x => _nightShutdownEnabled = x))" Help="During the window below, if it is cool outside, the defender turns the AC off once and stands down completely. Turning it back on manually is respected." />
+                        <MudItem xs="6" sm="3">
+                            <MudTextField T="string" Value="_nightShutdownStartTime" ValueChanged="@(v => SetDirty(v, x => _nightShutdownStartTime = x))" Label="From (HH:mm)" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="6" sm="3">
+                            <MudTextField T="string" Value="_nightShutdownEndTime" ValueChanged="@(v => SetDirty(v, x => _nightShutdownEndTime = x))" Label="Until (HH:mm)" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <SettingDouble Label="Only when outdoor below (C)" Value="_nightShutdownOutdoorBelowCelsius" ValueChanged="@(v => SetDirty(v, x => _nightShutdownOutdoorBelowCelsius = x))" Min="0" Max="40" Step="0.5" Help="Safety valve: on a hot night the AC keeps running. Unknown outdoor also keeps it running." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("website debounce buttons rest command spam")) {
                 <MudExpansionPanel Text="Website debounce" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -693,6 +707,10 @@
     private string _registrationCode = "";
     private bool _scheduleEnabled;
     private bool _websiteCommandDebounceEnabled;
+    private bool _nightShutdownEnabled;
+    private string _nightShutdownStartTime = "01:00";
+    private string _nightShutdownEndTime = "08:00";
+    private double _nightShutdownOutdoorBelowCelsius = 24.0;
     private string _weatherActivationMode = "always";
     private int _baseCooldownSeconds = 45;
     private int _maxCooldownSeconds = 600;
@@ -976,6 +994,10 @@
         var settings = snapshot.Settings;
         _scheduleEnabled = settings.ScheduleEnabled;
         _websiteCommandDebounceEnabled = settings.WebsiteCommandDebounceEnabled;
+        _nightShutdownEnabled = settings.NightShutdownEnabled;
+        _nightShutdownStartTime = settings.NightShutdownStartTime;
+        _nightShutdownEndTime = settings.NightShutdownEndTime;
+        _nightShutdownOutdoorBelowCelsius = settings.NightShutdownOutdoorBelowCelsius;
         _weatherActivationMode = settings.WeatherActivationMode;
         _baseCooldownSeconds = settings.BaseCooldownSeconds;
         _maxCooldownSeconds = settings.MaxCooldownSeconds;
@@ -1503,7 +1525,11 @@
             _enforcerRequirePresence,
             _enforcerNotifyEnabled,
             _enforcerUseLearning,
-            _websiteCommandDebounceEnabled);
+            _websiteCommandDebounceEnabled,
+            _nightShutdownEnabled,
+            _nightShutdownStartTime,
+            _nightShutdownEndTime,
+            _nightShutdownOutdoorBelowCelsius);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

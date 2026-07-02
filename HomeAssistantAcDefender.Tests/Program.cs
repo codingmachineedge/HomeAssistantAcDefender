@@ -69,6 +69,7 @@ tests.EnforcerConsumesTrainedInterferenceModel();
 tests.AppliedTargetPersistsAcrossStoreReloads();
 tests.InvalidLoadedTargetFallsBackToConfiguredDefault();
 tests.UserTargetSurvivesUpstairsComfortOverride();
+tests.NightShutdownTurnsAcOffOnceAndStandsDown();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -101,8 +102,9 @@ internal sealed class DefenderSetPointRegressionTests
         var store = fixture.Store;
         store.SetTarget(24.0);
 
-        // Upstairs turns hot (default hot threshold 24.0, comfort target 22.0): the guard must cool
-        // toward 22 WITHOUT rewriting the user's stored 24.0 target.
+        // Upstairs turns hot (default hot threshold 24.0): the guard adds urgency but must NOT
+        // rewrite the user's stored 24.0 target and must NEVER cool below it — the user's
+        // "temp I want" is a hard floor for every commanded setpoint.
         store.RecordComfortReadings(
             [new TemperatureSensorReading("sensor.master_bedroom", "Master bedroom", 27.0, "27.0")],
             []);
@@ -112,22 +114,28 @@ internal sealed class DefenderSetPointRegressionTests
             throw new InvalidOperationException("Upstairs comfort guard should be active while upstairs is hot.");
         }
 
-        AssertEqual(22.0, comfort.EffectiveTargetCelsius, "While upstairs is hot the guard cools toward the comfort target.");
+        AssertEqual(24.0, comfort.EffectiveTargetCelsius, "The cooling goal is always the user's own target — never lower.");
         AssertEqual(24.0, store.GetTargetTemperature(), "The comfort guard must never rewrite the user's target.");
 
-        var during = store.CalculateExpectedSetPoint(23.0, "cooling");
-        if (during >= 23.0)
+        // Warm room walk-down: every commanded setpoint must stay at or above the user's 24.0.
+        for (var i = 0; i < 12; i++)
         {
-            throw new InvalidOperationException($"With the comfort override active, a 23.0 C room should still get cooling below the room, got {during:0.0} C.");
+            var setPoint = store.CalculateExpectedSetPoint(26.0, "idle");
+            if (setPoint < 24.0)
+            {
+                throw new InvalidOperationException($"The defender commanded {setPoint:0.0} C, below the user's 24.0 C floor.");
+            }
         }
 
-        // Upstairs cools back off: the override lifts on its own and the user's 24.0 rules again.
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(23.0, "cooling"), "A room already below the user's target gets the target itself, no over-cooling.");
+
+        // Upstairs cools back off: the override lifts on its own and nothing changed underneath.
         store.RecordComfortReadings(
             [new TemperatureSensorReading("sensor.master_bedroom", "Master bedroom", 23.0, "23.0")],
             []);
         store.ApplyComfortRules();
         AssertEqual(24.0, store.GetTargetTemperature(), "The user's target must be untouched after the override lifts.");
-        AssertEqual(24.0, store.CalculateExpectedSetPoint(23.0, "cooling"), "A 23.0 C room is satisfied again once the goal is back at the user's 24.0 C.");
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(23.0, "cooling"), "A 23.0 C room is satisfied once the room is below the user's 24.0 C.");
     }
 
     public void InvalidLoadedTargetFallsBackToConfiguredDefault()
@@ -909,6 +917,51 @@ internal sealed class DefenderSetPointRegressionTests
         if (second.Snapshot.WebsiteCommandDebounce.Active)
         {
             throw new InvalidOperationException("With debounce off, no debounce window may be armed.");
+        }
+    }
+
+    public void NightShutdownTurnsAcOffOnceAndStandsDown()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        var s = store.GetSettings();
+        s.NightShutdownEnabled = true;
+        s.NightShutdownStartTime = "01:00";
+        s.NightShutdownEndTime = "08:00";
+        s.NightShutdownOutdoorBelowCelsius = 24.0;
+        SetRuntimeProperty(store, "Settings", s);
+
+        store.RecordWeatherReading(new WeatherReading("weather.home", 20.0, "clear"));
+
+        var night = new DateTimeOffset(DateTime.Now.Date.AddHours(2)); // 02:00 local
+        var coolReading = new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "cooling", null, []);
+
+        if (!store.TryBeginNightShutdown(coolReading, night, out _, out _, out var turnOff) || !turnOff)
+        {
+            throw new InvalidOperationException("Entering the night window with a cool outdoor reading must trigger a single AC-off command.");
+        }
+
+        // Someone turns the AC back on mid-window: respected — no second off command, but still standing down.
+        if (!store.TryBeginNightShutdown(coolReading, night.AddMinutes(10), out _, out _, out var secondOff) || secondOff)
+        {
+            throw new InvalidOperationException("The off command must be sent only once per window; manual re-enables are respected.");
+        }
+
+        // Hot night: no shutdown at all.
+        store.RecordWeatherReading(new WeatherReading("weather.home", 27.0, "hot"));
+        if (store.TryBeginNightShutdown(coolReading, night.AddMinutes(20), out _, out _, out _))
+        {
+            throw new InvalidOperationException("A hot night (outdoor above the threshold) must keep the AC available.");
+        }
+
+        // Outside the window: normal duty.
+        store.RecordWeatherReading(new WeatherReading("weather.home", 20.0, "clear"));
+        var morning = new DateTimeOffset(DateTime.Now.Date.AddHours(9)); // 09:00 local
+        if (store.TryBeginNightShutdown(coolReading, morning, out _, out _, out _))
+        {
+            throw new InvalidOperationException("Night shutdown must not hold outside its window.");
         }
     }
 

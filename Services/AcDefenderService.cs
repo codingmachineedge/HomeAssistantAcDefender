@@ -75,6 +75,19 @@ public sealed class AcDefenderService
                 return;
             }
 
+            // Night shutdown: cheap cool night = AC off and everyone stands down. Runs before the
+            // enforcer and cool-mode restore so nothing turns the unit back on during the window.
+            if (stateStore.TryBeginNightShutdown(reading, DateTimeOffset.UtcNow, out var nightUntil, out var nightMessage, out var nightTurnOff))
+            {
+                if (nightTurnOff)
+                {
+                    await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
+                }
+
+                stateStore.SetNextAction(nightMessage, nightUntil);
+                return;
+            }
+
             // Desired-State Enforcer: the assertive layer that makes the owner's chosen state win. When it
             // acts (or holds), it short-circuits the cycle; when Inactive it falls through to the stealth
             // pipeline unchanged.

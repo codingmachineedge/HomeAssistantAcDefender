@@ -695,6 +695,17 @@ public sealed class DefenderSettings
     // the 120s rest between website thermostat commands can switch it on in Standing Orders.
     public bool WebsiteCommandDebounceEnabled { get; set; }
 
+    // Night shutdown: during the window (Toronto time) the defender turns the AC OFF and stands
+    // down completely, as long as the outdoor temperature is below the threshold. If someone turns
+    // the AC back on mid-window the defender respects it (the off command is sent once, on entry).
+    public bool NightShutdownEnabled { get; set; }
+
+    public string NightShutdownStartTime { get; set; } = "01:00";
+
+    public string NightShutdownEndTime { get; set; } = "08:00";
+
+    public double NightShutdownOutdoorBelowCelsius { get; set; } = 24.0;
+
     public bool ScheduleEnabled { get; set; }
 
     public string WeatherActivationMode { get; set; } = "always";
