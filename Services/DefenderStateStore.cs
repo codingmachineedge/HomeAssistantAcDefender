@@ -51,6 +51,32 @@ public sealed class DefenderStateStore
         rivalScheduleBlocks = RivalScheduleWatch.Parse(this.options.RivalScheduleBlocks);
         stateFilePath = ResolveStatePath(this.options.StateFilePath, environment.ContentRootPath);
         state = LoadState();
+        SeedBudgetSettingsFromOptionsOnce();
+    }
+
+    // The budget knobs started life in appsettings (DefenderOptions) and moved to the editable
+    // Settings page. Seed the settings ONCE from the options so existing configs carry over, then
+    // the UI owns them — a config file change never silently overwrites what the user set in the UI.
+    private void SeedBudgetSettingsFromOptionsOnce()
+    {
+        lock (gate)
+        {
+            if (state.Settings.ElectricityBudgetSettingsInitialized)
+            {
+                return;
+            }
+
+            state.Settings.ElectricityBudgetSettingsInitialized = true;
+            state.Settings.ElectricityBudgetEnabled = options.ElectricityBudgetEnabled;
+            state.Settings.ElectricityMonthlyBudgetDollars = Math.Max(0.0, options.ElectricityMonthlyBudgetDollars);
+            state.Settings.ElectricityBudgetAggressiveness = Math.Clamp(options.ElectricityBudgetAggressiveness, 0.0, 1.0);
+            state.Settings.ElectricityBudgetMaxSetpointOffsetCelsius = Math.Clamp(options.ElectricityBudgetMaxSetpointOffsetCelsius, 0.0, 5.0);
+            state.Settings.ElectricityBudgetSafetyMaxCelsius = options.ElectricityBudgetSafetyMaxCelsius;
+            // Historical default: options-era budgeting paced on the sensor-based all-in line. The
+            // stale-sensor fallback below keeps that reliable even when Alectra is down.
+            state.Settings.ElectricityBudgetBasis = "all-in";
+            SaveState();
+        }
     }
 
     public DefenderSnapshot GetSnapshot()
@@ -479,6 +505,38 @@ public sealed class DefenderStateStore
             if (request.NightCoolingBudgetMinutes is { } nightBudget)
             {
                 state.Settings.NightCoolingBudgetMinutes = Math.Clamp(nightBudget, 0, 420);
+            }
+
+            // Budget-preferring control: every value is clamped so a bad UI/API payload can never
+            // produce an unsafe configuration (the safety maximum keeps a sane 24-32 C range).
+            if (request.ElectricityBudgetEnabled is { } budgetEnabled)
+            {
+                state.Settings.ElectricityBudgetEnabled = budgetEnabled;
+            }
+
+            if (request.ElectricityMonthlyBudgetDollars is { } budgetDollars)
+            {
+                state.Settings.ElectricityMonthlyBudgetDollars = Math.Clamp(budgetDollars, 0.0, 10000.0);
+            }
+
+            if (request.ElectricityBudgetAggressiveness is { } budgetAggressiveness)
+            {
+                state.Settings.ElectricityBudgetAggressiveness = Math.Clamp(budgetAggressiveness, 0.0, 1.0);
+            }
+
+            if (request.ElectricityBudgetMaxSetpointOffsetCelsius is { } budgetMaxOffset)
+            {
+                state.Settings.ElectricityBudgetMaxSetpointOffsetCelsius = Math.Clamp(budgetMaxOffset, 0.0, 5.0);
+            }
+
+            if (request.ElectricityBudgetSafetyMaxCelsius is { } budgetSafetyMax)
+            {
+                state.Settings.ElectricityBudgetSafetyMaxCelsius = Math.Clamp(budgetSafetyMax, 24.0, 32.0);
+            }
+
+            if (request.ElectricityBudgetBasis is { } budgetBasis)
+            {
+                state.Settings.ElectricityBudgetBasis = NormalizeBudgetBasis(budgetBasis);
             }
 
             if (request.AutoBrotherMadEnabled is { } autoMadEnabled)
@@ -1574,30 +1632,55 @@ public sealed class DefenderStateStore
         return Math.Clamp(elapsedDays / daysInMonth, 0.0, 1.0);
     }
 
+    // The all-in basis needs live Alectra power samples; consider the sensor stale after this long.
+    private static readonly TimeSpan BudgetSensorFreshWindow = TimeSpan.FromMinutes(15);
+
+    // True while the Alectra power sensor is actually feeding the whole-house tracker.
+    private bool ElectricitySensorFresh(DateTimeOffset now) =>
+        state.ElectricityCostLastPowerKilowatts is not null
+        && state.ElectricityCostLastSampleAt is { } lastAt
+        && now - lastAt <= BudgetSensorFreshWindow;
+
+    // Which spend line the budget paces on RIGHT NOW. The chosen basis is a setting; reliability
+    // rule: "all-in" (whole-house, sensor-based) automatically falls back to "ac-estimate" (assumed
+    // load × static Alectra TOU prices, sensor-free) while the Alectra sensor is stale — the budget
+    // must never silently pace on a flatlined number.
+    private (string EffectiveBasis, double MonthToDate) ResolveBudgetBasis(DateTimeOffset now)
+    {
+        var wantsAllIn = string.Equals(state.Settings.ElectricityBudgetBasis, "all-in", StringComparison.OrdinalIgnoreCase);
+        if (wantsAllIn && ElectricitySensorFresh(now))
+        {
+            return ("all-in", ApplyAllInFactors(state.ElectricityAllInSubtotalMonthCad));
+        }
+
+        return (wantsAllIn ? "ac-estimate (sensor stale)" : "ac-estimate", state.AcEstimatedCostMonthCad);
+    }
+
     // Core budget evaluation shared by the control path and the snapshot. Returns the bounded warmer
     // setpoint offset (°C, ≥ 0) plus the numbers behind it. The offset is zero when the budget is off,
     // when spend is at/under the pro-rated pace, or when the room is at/above the safety maximum (that
     // guardrail always wins so dangerous heat is cooled regardless of budget).
     private BudgetEvaluation EvaluateBudget(double currentRoomTemperatureCelsius, DateTimeOffset now)
     {
+        var settings = state.Settings;
         var local = now.ToLocalTime().DateTime;
-        var budget = Math.Max(0.0, options.ElectricityMonthlyBudgetDollars);
+        var budget = Math.Max(0.0, settings.ElectricityMonthlyBudgetDollars);
         var fraction = MonthElapsedFraction(local);
         var proRatedTarget = budget * fraction;
-        var monthToDate = ApplyAllInFactors(state.ElectricityAllInSubtotalMonthCad);
+        var (effectiveBasis, monthToDate) = ResolveBudgetBasis(now);
         var projected = fraction > 0.001 ? monthToDate / fraction : 0.0;
         var overUnder = monthToDate - proRatedTarget;
 
-        if (!options.ElectricityBudgetEnabled || budget <= 0)
+        if (!settings.ElectricityBudgetEnabled || budget <= 0)
         {
-            return new BudgetEvaluation(0, false, false, proRatedTarget, monthToDate, projected, overUnder);
+            return new BudgetEvaluation(0, false, false, proRatedTarget, monthToDate, projected, overUnder, effectiveBasis);
         }
 
-        var safetyMax = options.ElectricityBudgetSafetyMaxCelsius;
+        var safetyMax = settings.ElectricityBudgetSafetyMaxCelsius;
         var safetyOverride = safetyMax > 0 && currentRoomTemperatureCelsius >= safetyMax;
         if (safetyOverride || overUnder <= 0)
         {
-            return new BudgetEvaluation(0, overUnder > 0, safetyOverride, proRatedTarget, monthToDate, projected, overUnder);
+            return new BudgetEvaluation(0, overUnder > 0, safetyOverride, proRatedTarget, monthToDate, projected, overUnder, effectiveBasis);
         }
 
         // How far over pace, as a fraction of the pro-rated target (capped at 100% over).
@@ -1610,10 +1693,10 @@ public sealed class DefenderStateStore
             TouPeriod.MidPeak => 0.7,
             _ => 0.35,
         };
-        var aggressiveness = Math.Clamp(options.ElectricityBudgetAggressiveness, 0.0, 1.0);
-        var maxOffset = Math.Clamp(options.ElectricityBudgetMaxSetpointOffsetCelsius, 0.0, 5.0);
+        var aggressiveness = Math.Clamp(settings.ElectricityBudgetAggressiveness, 0.0, 1.0);
+        var maxOffset = Math.Clamp(settings.ElectricityBudgetMaxSetpointOffsetCelsius, 0.0, 5.0);
         var offset = maxOffset * aggressiveness * pressure * periodWeight;
-        return new BudgetEvaluation(Math.Round(offset, 2), true, false, proRatedTarget, monthToDate, projected, overUnder);
+        return new BudgetEvaluation(Math.Round(offset, 2), true, false, proRatedTarget, monthToDate, projected, overUnder, effectiveBasis);
     }
 
     /// <summary>Budget status for a given room temperature and time; used by tests and callers.</summary>
@@ -1633,31 +1716,38 @@ public sealed class DefenderStateStore
 
     private ElectricityBudgetSnapshot BuildBudgetSnapshot(double roomTemperature, DateTimeOffset now)
     {
+        var settings = state.Settings;
         var evaluation = EvaluateBudget(roomTemperature, now);
-        var status = !options.ElectricityBudgetEnabled
+        var basisNote = $" (pacing on {evaluation.EffectiveBasis})";
+        var status = !settings.ElectricityBudgetEnabled
             ? "Budget-preferring control is off."
             : evaluation.SafetyOverride
-                ? $"Safety override: room {roomTemperature:0.0} C is at/above the {options.ElectricityBudgetSafetyMaxCelsius:0.0} C guardrail, so cooling ignores the budget."
+                ? $"Safety override: room {roomTemperature:0.0} C is at/above the {settings.ElectricityBudgetSafetyMaxCelsius:0.0} C guardrail, so cooling ignores the budget."
                 : evaluation.Offset > 0.01
-                    ? $"Over pace by {Cad(evaluation.OverUnder)}; easing cooling +{evaluation.Offset:0.0} C to spend less."
+                    ? $"Over pace by {Cad(evaluation.OverUnder)}; easing cooling +{evaluation.Offset:0.0} C to spend less{basisNote}."
                     : evaluation.OverBudget
-                        ? "Over pace, but holding normal comfort (off-peak or low pressure)."
-                        : $"Under pace by {Cad(-evaluation.OverUnder)}; normal comfort.";
+                        ? $"Over pace, but holding normal comfort (off-peak or low pressure){basisNote}."
+                        : $"Under pace by {Cad(-evaluation.OverUnder)}; normal comfort{basisNote}.";
 
         return new ElectricityBudgetSnapshot(
-            options.ElectricityBudgetEnabled,
-            Math.Round(Math.Max(0.0, options.ElectricityMonthlyBudgetDollars), 2),
+            settings.ElectricityBudgetEnabled,
+            Math.Round(Math.Max(0.0, settings.ElectricityMonthlyBudgetDollars), 2),
             Math.Round(evaluation.MonthToDate, 2),
             Math.Round(evaluation.ProRatedTarget, 2),
             Math.Round(evaluation.Projected, 2),
             evaluation.OverBudget,
             Math.Round(evaluation.OverUnder, 2),
             evaluation.Offset,
-            Math.Clamp(options.ElectricityBudgetAggressiveness, 0.0, 1.0),
-            options.ElectricityBudgetSafetyMaxCelsius,
+            Math.Clamp(settings.ElectricityBudgetAggressiveness, 0.0, 1.0),
+            settings.ElectricityBudgetSafetyMaxCelsius,
             evaluation.SafetyOverride,
-            status);
+            status,
+            NormalizeBudgetBasis(settings.ElectricityBudgetBasis),
+            evaluation.EffectiveBasis);
     }
+
+    private static string NormalizeBudgetBasis(string? basis) =>
+        string.Equals(basis, "all-in", StringComparison.OrdinalIgnoreCase) ? "all-in" : "ac-estimate";
 
     private static string Cad(double value) => value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("en-CA"));
 
@@ -1668,7 +1758,8 @@ public sealed class DefenderStateStore
         double ProRatedTarget,
         double MonthToDate,
         double Projected,
-        double OverUnder);
+        double OverUnder,
+        string EffectiveBasis);
 
     private bool IsInNightWindow(DateTimeOffset now) =>
         TryParseHourMinute(state.Settings.NightShutdownStartTime, out var nightStart)
@@ -5562,8 +5653,8 @@ public sealed class DefenderStateStore
             var budgetOffset = EvaluateBudget(currentTemperatureCelsius, now).Offset;
             if (budgetOffset > 0)
             {
-                var safetyCeiling = options.ElectricityBudgetSafetyMaxCelsius > 0
-                    ? options.ElectricityBudgetSafetyMaxCelsius
+                var safetyCeiling = state.Settings.ElectricityBudgetSafetyMaxCelsius > 0
+                    ? state.Settings.ElectricityBudgetSafetyMaxCelsius
                     : double.MaxValue;
                 target = Math.Min(target + budgetOffset, safetyCeiling);
             }
@@ -10485,7 +10576,14 @@ public sealed class DefenderStateStore
             EnforcerEndTime = settings.EnforcerEndTime,
             EnforcerRequirePresence = settings.EnforcerRequirePresence,
             EnforcerNotifyEnabled = settings.EnforcerNotifyEnabled,
-            EnforcerUseLearning = settings.EnforcerUseLearning
+            EnforcerUseLearning = settings.EnforcerUseLearning,
+            ElectricityBudgetEnabled = settings.ElectricityBudgetEnabled,
+            ElectricityMonthlyBudgetDollars = settings.ElectricityMonthlyBudgetDollars,
+            ElectricityBudgetAggressiveness = settings.ElectricityBudgetAggressiveness,
+            ElectricityBudgetMaxSetpointOffsetCelsius = settings.ElectricityBudgetMaxSetpointOffsetCelsius,
+            ElectricityBudgetSafetyMaxCelsius = settings.ElectricityBudgetSafetyMaxCelsius,
+            ElectricityBudgetBasis = settings.ElectricityBudgetBasis,
+            ElectricityBudgetSettingsInitialized = settings.ElectricityBudgetSettingsInitialized
         };
     }
 

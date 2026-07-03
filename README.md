@@ -673,11 +673,24 @@ so it splits cleanly across the total/today/this-month buckets.
 
 ### Budget-preferring control
 
-Set a monthly all-in budget and AC Defender will *prefer* staying inside it. Each cycle it compares
-month-to-date all-in spend against a pro-rated target (`budget × fraction-of-month-elapsed`). When
-running **ahead** of that pace it raises the effective cooling target by a bounded amount — biased
-toward the expensive on/mid-peak periods (so it prefers running when power is cheap) — which widens
-the deadband and reduces runtime to spend less. When **under** pace it relaxes back to normal comfort.
+Set a monthly budget and AC Defender will *prefer* staying inside it. **Turn it on and tune it in the
+UI: Settings → Electricity budget** (switch, monthly dollars, aggressiveness, max warmer offset,
+safety max, and the pacing basis). The appsettings values below only seed these settings once on
+first start; after that the UI owns them. Each cycle the defender compares month-to-date spend
+against a pro-rated target (`budget × fraction-of-month-elapsed`). When running **ahead** of that
+pace it raises the effective cooling target by a bounded amount — biased toward the expensive
+on/mid-peak periods (so it prefers running when power is cheap) — which widens the deadband and
+reduces runtime to spend less. When **under** pace it relaxes back to normal comfort.
+
+**Pacing basis (reliability):** the budget can measure spend two ways —
+
+- `all-in` — the whole-house out-of-pocket line from the live Alectra power sensor.
+- `ac-estimate` — the sensor-free AC-only estimate (assumed amps×volts load × **static Alectra TOU
+  prices**), so budgeting works even when the Alectra integration is down.
+
+Choosing `all-in` is still safe: if no fresh Alectra power sample arrives for 15 minutes, the budget
+**automatically falls back** to the `ac-estimate` basis (shown as "ac-estimate (sensor stale)" on the
+Energy page's Monthly budget card) instead of silently pacing on a flatlined number.
 
 It is a **preference, not a cutoff**: the raise is capped by
 `ElectricityBudgetMaxSetpointOffsetCelsius`, and a **safety maximum room temperature**

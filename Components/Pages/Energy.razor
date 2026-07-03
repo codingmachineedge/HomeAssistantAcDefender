@@ -90,7 +90,7 @@
                     }
                     else if (!Budget.Enabled)
                     {
-                        <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">Budget-preferring control is off (Defender:ElectricityBudgetEnabled).</MudAlert>
+                        <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">Budget-preferring control is off — turn it on under Settings → Electricity budget.</MudAlert>
                     }
                 </SectionCard>
 
@@ -414,12 +414,13 @@
 
     private IReadOnlyList<MetricItem> BudgetMetrics =>
     [
-        new("Monthly budget", Cad(Budget.MonthlyBudgetCad), "Configured all-in electricity budget for the month."),
-        new("Spent this month", Cad(Budget.MonthToDateAllInCad), "Month-to-date all-in (out-of-pocket) spend."),
+        new("Monthly budget", Cad(Budget.MonthlyBudgetCad), "The preferred monthly spend set on the Settings page (Electricity budget)."),
+        new("Spent this month", Cad(Budget.MonthToDateAllInCad), $"Month-to-date spend on the effective basis ({Budget.EffectiveBasis})."),
         new("Pro-rated target", Cad(Budget.ProRatedTargetCad), "Budget × fraction of the month elapsed — the pace you should be at today."),
         new("Projected month-end", Cad(Budget.ProjectedMonthEndCad), "Simple projection: month-to-date spend extrapolated to the full month."),
         new("Over / under", (Budget.OverUnderCad >= 0 ? "+" : "") + Cad(Budget.OverUnderCad), "Positive means running ahead of (over) the pro-rated budget pace."),
         new("Cooling ease", $"+{Budget.CurrentSetpointOffsetCelsius:0.0} C", $"Current budget-driven warmer-setpoint offset. Safety guardrail: {Budget.SafetyMaxCelsius:0.0} C."),
+        new("Pacing basis", Budget.EffectiveBasis, "ac-estimate = AC-only static Alectra TOU prices (sensor-free); all-in = whole-house bill from the live Alectra sensor. All-in falls back to the estimate while the sensor is stale."),
     ];
 
     private string AlectraStatusTitle => PeakPower.Holding

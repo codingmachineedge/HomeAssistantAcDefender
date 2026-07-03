@@ -153,6 +153,24 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("electricity budget monthly dollars spend pace alectra tou basis estimate cost")) {
+                <MudExpansionPanel Text="Electricity budget" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Prefer staying inside a monthly budget" Value="_electricityBudgetEnabled" ValueChanged="@(v => SetDirty(v, x => _electricityBudgetEnabled = x))" Help="Each cycle the defender compares month-to-date spend against the pro-rated budget. Over pace: the room may run slightly warmer (biased to expensive on/mid-peak hours) to spend less. It is a preference, never a cutoff — the safety maximum below always wins, and it never cools below my temp." />
+                        <SettingDouble Label="Monthly budget ($)" Value="_electricityMonthlyBudgetDollars" ValueChanged="@(v => SetDirty(v, x => _electricityMonthlyBudgetDollars = x))" Min="0" Max="10000" Step="5" Help="The preferred monthly spend, measured on the basis selected below. Watch progress on the Energy page's Monthly budget card." />
+                        <SettingDouble Label="Aggressiveness (0–1)" Value="_electricityBudgetAggressiveness" ValueChanged="@(v => SetDirty(v, x => _electricityBudgetAggressiveness = x))" Min="0" Max="1" Step="0.1" Help="How hard to lean when over pace: 0 = never bias, 1 = full bias up to the max offset." />
+                        <SettingDouble Label="Max warmer offset (C)" Value="_electricityBudgetMaxSetpointOffsetCelsius" ValueChanged="@(v => SetDirty(v, x => _electricityBudgetMaxSetpointOffsetCelsius = x))" Min="0" Max="5" Step="0.5" Help="Hard cap on how much warmer the budget may let the room run." />
+                        <SettingDouble Label="Safety max room temp (C)" Value="_electricityBudgetSafetyMaxCelsius" ValueChanged="@(v => SetDirty(v, x => _electricityBudgetSafetyMaxCelsius = x))" Min="24" Max="32" Step="0.5" Help="At/above this room temperature the budget is ignored entirely and cooling always wins." />
+                        <MudItem xs="12" sm="8">
+                            <MudSelect T="string" Value="_electricityBudgetBasis" ValueChanged="@(v => SetDirty(v, x => _electricityBudgetBasis = x))" Label="Spend measured as" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem T="string" Value="@("ac-estimate")">AC-only estimate — static Alectra TOU prices, no sensor needed</MudSelectItem>
+                                <MudSelectItem T="string" Value="@("all-in")">Whole-house all-in bill — live Alectra sensor (auto-falls back to the estimate while the sensor is down)</MudSelectItem>
+                            </MudSelect>
+                            <MudText Class="helper-text">Reliability rule: if the whole-house basis has no fresh Alectra power sample for 15 minutes, the budget automatically paces on the AC-only static-price estimate instead of silently stalling.</MudText>
+                        </MudItem>
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("schedule weather activation always automation")) {
                 <MudExpansionPanel Text="Schedule & weather" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -821,6 +839,12 @@
     private int _coolingStepMinimumGapSeconds = 60;
     private double _nightMinimumSetPointCelsius = 23.0;
     private int _nightCoolingBudgetMinutes = 90;
+    private bool _electricityBudgetEnabled;
+    private double _electricityMonthlyBudgetDollars = 150.0;
+    private double _electricityBudgetAggressiveness = 0.5;
+    private double _electricityBudgetMaxSetpointOffsetCelsius = 1.5;
+    private double _electricityBudgetSafetyMaxCelsius = 26.0;
+    private string _electricityBudgetBasis = "ac-estimate";
     private bool _coolingRestEnabled = true;
     private int _coolingRunMaxMinutes = 180;
     private int _coolingRestMinutes = 30;
@@ -1123,6 +1147,12 @@
         _coolingStepMinimumGapSeconds = settings.CoolingStepMinimumGapSeconds;
         _nightMinimumSetPointCelsius = settings.NightMinimumSetPointCelsius;
         _nightCoolingBudgetMinutes = settings.NightCoolingBudgetMinutes;
+        _electricityBudgetEnabled = settings.ElectricityBudgetEnabled;
+        _electricityMonthlyBudgetDollars = settings.ElectricityMonthlyBudgetDollars;
+        _electricityBudgetAggressiveness = settings.ElectricityBudgetAggressiveness;
+        _electricityBudgetMaxSetpointOffsetCelsius = settings.ElectricityBudgetMaxSetpointOffsetCelsius;
+        _electricityBudgetSafetyMaxCelsius = settings.ElectricityBudgetSafetyMaxCelsius;
+        _electricityBudgetBasis = string.Equals(settings.ElectricityBudgetBasis, "all-in", StringComparison.OrdinalIgnoreCase) ? "all-in" : "ac-estimate";
         _coolingRestEnabled = settings.CoolingRestEnabled;
         _coolingRunMaxMinutes = settings.CoolingRunMaxMinutes;
         _coolingRestMinutes = settings.CoolingRestMinutes;
@@ -1681,7 +1711,13 @@
             _autoBrotherMadTouches,
             _autoBrotherMadWindowMinutes,
             _autoBrotherMadBigRaiseCelsius,
-            _nightCoolingBudgetMinutes);
+            _nightCoolingBudgetMinutes,
+            _electricityBudgetEnabled,
+            _electricityMonthlyBudgetDollars,
+            _electricityBudgetAggressiveness,
+            _electricityBudgetMaxSetpointOffsetCelsius,
+            _electricityBudgetSafetyMaxCelsius,
+            _electricityBudgetBasis);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

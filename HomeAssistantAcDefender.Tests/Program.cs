@@ -88,6 +88,7 @@ tests.TouUnknownTimeFallsBackToOnPeakMostExpensive();
 tests.ElectricityCostAccumulatesByTouRateWithDailyAndMonthlyResets();
 tests.AllInCostAppliesOntarioRebateBeforeHst();
 tests.BudgetPrefersLessSpendWhenOverPaceAndYieldsToSafetyMax();
+tests.BudgetBasisPacesOnAcEstimateAndFallsBackWhenSensorStale();
 tests.BudgetOffsetRaisesEffectiveTargetInSetPointCalculation();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 tests.RivalScheduleBlocksResolveAcrossMidnightDaysAndTolerance();
@@ -1865,9 +1866,14 @@ internal sealed class DefenderSetPointRegressionTests
 
             // Mid-July on-peak afternoon: 2026-07-16 12:00 → month is exactly half elapsed (15.5/31).
             var onPeakNoon = new DateTimeOffset(new DateTime(2026, 7, 16, 12, 0, 0, DateTimeKind.Local));
+            var offPeakNightTime = new DateTimeOffset(new DateTime(2026, 7, 16, 22, 0, 0, DateTimeKind.Local));
 
             // Seed $80 month-to-date against a $50 pro-rated target ($100 × 0.5) → $30 over pace.
+            // Mark the Alectra sensor FRESH so the seeded all-in basis is what paces the budget
+            // (a stale sensor would reliably fall back to the AC-only estimate instead).
             SetRuntimeProperty(store, "ElectricityAllInSubtotalMonthCad", 80.0);
+            SetRuntimeProperty(store, "ElectricityCostLastSampleAt", offPeakNightTime);
+            SetRuntimeProperty(store, "ElectricityCostLastPowerKilowatts", 2.0);
 
             var over = store.GetBudgetStatus(24.0, onPeakNoon);
             if (!over.OverBudget || Math.Abs(over.ProRatedTargetCad - 50.0) > 0.5 || Math.Abs(over.OverUnderCad - 30.0) > 0.5)
@@ -1883,8 +1889,7 @@ internal sealed class DefenderSetPointRegressionTests
             }
 
             // Same over-pace state during OFF-peak must ease LESS (prefer running when power is cheap).
-            var offPeakNight = new DateTimeOffset(new DateTime(2026, 7, 16, 22, 0, 0, DateTimeKind.Local));
-            var offPeak = store.GetBudgetStatus(24.0, offPeakNight);
+            var offPeak = store.GetBudgetStatus(24.0, offPeakNightTime);
             if (offPeak.CurrentSetpointOffsetCelsius >= over.CurrentSetpointOffsetCelsius || offPeak.CurrentSetpointOffsetCelsius <= 0)
             {
                 throw new InvalidOperationException($"Off-peak bias ({offPeak.CurrentSetpointOffsetCelsius:0.00} C) must be positive but smaller than the on-peak bias ({over.CurrentSetpointOffsetCelsius:0.00} C).");
@@ -1903,6 +1908,88 @@ internal sealed class DefenderSetPointRegressionTests
             if (under.OverBudget || under.CurrentSetpointOffsetCelsius > 0.001)
             {
                 throw new InvalidOperationException($"Under the pro-rated pace the budget must not ease cooling, got +{under.CurrentSetpointOffsetCelsius:0.00} C.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public void BudgetBasisPacesOnAcEstimateAndFallsBackWhenSensorStale()
+    {
+        var options = new DefenderOptions
+        {
+            ElectricityBudgetEnabled = true,
+            ElectricityMonthlyBudgetDollars = 100.0,
+            ElectricityBudgetAggressiveness = 1.0,
+            ElectricityBudgetMaxSetpointOffsetCelsius = 2.0,
+            ElectricityBudgetSafetyMaxCelsius = 26.0,
+            ElectricityOntarioRebatePercent = 0.0,
+            ElectricityHstPercent = 0.0,
+        };
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var onPeakNoon = new DateTimeOffset(new DateTime(2026, 7, 16, 12, 0, 0, DateTimeKind.Local));
+            using (var fixture = DefenderStoreFixture.Create(contentRoot, options))
+            {
+                var store = fixture.Store;
+
+                // Seed DIFFERENT spend on each line so the basis in use is unambiguous.
+                SetRuntimeProperty(store, "ElectricityAllInSubtotalMonthCad", 40.0); // whole-house line
+                SetRuntimeProperty(store, "AcEstimatedCostMonthCad", 80.0);          // AC-only static-TOU line
+
+                // Options-era seeding chooses the all-in basis, but the Alectra sensor has NO fresh
+                // sample here — reliability rule: fall back to the AC-only estimate, never stall.
+                var stale = store.GetBudgetStatus(24.0, onPeakNoon);
+                if (!stale.EffectiveBasis.Contains("ac-estimate", StringComparison.Ordinal)
+                    || Math.Abs(stale.MonthToDateAllInCad - 80.0) > 0.5
+                    || stale.CurrentSetpointOffsetCelsius <= 0)
+                {
+                    throw new InvalidOperationException($"With a stale sensor the budget must pace on the AC estimate ($80 → over pace), got basis '{stale.EffectiveBasis}', month-to-date {stale.MonthToDateAllInCad:0.00}, offset {stale.CurrentSetpointOffsetCelsius:0.00}.");
+                }
+
+                // Fresh sensor: the chosen all-in basis takes over ($40 → under the $50 pace → no bias).
+                SetRuntimeProperty(store, "ElectricityCostLastSampleAt", onPeakNoon);
+                SetRuntimeProperty(store, "ElectricityCostLastPowerKilowatts", 2.0);
+                var fresh = store.GetBudgetStatus(24.0, onPeakNoon);
+                if (fresh.EffectiveBasis != "all-in"
+                    || Math.Abs(fresh.MonthToDateAllInCad - 40.0) > 0.5
+                    || fresh.CurrentSetpointOffsetCelsius > 0.001)
+                {
+                    throw new InvalidOperationException($"With a fresh sensor the all-in basis must lead ($40 → under pace), got basis '{fresh.EffectiveBasis}', month-to-date {fresh.MonthToDateAllInCad:0.00}, offset {fresh.CurrentSetpointOffsetCelsius:0.00}.");
+                }
+
+                // Explicitly choosing the AC-estimate basis ignores the sensor entirely.
+                var settings = store.GetSettings();
+                settings.ElectricityBudgetBasis = "ac-estimate";
+                settings.ElectricityMonthlyBudgetDollars = 120.0;
+                SetRuntimeProperty(store, "Settings", settings);
+                var estimate = store.GetBudgetStatus(24.0, onPeakNoon);
+                if (estimate.EffectiveBasis != "ac-estimate" || Math.Abs(estimate.MonthToDateAllInCad - 80.0) > 0.5)
+                {
+                    throw new InvalidOperationException($"The chosen ac-estimate basis must pace on the AC-only line, got basis '{estimate.EffectiveBasis}', month-to-date {estimate.MonthToDateAllInCad:0.00}.");
+                }
+
+                store.SetTarget(22.0); // any saving call persists the settings for the reload below
+            }
+
+            // Reliability across restarts: the UI-owned budget settings survive a reload and are NOT
+            // re-seeded from the (different) options values.
+            using (var reloaded = DefenderStoreFixture.Create(contentRoot, new DefenderOptions
+            {
+                ElectricityBudgetEnabled = false,
+                ElectricityMonthlyBudgetDollars = 999.0,
+            }))
+            {
+                var settings = reloaded.Store.GetSettings();
+                if (!settings.ElectricityBudgetEnabled
+                    || Math.Abs(settings.ElectricityMonthlyBudgetDollars - 120.0) > 0.001
+                    || settings.ElectricityBudgetBasis != "ac-estimate")
+                {
+                    throw new InvalidOperationException($"UI-owned budget settings must persist across restarts without re-seeding from options, got enabled={settings.ElectricityBudgetEnabled}, budget={settings.ElectricityMonthlyBudgetDollars}, basis={settings.ElectricityBudgetBasis}.");
+                }
             }
         }
         finally
@@ -1932,6 +2019,8 @@ internal sealed class DefenderSetPointRegressionTests
 
             var onPeakNoon = new DateTimeOffset(new DateTime(2026, 7, 16, 12, 0, 0, DateTimeKind.Local));
             SetRuntimeProperty(store, "ElectricityAllInSubtotalMonthCad", 80.0); // over pace → +1.2 C bias
+            SetRuntimeProperty(store, "ElectricityCostLastSampleAt", onPeakNoon); // sensor fresh → all-in basis holds
+            SetRuntimeProperty(store, "ElectricityCostLastPowerKilowatts", 2.0);
 
             // Room sitting at the user target: without the budget the defender is satisfied and holds the
             // wall at 22.0; the budget bias raises the effective target so it walks the wall UP to save.

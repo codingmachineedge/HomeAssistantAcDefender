@@ -260,4 +260,10 @@ public sealed record SettingsRequest(
     int? AutoBrotherMadTouches = null,
     int? AutoBrotherMadWindowMinutes = null,
     double? AutoBrotherMadBigRaiseCelsius = null,
-    int? NightCoolingBudgetMinutes = null);
+    int? NightCoolingBudgetMinutes = null,
+    bool? ElectricityBudgetEnabled = null,
+    double? ElectricityMonthlyBudgetDollars = null,
+    double? ElectricityBudgetAggressiveness = null,
+    double? ElectricityBudgetMaxSetpointOffsetCelsius = null,
+    double? ElectricityBudgetSafetyMaxCelsius = null,
+    string? ElectricityBudgetBasis = null);

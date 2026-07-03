@@ -762,7 +762,12 @@ public sealed record ElectricityBudgetSnapshot(
     double Aggressiveness,
     double SafetyMaxCelsius,
     bool SafetyOverrideActive,
-    string Status);
+    string Status,
+    // Which spend line paces the budget: the chosen basis ("all-in" sensor line or "ac-estimate"
+    // static-TOU line) and what is actually in effect right now (all-in falls back to the
+    // sensor-free estimate while the Alectra sensor is stale, so budgeting never silently stalls).
+    string Basis = "all-in",
+    string EffectiveBasis = "all-in");
 
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,
@@ -1351,6 +1356,35 @@ public sealed class DefenderSettings
     /// <summary>Use the trained interference/cadence models to smartly pace re-asserts (falls back to the
     /// static debounce/cooldown until the models have enough real data to be trained).</summary>
     public bool EnforcerUseLearning { get; set; } = true;
+
+    // ---- Budget-preferring control (editable from the Settings page; seeded from DefenderOptions
+    // the first time this settings object is created so existing appsettings values carry over). ----
+
+    /// <summary>Master switch for budget-preferring cooling. Off by default.</summary>
+    public bool ElectricityBudgetEnabled { get; set; }
+
+    /// <summary>Preferred monthly spend, interpreted against <see cref="ElectricityBudgetBasis"/>.</summary>
+    public double ElectricityMonthlyBudgetDollars { get; set; } = 150.0;
+
+    /// <summary>0 = no biasing, 1 = full biasing up to the max offset.</summary>
+    public double ElectricityBudgetAggressiveness { get; set; } = 0.5;
+
+    /// <summary>Cap on how much warmer the room may be allowed to run to stay on budget.</summary>
+    public double ElectricityBudgetMaxSetpointOffsetCelsius { get; set; } = 1.5;
+
+    /// <summary>Hard guardrail: at/above this room temperature the budget offset is dropped so heat is cooled.</summary>
+    public double ElectricityBudgetSafetyMaxCelsius { get; set; } = 26.0;
+
+    /// <summary>
+    /// What the month-to-date spend is measured against:
+    /// <c>all-in</c> = the whole-house out-of-pocket bill from the Alectra power sensor (needs the sensor);
+    /// <c>ac-estimate</c> = the sensor-free AC-only estimate (assumed load × static Alectra TOU prices),
+    /// so budgeting keeps working when the Alectra integration is down.
+    /// </summary>
+    public string ElectricityBudgetBasis { get; set; } = "ac-estimate";
+
+    /// <summary>Set once so the fields above are seeded from DefenderOptions exactly one time, then owned by the UI.</summary>
+    public bool ElectricityBudgetSettingsInitialized { get; set; }
 }
 
 public sealed class ScheduleEntry
