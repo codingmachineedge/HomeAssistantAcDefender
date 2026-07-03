@@ -44,6 +44,7 @@ public sealed class AcDefenderService
             {
                 return;
             }
+            await AccumulateElectricityCostAsync(cancellationToken);
             await RefreshPeakPowerStatusIfDueAsync(cancellationToken);
             await RefreshFrontDoorKillSwitchIfDueAsync(cancellationToken);
             await RefreshLearningIfDueAsync(cancellationToken);
@@ -471,6 +472,21 @@ public sealed class AcDefenderService
             // Retrain the ML models from already-accumulated data without a fresh history fetch, so the
             // trained models stay current (and populate promptly after a restart) between history runs.
             stateStore.TrainLearningModels(now);
+        }
+    }
+
+    // Sample the Alectra power sensor every cycle and accrue electricity cost at the current TOU rate.
+    // Independent of the Peak Power Saver guard so cost keeps tracking even when the guard is off.
+    private async Task AccumulateElectricityCostAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var powerKilowatts = await homeAssistantClient.GetUsagePowerKilowattsAsync(cancellationToken);
+            stateStore.RecordElectricityCostSample(powerKilowatts);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Electricity cost sample failed");
         }
     }
 

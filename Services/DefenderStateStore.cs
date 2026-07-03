@@ -1352,6 +1352,249 @@ public sealed class DefenderStateStore
         state.AcRuntimeLastWasCooling = string.Equals(reading.HvacAction, "cooling", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Builds the configured Alectra TOU rate table (commodity ¢/kWh plus the optional all-in factor)
+    /// from <see cref="DefenderOptions"/>, so the OEB rates can be updated without a code change.
+    /// </summary>
+    private TouRateTable BuildRateTable() => new(
+        options.ElectricityOnPeakCentsPerKwh,
+        options.ElectricityMidPeakCentsPerKwh,
+        options.ElectricityOffPeakCentsPerKwh,
+        options.ElectricityAllInMultiplier <= 0 ? 1.0 : options.ElectricityAllInMultiplier,
+        options.ElectricityAllInAdderCentsPerKwh);
+
+    /// <summary>
+    /// Records the latest Alectra power reading (kW) and accrues its cost. Sample the power sensor each
+    /// cycle; passing null (sensor missing) safely resets the interval so a gap is not billed later.
+    /// </summary>
+    public DefenderSnapshot RecordElectricityCostSample(double? powerKilowatts, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            AccumulateElectricityCost(powerKilowatts, nowOverride ?? DateTimeOffset.UtcNow);
+            state.UpdatedAt = DateTimeOffset.UtcNow;
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    // Cost accounting: integrate the power sensor (kW) over time into energy (kWh), price each interval
+    // at its Alectra TOU rate, and bank the dollars into today / this-month / lifetime buckets
+    // (Toronto-local rollover). Deltas are capped at 2 minutes so app downtime or missed polls never
+    // over-count. The interval is priced at the TOU period of its START (the last sample), which for a
+    // ~5s poll is effectively "now"; an unknown time falls back to On-Peak (most expensive).
+    private void AccumulateElectricityCost(double? powerKilowatts, DateTimeOffset now)
+    {
+        if (!options.ElectricityCostTrackingEnabled)
+        {
+            return;
+        }
+
+        var local = now.ToLocalTime();
+        var dayKey = local.ToString("yyyy-MM-dd");
+        var monthKey = local.ToString("yyyy-MM");
+        if (!string.Equals(state.ElectricityCostDayKey, dayKey, StringComparison.Ordinal))
+        {
+            state.ElectricityCostDayKey = dayKey;
+            state.ElectricityCostTodayCad = 0;
+            state.ElectricityEnergyTodayKwh = 0;
+            state.ElectricityAllInSubtotalTodayCad = 0;
+        }
+
+        if (!string.Equals(state.ElectricityCostMonthKey, monthKey, StringComparison.Ordinal))
+        {
+            state.ElectricityCostMonthKey = monthKey;
+            state.ElectricityCostMonthCad = 0;
+            state.ElectricityEnergyMonthKwh = 0;
+            state.ElectricityAllInSubtotalMonthCad = 0;
+        }
+
+        state.ElectricityCostTrackingSince ??= now;
+
+        if (state.ElectricityCostLastSampleAt is { } lastSample
+            && state.ElectricityCostLastPowerKilowatts is { } lastPowerKw)
+        {
+            var deltaSeconds = Math.Clamp((now - lastSample).TotalSeconds, 0, 120);
+            var deltaHours = deltaSeconds / 3600.0;
+            // Trapezoidal energy: average the two power samples across the interval.
+            var averageKw = powerKilowatts is { } currentKw ? (lastPowerKw + currentKw) / 2.0 : lastPowerKw;
+            var energyKwh = Math.Max(0, averageKw) * deltaHours;
+
+            var period = AlectraTouSchedule.GetPeriod(lastSample.ToLocalTime().DateTime);
+            var commodityCad = energyKwh * BuildRateTable().EffectiveCentsPerKwh(period) / 100.0;
+
+            // Pre-tax all-in subtotal for this interval: commodity + per-kWh delivery/regulatory + the
+            // fixed monthly service charge accrued over this slice of the month.
+            var deliveryVariableCad = energyKwh * Math.Max(0, options.ElectricityDeliveryVariableCentsPerKwh) / 100.0;
+            var regulatoryCad = energyKwh * Math.Max(0, options.ElectricityRegulatoryCentsPerKwh) / 100.0;
+            var secondsInMonth = DateTime.DaysInMonth(local.Year, local.Month) * 86400.0;
+            var fixedAccrualCad = Math.Max(0, options.ElectricityDeliveryFixedDollarsPerMonth) * deltaSeconds / secondsInMonth;
+            var preTaxSubtotalCad = commodityCad + deliveryVariableCad + regulatoryCad + fixedAccrualCad;
+
+            state.ElectricityEnergyTodayKwh += energyKwh;
+            state.ElectricityEnergyMonthKwh += energyKwh;
+            state.ElectricityEnergyLifetimeKwh += energyKwh;
+            state.ElectricityCostTodayCad += commodityCad;
+            state.ElectricityCostMonthCad += commodityCad;
+            state.ElectricityCostLifetimeCad += commodityCad;
+            state.ElectricityAllInSubtotalTodayCad += preTaxSubtotalCad;
+            state.ElectricityAllInSubtotalMonthCad += preTaxSubtotalCad;
+            state.ElectricityAllInSubtotalLifetimeCad += preTaxSubtotalCad;
+        }
+
+        state.ElectricityCostLastSampleAt = now;
+        state.ElectricityCostLastPowerKilowatts = powerKilowatts;
+    }
+
+    /// <summary>
+    /// Applies the all-in bill factors to a pre-tax subtotal: subtract the Ontario Electricity Rebate
+    /// (a percentage credit on the pre-tax subtotal) FIRST, then add HST — the Ontario bill ordering.
+    /// </summary>
+    private double ApplyAllInFactors(double preTaxSubtotalCad)
+    {
+        var oer = Math.Clamp(options.ElectricityOntarioRebatePercent, 0.0, 1.0);
+        var hst = Math.Max(0.0, options.ElectricityHstPercent);
+        return preTaxSubtotalCad * (1.0 - oer) * (1.0 + hst);
+    }
+
+    private ElectricityCostSnapshot CreateElectricityCostSnapshot()
+    {
+        var table = BuildRateTable();
+        // "Current" rate/period reflect now; a known local time is always determinable, so the fallback
+        // only triggers if the clock itself is unavailable.
+        var period = AlectraTouSchedule.GetPeriod(DateTimeOffset.UtcNow.ToLocalTime().DateTime, out var usedFallback);
+        return new ElectricityCostSnapshot(
+            options.ElectricityCostTrackingEnabled,
+            Math.Round(state.ElectricityCostLifetimeCad, 2),
+            Math.Round(state.ElectricityCostTodayCad, 2),
+            Math.Round(state.ElectricityCostMonthCad, 2),
+            Math.Round(state.ElectricityEnergyLifetimeKwh, 3),
+            Math.Round(state.ElectricityEnergyTodayKwh, 3),
+            Math.Round(state.ElectricityEnergyMonthKwh, 3),
+            AlectraTouSchedule.PeriodLabel(period),
+            Math.Round(table.EffectiveCentsPerKwh(period), 3),
+            usedFallback,
+            table.OnPeakCentsPerKwh,
+            table.MidPeakCentsPerKwh,
+            table.OffPeakCentsPerKwh,
+            table.AllInMultiplier,
+            table.AllInAdderCentsPerKwh,
+            state.ElectricityCostTrackingSince,
+            Math.Round(ApplyAllInFactors(state.ElectricityAllInSubtotalLifetimeCad), 2),
+            Math.Round(ApplyAllInFactors(state.ElectricityAllInSubtotalTodayCad), 2),
+            Math.Round(ApplyAllInFactors(state.ElectricityAllInSubtotalMonthCad), 2),
+            options.ElectricityDeliveryFixedDollarsPerMonth,
+            options.ElectricityDeliveryVariableCentsPerKwh,
+            options.ElectricityRegulatoryCentsPerKwh,
+            options.ElectricityOntarioRebatePercent,
+            options.ElectricityHstPercent);
+    }
+
+    // Fraction of the current local month elapsed at `local` (0 at the first instant of the 1st, → 1 at
+    // month end). Used to pro-rate the monthly budget across the days seen so far.
+    private static double MonthElapsedFraction(DateTime local)
+    {
+        var daysInMonth = DateTime.DaysInMonth(local.Year, local.Month);
+        var elapsedDays = (local.Day - 1) + local.TimeOfDay.TotalHours / 24.0;
+        return Math.Clamp(elapsedDays / daysInMonth, 0.0, 1.0);
+    }
+
+    // Core budget evaluation shared by the control path and the snapshot. Returns the bounded warmer
+    // setpoint offset (°C, ≥ 0) plus the numbers behind it. The offset is zero when the budget is off,
+    // when spend is at/under the pro-rated pace, or when the room is at/above the safety maximum (that
+    // guardrail always wins so dangerous heat is cooled regardless of budget).
+    private BudgetEvaluation EvaluateBudget(double currentRoomTemperatureCelsius, DateTimeOffset now)
+    {
+        var local = now.ToLocalTime().DateTime;
+        var budget = Math.Max(0.0, options.ElectricityMonthlyBudgetDollars);
+        var fraction = MonthElapsedFraction(local);
+        var proRatedTarget = budget * fraction;
+        var monthToDate = ApplyAllInFactors(state.ElectricityAllInSubtotalMonthCad);
+        var projected = fraction > 0.001 ? monthToDate / fraction : 0.0;
+        var overUnder = monthToDate - proRatedTarget;
+
+        if (!options.ElectricityBudgetEnabled || budget <= 0)
+        {
+            return new BudgetEvaluation(0, false, false, proRatedTarget, monthToDate, projected, overUnder);
+        }
+
+        var safetyMax = options.ElectricityBudgetSafetyMaxCelsius;
+        var safetyOverride = safetyMax > 0 && currentRoomTemperatureCelsius >= safetyMax;
+        if (safetyOverride || overUnder <= 0)
+        {
+            return new BudgetEvaluation(0, overUnder > 0, safetyOverride, proRatedTarget, monthToDate, projected, overUnder);
+        }
+
+        // How far over pace, as a fraction of the pro-rated target (capped at 100% over).
+        var pressure = Math.Clamp(overUnder / Math.Max(proRatedTarget, 0.01), 0.0, 1.0);
+        // Prefer holding off during the expensive periods: weight the bias by how costly "now" is.
+        var period = AlectraTouSchedule.GetPeriod(local);
+        var periodWeight = period switch
+        {
+            TouPeriod.OnPeak => 1.0,
+            TouPeriod.MidPeak => 0.7,
+            _ => 0.35,
+        };
+        var aggressiveness = Math.Clamp(options.ElectricityBudgetAggressiveness, 0.0, 1.0);
+        var maxOffset = Math.Clamp(options.ElectricityBudgetMaxSetpointOffsetCelsius, 0.0, 5.0);
+        var offset = maxOffset * aggressiveness * pressure * periodWeight;
+        return new BudgetEvaluation(Math.Round(offset, 2), true, false, proRatedTarget, monthToDate, projected, overUnder);
+    }
+
+    /// <summary>Budget status for a given room temperature and time; used by tests and callers.</summary>
+    public ElectricityBudgetSnapshot GetBudgetStatus(double roomTemperatureCelsius, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            return BuildBudgetSnapshot(roomTemperatureCelsius, now);
+        }
+    }
+
+    private ElectricityBudgetSnapshot CreateElectricityBudgetSnapshot()
+    {
+        var roomTemperature = state.HomeAssistantThermostat?.CurrentTemperatureCelsius ?? state.TargetTemperatureCelsius;
+        return BuildBudgetSnapshot(roomTemperature, DateTimeOffset.UtcNow);
+    }
+
+    private ElectricityBudgetSnapshot BuildBudgetSnapshot(double roomTemperature, DateTimeOffset now)
+    {
+        var evaluation = EvaluateBudget(roomTemperature, now);
+        var status = !options.ElectricityBudgetEnabled
+            ? "Budget-preferring control is off."
+            : evaluation.SafetyOverride
+                ? $"Safety override: room {roomTemperature:0.0} C is at/above the {options.ElectricityBudgetSafetyMaxCelsius:0.0} C guardrail, so cooling ignores the budget."
+                : evaluation.Offset > 0.01
+                    ? $"Over pace by {Cad(evaluation.OverUnder)}; easing cooling +{evaluation.Offset:0.0} C to spend less."
+                    : evaluation.OverBudget
+                        ? "Over pace, but holding normal comfort (off-peak or low pressure)."
+                        : $"Under pace by {Cad(-evaluation.OverUnder)}; normal comfort.";
+
+        return new ElectricityBudgetSnapshot(
+            options.ElectricityBudgetEnabled,
+            Math.Round(Math.Max(0.0, options.ElectricityMonthlyBudgetDollars), 2),
+            Math.Round(evaluation.MonthToDate, 2),
+            Math.Round(evaluation.ProRatedTarget, 2),
+            Math.Round(evaluation.Projected, 2),
+            evaluation.OverBudget,
+            Math.Round(evaluation.OverUnder, 2),
+            evaluation.Offset,
+            Math.Clamp(options.ElectricityBudgetAggressiveness, 0.0, 1.0),
+            options.ElectricityBudgetSafetyMaxCelsius,
+            evaluation.SafetyOverride,
+            status);
+    }
+
+    private static string Cad(double value) => value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("en-CA"));
+
+    private readonly record struct BudgetEvaluation(
+        double Offset,
+        bool OverBudget,
+        bool SafetyOverride,
+        double ProRatedTarget,
+        double MonthToDate,
+        double Projected,
+        double OverUnder);
+
     private bool IsInNightWindow(DateTimeOffset now) =>
         TryParseHourMinute(state.Settings.NightShutdownStartTime, out var nightStart)
         && TryParseHourMinute(state.Settings.NightShutdownEndTime, out var nightEnd)
@@ -5066,6 +5309,20 @@ public sealed class DefenderStateStore
             // No guard, learned offset, boost, or comfort override is allowed to cool below it.
             target = Math.Max(target, state.TargetTemperatureCelsius);
 
+            // BUDGET PREFERENCE: when month-to-date all-in spend is running ahead of the pro-rated
+            // budget, let the room run a little warmer (raise the effective target) to spend less —
+            // biased toward the expensive on/mid-peak periods. It only ever RAISES the target (never
+            // cools below the user's floor above) and is dropped entirely once the room reaches the
+            // safety maximum, so it is a preference the safety guardrail always overrides.
+            var budgetOffset = EvaluateBudget(currentTemperatureCelsius, now).Offset;
+            if (budgetOffset > 0)
+            {
+                var safetyCeiling = options.ElectricityBudgetSafetyMaxCelsius > 0
+                    ? options.ElectricityBudgetSafetyMaxCelsius
+                    : double.MaxValue;
+                target = Math.Min(target + budgetOffset, safetyCeiling);
+            }
+
             // Night minimum: during the night window nothing below this may be commanded, even if
             // the daytime target is lower. 0 disables the floor.
             if (state.Settings.NightMinimumSetPointCelsius > 0
@@ -7728,6 +7985,8 @@ public sealed class DefenderStateStore
         saved.NightShutdownActive = false;
         saved.AcRuntimeLastSampleAt = null; // downtime must not count as compressor runtime
         saved.NightCoolingLastSampleAt = null;
+        saved.ElectricityCostLastSampleAt = null; // downtime must not accrue electricity cost
+        saved.ElectricityCostLastPowerKilowatts = null;
 
         saved.Settings ??= new DefenderSettings();
         saved.Settings.MaximumNaturalDelaySeconds = Math.Max(
@@ -9046,7 +9305,9 @@ public sealed class DefenderStateStore
                 Math.Round(state.AcRuntimeSecondsToday / 3600.0, 2),
                 Math.Round(state.AcRuntimeSecondsMonth / 3600.0, 2),
                 Math.Round(state.AcRuntimeSecondsLifetime / 3600.0, 2),
-                state.AcRuntimeTrackingSince));
+                state.AcRuntimeTrackingSince),
+            CreateElectricityCostSnapshot(),
+            CreateElectricityBudgetSnapshot());
     }
 
     private void AddEvent(string level, string message)
@@ -9985,6 +10246,39 @@ public sealed class DefenderStateStore
         public DateTimeOffset? AcRuntimeTrackingSince { get; set; }
 
         public DateTimeOffset? AcRuntimeBackfilledAt { get; set; }
+
+        // Electricity-cost accounting (Alectra TOU), Toronto-local day/month rollover. Cost is in CAD $,
+        // energy in kWh. Deltas are capped so app downtime / missed polls never over-count.
+        public double ElectricityCostTodayCad { get; set; }
+
+        public string? ElectricityCostDayKey { get; set; }
+
+        public double ElectricityCostMonthCad { get; set; }
+
+        public string? ElectricityCostMonthKey { get; set; }
+
+        public double ElectricityCostLifetimeCad { get; set; }
+
+        public double ElectricityEnergyTodayKwh { get; set; }
+
+        public double ElectricityEnergyMonthKwh { get; set; }
+
+        public double ElectricityEnergyLifetimeKwh { get; set; }
+
+        // Pre-tax all-in subtotal buckets (commodity + delivery fixed accrual + delivery variable +
+        // regulatory), BEFORE the OER credit and HST. The OER/HST multipliers are applied at snapshot
+        // time so a mid-month rate change is reflected without re-deriving history.
+        public double ElectricityAllInSubtotalTodayCad { get; set; }
+
+        public double ElectricityAllInSubtotalMonthCad { get; set; }
+
+        public double ElectricityAllInSubtotalLifetimeCad { get; set; }
+
+        public DateTimeOffset? ElectricityCostLastSampleAt { get; set; }
+
+        public double? ElectricityCostLastPowerKilowatts { get; set; }
+
+        public DateTimeOffset? ElectricityCostTrackingSince { get; set; }
 
         // Night cooling budget accounting (per night window, keyed by window end date).
         public string? NightCoolingWindowKey { get; set; }

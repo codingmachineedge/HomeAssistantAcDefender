@@ -50,6 +50,49 @@
     <MudTabs Rounded="true" Elevation="0" Class="ops-tabs">
         <MudTabPanel Text="Overview" Icon="@Icons.Material.Filled.Dashboard">
             <MudStack Spacing="3" Class="mt-3">
+                <SectionCard Title="Electricity cost (Alectra TOU)"
+                             Subtitle="@CostSubtitle"
+                             Help="AC Defender integrates the Alectra power sensor over time and prices each interval at the current Alectra time-of-use rate. Totals are CAD dollars of the energy commodity portion only (no delivery, regulatory, rebate, or HST unless an all-in factor is configured).">
+                    <MudGrid Spacing="2" Class="mt-1">
+                        @foreach (var metric in CostMetrics)
+                        {
+                            <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
+                        }
+                    </MudGrid>
+                    <MudText Class="helper-text mt-3">@AllInNote</MudText>
+                    @if (Cost.UsingMostExpensiveFallback)
+                    {
+                        <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">The time-of-use period could not be determined, so the most expensive rate (On-Peak) is being assumed so cost is never under-estimated.</MudAlert>
+                    }
+                    @if (!Cost.Enabled)
+                    {
+                        <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">Electricity-cost tracking is turned off in configuration (Defender:ElectricityCostTrackingEnabled).</MudAlert>
+                    }
+                </SectionCard>
+
+                <SectionCard Title="Monthly budget"
+                             Subtitle="@Budget.Status"
+                             Help="AC Defender compares month-to-date all-in spend against a pro-rated budget and, when running ahead, lets the room run slightly warmer to spend less — biased to the expensive on/mid-peak periods. It is a preference: a safety maximum room temperature always overrides it so dangerous heat is still cooled.">
+                    <MudGrid Spacing="2" Class="mt-1">
+                        @foreach (var metric in BudgetMetrics)
+                        {
+                            <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
+                        }
+                    </MudGrid>
+                    @if (Budget.SafetyOverrideActive)
+                    {
+                        <MudAlert Class="mt-3" Severity="Severity.Error" Variant="Variant.Outlined">Safety override active: the room is at/above the guardrail temperature, so cooling is ignoring the budget.</MudAlert>
+                    }
+                    else if (Budget.Enabled && Budget.CurrentSetpointOffsetCelsius > 0.01)
+                    {
+                        <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">Over the pro-rated budget pace — easing cooling by +@Budget.CurrentSetpointOffsetCelsius.ToString("0.0") C to spend less.</MudAlert>
+                    }
+                    else if (!Budget.Enabled)
+                    {
+                        <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">Budget-preferring control is off (Defender:ElectricityBudgetEnabled).</MudAlert>
+                    }
+                </SectionCard>
+
                 <SectionCard Title="Energy overview"
                              Subtitle="Fast scan"
                              Help="Main usage numbers, bill status, and Alectra guard status in one small dashboard.">
@@ -269,6 +312,45 @@
         _usage?.AlectraHuiEntities ?? Array.Empty<UsageEntityReading>();
 
     private PeakPowerSaverSnapshot PeakPower => State.Snapshot.PeakPowerSaver;
+
+    private ElectricityCostSnapshot Cost => State.Snapshot.ElectricityCost
+        ?? new ElectricityCostSnapshot(false, 0, 0, 0, 0, 0, 0, "Off-Peak", 0, false, 0, 0, 0, 1, 0, null, 0, 0, 0, 0, 0, 0, 0.235, 0.13);
+
+    private ElectricityBudgetSnapshot Budget => State.Snapshot.ElectricityBudget
+        ?? new ElectricityBudgetSnapshot(false, 0, 0, 0, 0, false, 0, 0, 0.5, 26, false, "Budget-preferring control is off.");
+
+    private string CostSubtitle => Cost.TrackingSince is { } since
+        ? $"Since {Format.ToToronto(since):yyyy-MM-dd} · now {Cost.CurrentPeriod} @ {Cost.CurrentRateCentsPerKwh:0.###} c/kWh"
+        : "Waiting for the first power sample";
+
+    private static string Cad(double value) => value.ToString("C2", CultureInfo.GetCultureInfo("en-CA"));
+
+    private IReadOnlyList<MetricItem> CostMetrics =>
+    [
+        new("TOTAL (commodity)", Cad(Cost.TotalCad), $"All-time TOU energy-commodity cost since tracking began ({Cost.TotalKwh:0.###} kWh)."),
+        new("THIS MONTH (commodity)", Cad(Cost.MonthCad), $"Commodity cost so far this calendar month ({Cost.MonthKwh:0.###} kWh); resets on the 1st."),
+        new("TODAY (commodity)", Cad(Cost.TodayCad), $"Commodity cost so far today ({Cost.TodayKwh:0.###} kWh); resets at local midnight."),
+        new("TOTAL (all-in)", Cad(Cost.AllInTotalCad), "All-time out-of-pocket estimate: commodity + delivery + regulatory, less OER, plus HST."),
+        new("THIS MONTH (all-in)", Cad(Cost.AllInMonthCad), "Out-of-pocket estimate for this month so far, including delivery/regulatory/OER/HST."),
+        new("TODAY (all-in)", Cad(Cost.AllInTodayCad), "Out-of-pocket estimate for today so far, including delivery/regulatory/OER/HST."),
+        new("Current rate", $"{Cost.CurrentRateCentsPerKwh:0.###} c/kWh", $"{Cost.CurrentPeriod} rate right now. On {Cost.OnPeakCentsPerKwh:0.#} / Mid {Cost.MidPeakCentsPerKwh:0.#} / Off {Cost.OffPeakCentsPerKwh:0.#} c/kWh."),
+        new("TOU period", Cost.CurrentPeriod, "Current Alectra time-of-use period computed from Toronto local time (weekends and Ontario holidays are off-peak)."),
+    ];
+
+    private string AllInNote =>
+        $"All-in = (commodity + delivery + regulatory) × (1 − OER {Cost.OntarioRebatePercent:P1}) × (1 + HST {Cost.HstPercent:P0}). " +
+        $"Delivery ${Cost.DeliveryFixedDollarsPerMonth:0.##}/mo fixed + {Cost.DeliveryVariableCentsPerKwh:0.##} c/kWh, regulatory {Cost.RegulatoryCentsPerKwh:0.##} c/kWh. " +
+        "Delivery and regulatory numbers vary per customer — copy the exact values from your Alectra bill for a precise figure.";
+
+    private IReadOnlyList<MetricItem> BudgetMetrics =>
+    [
+        new("Monthly budget", Cad(Budget.MonthlyBudgetCad), "Configured all-in electricity budget for the month."),
+        new("Spent this month", Cad(Budget.MonthToDateAllInCad), "Month-to-date all-in (out-of-pocket) spend."),
+        new("Pro-rated target", Cad(Budget.ProRatedTargetCad), "Budget × fraction of the month elapsed — the pace you should be at today."),
+        new("Projected month-end", Cad(Budget.ProjectedMonthEndCad), "Simple projection: month-to-date spend extrapolated to the full month."),
+        new("Over / under", (Budget.OverUnderCad >= 0 ? "+" : "") + Cad(Budget.OverUnderCad), "Positive means running ahead of (over) the pro-rated budget pace."),
+        new("Cooling ease", $"+{Budget.CurrentSetpointOffsetCelsius:0.0} C", $"Current budget-driven warmer-setpoint offset. Safety guardrail: {Budget.SafetyMaxCelsius:0.0} C."),
+    ];
 
     private string AlectraStatusTitle => PeakPower.Holding
         ? "Alectra Hui says: hold the icy orders"

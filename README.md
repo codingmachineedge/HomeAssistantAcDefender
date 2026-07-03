@@ -514,6 +514,118 @@ person.me, device_tracker.phone
 
 If no presence entities are configured, the app auto-discovers `person.*` and `device_tracker.*`. When presence is required and no presence signal is found, the app assumes home for comfort rather than under-cooling.
 
+## Electricity Cost (Alectra TOU)
+
+AC Defender tracks the cost of the electricity it (and the rest of the house) uses. Every worker
+cycle it reads the configured Alectra power sensor (`HomeAssistant:UsagePowerEntityId`, normalized to
+kW), integrates it over time into energy (kWh), prices each interval at the current Alectra
+time-of-use rate, and accumulates three running totals — **TOTAL** (all-time since tracking began),
+**THIS MONTH** (resets on the 1st), and **TODAY** (resets at local midnight). Times use the
+container's local timezone (`America/Toronto`). Gaps/downtime are capped at two minutes per interval
+so a missed poll is never billed as hours of runtime. The counters survive restarts in
+`defender-state.json` and reset the "last sample" on load so downtime is not charged.
+
+The rate engine lives in [`Services/AlectraTouRates.cs`](Services/AlectraTouRates.cs) — a pure,
+tested module with the summer/winter schedules and the Ontario statutory-holiday calendar.
+
+### Sensors (on the Energy page snapshot)
+
+Commodity line (energy portion only):
+
+- `cost_total`, `cost_this_month`, `cost_today` — CAD dollars of the TOU energy commodity.
+- `energy_total/month/today` — kWh behind each bucket.
+- `current_tou_period` — Off-Peak / Mid-Peak / On-Peak.
+- `current_rate` — ¢/kWh for the current period.
+
+All-in "out of pocket" line (what the bill actually costs):
+
+- `all_in_total`, `all_in_this_month`, `all_in_today` — CAD dollars including delivery, regulatory,
+  the Ontario Electricity Rebate, and HST.
+
+Budget-preferring control:
+
+- `budget`, `budget_month_to_date`, `budget_pro_rated_target`, `budget_projected_month_end`,
+  `budget_over_under`, `budget_setpoint_offset`, and a human status string.
+
+### TOU schedule and rates
+
+Commodity rates (¢/kWh, energy portion only — verified from alectrautilities.com):
+
+| Period | Rate |
+| --- | --- |
+| On-Peak | 20.3 |
+| Mid-Peak | 15.7 |
+| Off-Peak | 9.8 |
+
+Weekday schedule (Ontario, set by the OEB):
+
+- **Summer (May 1 – Oct 31):** 07:00–11:00 Mid, 11:00–17:00 On, 17:00–19:00 Mid, 19:00–07:00 Off.
+- **Winter (Nov 1 – Apr 30):** 07:00–11:00 On, 11:00–17:00 Mid, 17:00–19:00 On, 19:00–07:00 Off.
+- **Weekends and Ontario statutory holidays:** Off-Peak all day, year-round. Holidays: New Year's,
+  Family Day, Good Friday, Victoria Day, Canada Day, Civic Holiday, Labour Day, Thanksgiving,
+  Christmas, Boxing Day — with the "holiday on a weekend rolls to the next weekday" observance rule.
+
+**Most-expensive fallback:** the period is derived from local time and is essentially always
+determinable, but if the timestamp is missing/ambiguous the tracker falls back to **On-Peak** (the
+most expensive rate) so cost is never under-estimated. The fallback is explicit
+(`UsingMostExpensiveFallback`).
+
+### All-in formula (Ontario/Alectra bill order)
+
+```
+all_in = (commodity + delivery_fixed + delivery_variable + regulatory) × (1 − OER) × (1 + HST)
+```
+
+The **Ontario Electricity Rebate (OER)** is a percentage credit on the pre-tax subtotal applied
+**before** HST (default 23.5%, effective Nov 1 2025); **HST** (default 13%) applies to the post-OER
+subtotal. The fixed monthly delivery/service charge is accrued smoothly per-second across the month
+so it splits cleanly across the total/today/this-month buckets.
+
+> **Commodity, OER, and HST are standard province-wide.** The **delivery** and **regulatory** numbers
+> vary per customer and rate class — the defaults are only reasonable Ontario placeholders. Copy the
+> exact `Delivery` and `Regulatory` values from your own Alectra bill for a precise out-of-pocket
+> figure.
+
+### Budget-preferring control
+
+Set a monthly all-in budget and AC Defender will *prefer* staying inside it. Each cycle it compares
+month-to-date all-in spend against a pro-rated target (`budget × fraction-of-month-elapsed`). When
+running **ahead** of that pace it raises the effective cooling target by a bounded amount — biased
+toward the expensive on/mid-peak periods (so it prefers running when power is cheap) — which widens
+the deadband and reduces runtime to spend less. When **under** pace it relaxes back to normal comfort.
+
+It is a **preference, not a cutoff**: the raise is capped by
+`ElectricityBudgetMaxSetpointOffsetCelsius`, and a **safety maximum room temperature**
+(`ElectricityBudgetSafetyMaxCelsius`, default 26 °C) always overrides it — at or above that
+temperature the budget offset is dropped entirely so dangerous heat is always cooled.
+
+### Configuration
+
+All keys live under the `Defender` section (`appsettings.json` / environment), so they can be updated
+when the OEB changes rates — no code change. Cost tracking defaults to **commodity-only** as
+requested; the all-in factors and the budget are opt-in/tunable.
+
+```jsonc
+"ElectricityCostTrackingEnabled": true,
+"ElectricityOnPeakCentsPerKwh": 20.3,
+"ElectricityMidPeakCentsPerKwh": 15.7,
+"ElectricityOffPeakCentsPerKwh": 9.8,
+"ElectricityAllInMultiplier": 1.0,        // simple all-in scaler on the commodity rate (optional)
+"ElectricityAllInAdderCentsPerKwh": 0.0,
+
+"ElectricityDeliveryFixedDollarsPerMonth": 30.0,   // copy from your Alectra bill
+"ElectricityDeliveryVariableCentsPerKwh": 5.0,     // copy from your Alectra bill
+"ElectricityRegulatoryCentsPerKwh": 0.7,           // copy from your Alectra bill
+"ElectricityOntarioRebatePercent": 0.235,          // OER, applied before HST
+"ElectricityHstPercent": 0.13,
+
+"ElectricityBudgetEnabled": false,
+"ElectricityMonthlyBudgetDollars": 150.0,
+"ElectricityBudgetAggressiveness": 0.5,            // 0 = off, 1 = full bias up to the max offset
+"ElectricityBudgetMaxSetpointOffsetCelsius": 1.5,
+"ElectricityBudgetSafetyMaxCelsius": 26.0          // always cool at/above this room temperature
+```
+
 ## Website
 
 The front end is built with Blazor Server and MudBlazor. It uses a responsive navigation drawer with

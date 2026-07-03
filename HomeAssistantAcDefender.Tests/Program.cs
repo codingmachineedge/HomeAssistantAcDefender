@@ -81,6 +81,14 @@ tests.AcRuntimeAccumulatesOnlyWhileCooling();
 tests.FullDayHouseholdSimulationRespectsEveryDiscordDemand();
 tests.RuntimeBackfillSeedsCountersFromPastLogsOnce();
 tests.NightCoolingBudgetStopsWarmNightRunaway();
+tests.TouSummerWeekdayBandsSelectExpectedRates();
+tests.TouWinterWeekdayBandsSelectExpectedRates();
+tests.TouWeekendsAndOntarioHolidaysAreOffPeak();
+tests.TouUnknownTimeFallsBackToOnPeakMostExpensive();
+tests.ElectricityCostAccumulatesByTouRateWithDailyAndMonthlyResets();
+tests.AllInCostAppliesOntarioRebateBeforeHst();
+tests.BudgetPrefersLessSpendWhenOverPaceAndYieldsToSafetyMax();
+tests.BudgetOffsetRaisesEffectiveTargetInSetPointCalculation();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
@@ -1497,6 +1505,351 @@ internal sealed class DefenderSetPointRegressionTests
         if ((afterGap.AcRuntime?.TodayHours ?? 0) > today + 0.04)
         {
             throw new InvalidOperationException("An 8-hour gap must bank at most the 2-minute cap, not 8 hours.");
+        }
+    }
+
+    public void TouSummerWeekdayBandsSelectExpectedRates()
+    {
+        // 2026-07-02 is a Thursday in the summer schedule (May 1 – Oct 31).
+        DateTime At(int hour, int minute = 0) => new(2026, 7, 2, hour, minute, 0, DateTimeKind.Local);
+
+        AssertPeriod(TouPeriod.OffPeak, At(3), "Summer overnight (before 07:00) is off-peak.");
+        AssertPeriod(TouPeriod.MidPeak, At(8), "Summer 07:00–11:00 is mid-peak.");
+        AssertPeriod(TouPeriod.OnPeak, At(13), "Summer 11:00–17:00 is on-peak.");
+        AssertPeriod(TouPeriod.MidPeak, At(18), "Summer 17:00–19:00 is mid-peak.");
+        AssertPeriod(TouPeriod.OffPeak, At(22), "Summer 19:00–07:00 is off-peak.");
+
+        // Boundary checks: bands are [start, end).
+        AssertPeriod(TouPeriod.OffPeak, At(6, 59), "06:59 is still off-peak.");
+        AssertPeriod(TouPeriod.MidPeak, At(7, 0), "07:00 sharp flips to the morning shoulder.");
+        AssertPeriod(TouPeriod.OnPeak, At(11, 0), "11:00 sharp flips to on-peak.");
+        AssertPeriod(TouPeriod.OffPeak, At(19, 0), "19:00 sharp returns to off-peak.");
+
+        var table = TouRateTable.Default;
+        AssertEqualCents(20.3, table.EffectiveCentsPerKwh(TouPeriod.OnPeak), "On-peak commodity rate is 20.3 c/kWh.");
+        AssertEqualCents(15.7, table.EffectiveCentsPerKwh(TouPeriod.MidPeak), "Mid-peak commodity rate is 15.7 c/kWh.");
+        AssertEqualCents(9.8, table.EffectiveCentsPerKwh(TouPeriod.OffPeak), "Off-peak commodity rate is 9.8 c/kWh.");
+    }
+
+    public void TouWinterWeekdayBandsSelectExpectedRates()
+    {
+        // 2026-01-06 is a Tuesday in the winter schedule (Nov 1 – Apr 30).
+        DateTime At(int hour) => new(2026, 1, 6, hour, 0, 0, DateTimeKind.Local);
+
+        AssertPeriod(TouPeriod.OffPeak, At(3), "Winter overnight is off-peak.");
+        AssertPeriod(TouPeriod.OnPeak, At(8), "Winter 07:00–11:00 is on-peak.");
+        AssertPeriod(TouPeriod.MidPeak, At(13), "Winter 11:00–17:00 is mid-peak.");
+        AssertPeriod(TouPeriod.OnPeak, At(18), "Winter 17:00–19:00 is on-peak.");
+        AssertPeriod(TouPeriod.OffPeak, At(23), "Winter 19:00–07:00 is off-peak.");
+    }
+
+    public void TouWeekendsAndOntarioHolidaysAreOffPeak()
+    {
+        // Weekends are off-peak all day even during what would be an on-peak weekday hour.
+        AssertPeriod(TouPeriod.OffPeak, new DateTime(2026, 7, 4, 13, 0, 0, DateTimeKind.Local), "Saturday afternoon is off-peak.");
+        AssertPeriod(TouPeriod.OffPeak, new DateTime(2026, 7, 5, 13, 0, 0, DateTimeKind.Local), "Sunday afternoon is off-peak.");
+
+        // Canada Day 2026-07-01 (a Wednesday) — a stat holiday, so off-peak despite the on-peak hour.
+        AssertPeriod(TouPeriod.OffPeak, new DateTime(2026, 7, 1, 13, 0, 0, DateTimeKind.Local), "Canada Day is off-peak.");
+
+        // Good Friday 2026-04-03 (Easter is 2026-04-05) — winter-schedule stat holiday, off-peak.
+        AssertPeriod(TouPeriod.OffPeak, new DateTime(2026, 4, 3, 13, 0, 0, DateTimeKind.Local), "Good Friday is off-peak.");
+
+        // Victoria Day 2026-05-18 (Monday before May 25) — off-peak.
+        AssertPeriod(TouPeriod.OffPeak, new DateTime(2026, 5, 18, 13, 0, 0, DateTimeKind.Local), "Victoria Day is off-peak.");
+
+        // Observance rule: New Year's Day 2023-01-01 fell on a Sunday, so Monday 2023-01-02 is the
+        // observed off-peak weekday.
+        AssertPeriod(TouPeriod.OffPeak, new DateTime(2023, 1, 2, 13, 0, 0, DateTimeKind.Local), "The weekday after a weekend New Year's Day is observed off-peak.");
+
+        // A normal winter weekday nearby is NOT a holiday — proves the observance is targeted.
+        AssertPeriod(TouPeriod.OnPeak, new DateTime(2023, 1, 3, 8, 0, 0, DateTimeKind.Local), "A regular winter weekday morning is still on-peak.");
+    }
+
+    public void TouUnknownTimeFallsBackToOnPeakMostExpensive()
+    {
+        var period = AlectraTouSchedule.GetPeriod((DateTime?)null, out var usedFallback);
+        if (!usedFallback || period != TouPeriod.OnPeak)
+        {
+            throw new InvalidOperationException("An unknown time must fall back to the most expensive rate (On-Peak).");
+        }
+
+        // A known time must NOT report the fallback.
+        AlectraTouSchedule.GetPeriod(new DateTime(2026, 7, 4, 13, 0, 0, DateTimeKind.Local), out var knownFallback);
+        if (knownFallback)
+        {
+            throw new InvalidOperationException("A known local time must not use the On-Peak fallback.");
+        }
+
+        // The all-in factor scales the commodity rate: (commodity × multiplier) + adder.
+        var allIn = new TouRateTable(20.3, 15.7, 9.8, 1.2, 2.0);
+        AssertEqualCents(20.3 * 1.2 + 2.0, allIn.EffectiveCentsPerKwh(TouPeriod.OnPeak), "All-in factor scales and offsets the commodity rate.");
+    }
+
+    public void ElectricityCostAccumulatesByTouRateWithDailyAndMonthlyResets()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+
+        // Bank a dollars-scale amount so the 2-decimal (cent) rounding on the money buckets does not
+        // swamp the assertions: 10 kW held across 30 back-to-back 2-minute intervals = 10 kWh per phase.
+        // Returns the snapshot after the phase; the priming sample carries the PREVIOUS period, so a
+        // phase's own energy is measured as the delta AFTER priming.
+        ElectricityCostSnapshot RunPhase(DateTimeOffset phaseStart)
+        {
+            store.RecordElectricityCostSample(10.0, phaseStart);
+            ElectricityCostSnapshot last = store.GetSnapshot().ElectricityCost!;
+            for (var i = 1; i <= 30; i++)
+            {
+                last = store.RecordElectricityCostSample(10.0, phaseStart.AddSeconds(i * 120)).ElectricityCost!;
+            }
+
+            return last;
+        }
+
+        // Phase A — summer weekday on-peak (2026-07-02 13:00–14:00): 10 kWh at 20.3 c/kWh ≈ $2.03.
+        var onPeak = RunPhase(new DateTimeOffset(new DateTime(2026, 7, 2, 13, 0, 0, DateTimeKind.Local)));
+        if (Math.Abs(onPeak.TodayKwh - 10.0) > 0.2)
+        {
+            throw new InvalidOperationException($"30×2min at 10 kW should bank ~10 kWh, got {onPeak.TodayKwh:0.###}.");
+        }
+
+        if (Math.Abs(onPeak.TodayCad - onPeak.TodayKwh * 0.203) > 0.02)
+        {
+            throw new InvalidOperationException($"~10 kWh at on-peak 20.3 c/kWh should cost ~{onPeak.TodayKwh * 0.203:0.00}, got {onPeak.TodayCad:0.00}.");
+        }
+
+        if (Math.Abs(onPeak.TodayCad - onPeak.MonthCad) > 0.001 || Math.Abs(onPeak.TodayCad - onPeak.TotalCad) > 0.001)
+        {
+            throw new InvalidOperationException("Today, month, and total must match on the first day.");
+        }
+
+        // Phase B — equal energy the same evening but OFF-peak (23:00–24:00): 10 kWh at 9.8 c/kWh ≈ $0.98.
+        var totalBeforeOffPeak = store.GetSnapshot().ElectricityCost!.TotalCad;
+        var offPeak = RunPhase(new DateTimeOffset(new DateTime(2026, 7, 2, 23, 0, 0, DateTimeKind.Local)));
+        var offPeakDelta = offPeak.TotalCad - totalBeforeOffPeak;
+        if (offPeakDelta <= 0 || offPeakDelta >= onPeak.TodayCad)
+        {
+            throw new InvalidOperationException($"Equal off-peak energy (~{offPeakDelta:0.00}) must cost less than the on-peak phase (~{onPeak.TodayCad:0.00}).");
+        }
+
+        // Huge gaps (downtime) are capped at 2 minutes, not billed for the whole absence.
+        var kwhBeforeGap = store.GetSnapshot().ElectricityCost!.TotalKwh;
+        var afterGap = store.RecordElectricityCostSample(10.0, new DateTimeOffset(new DateTime(2026, 7, 3, 6, 0, 0, DateTimeKind.Local))).ElectricityCost!;
+        var gapKwh = 10.0 * (120.0 / 3600.0); // cap = 120s
+        if (afterGap.TotalKwh - kwhBeforeGap > gapKwh + 0.01)
+        {
+            throw new InvalidOperationException("A 6-hour gap must bank at most the 2-minute cap, not 6 hours of energy.");
+        }
+
+        // Day rollover: TODAY resets while TOTAL keeps climbing.
+        var totalYesterday = store.GetSnapshot().ElectricityCost!.TotalCad;
+        var dayRoll = RunPhase(new DateTimeOffset(new DateTime(2026, 7, 3, 13, 0, 0, DateTimeKind.Local)));
+        if (dayRoll.TodayCad >= totalYesterday)
+        {
+            throw new InvalidOperationException("TODAY must reset at the local-midnight rollover, staying below the running total.");
+        }
+
+        if (dayRoll.TotalCad <= totalYesterday)
+        {
+            throw new InvalidOperationException("TOTAL must keep accumulating across the day rollover.");
+        }
+
+        // Month rollover: THIS MONTH resets on the 1st while TOTAL keeps climbing.
+        var totalBeforeMonth = store.GetSnapshot().ElectricityCost!.TotalCad;
+        var monthRoll = RunPhase(new DateTimeOffset(new DateTime(2026, 8, 3, 13, 0, 0, DateTimeKind.Local)));
+        if (monthRoll.MonthCad >= totalBeforeMonth)
+        {
+            throw new InvalidOperationException("THIS MONTH must reset on the 1st, staying below the running total.");
+        }
+
+        if (monthRoll.TotalCad <= totalBeforeMonth)
+        {
+            throw new InvalidOperationException("TOTAL must keep accumulating across the month rollover.");
+        }
+    }
+
+    public void AllInCostAppliesOntarioRebateBeforeHst()
+    {
+        // No fixed delivery charge here so the math is pure per-kWh; commodity + delivery-variable +
+        // regulatory, then OER (23.5%) before HST (13%).
+        var options = new DefenderOptions
+        {
+            ElectricityDeliveryFixedDollarsPerMonth = 0,
+            ElectricityDeliveryVariableCentsPerKwh = 5.0,
+            ElectricityRegulatoryCentsPerKwh = 0.7,
+            ElectricityOntarioRebatePercent = 0.235,
+            ElectricityHstPercent = 0.13,
+        };
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            using var fixture = DefenderStoreFixture.Create(contentRoot, options);
+            var store = fixture.Store;
+
+            // 10 kW held across 30 back-to-back 2-minute intervals inside the summer on-peak window
+            // (13:00–14:00 on a weekday) → 10 kWh, all priced at on-peak.
+            var t = new DateTimeOffset(new DateTime(2026, 7, 2, 13, 0, 0, DateTimeKind.Local));
+            store.RecordElectricityCostSample(10.0, t);
+            ElectricityCostSnapshot cost = store.GetSnapshot().ElectricityCost!;
+            for (var i = 1; i <= 30; i++)
+            {
+                cost = store.RecordElectricityCostSample(10.0, t.AddSeconds(i * 120)).ElectricityCost!;
+            }
+
+            var kwh = cost.TotalKwh;
+            var preTax = kwh * (0.203 + 0.05 + 0.007); // commodity(on-peak) + delivery-variable + regulatory
+            var expected = Math.Round(preTax * (1 - 0.235) * (1 + 0.13), 2);
+            if (Math.Abs(cost.AllInTotalCad - expected) > 0.01)
+            {
+                throw new InvalidOperationException($"All-in should be pre-tax × (1−OER) × (1+HST) = {expected:0.00}, got {cost.AllInTotalCad:0.00} (for {kwh:0.###} kWh).");
+            }
+
+            // The WRONG ordering (rebate credited on the already-taxed subtotal) inflates the bill;
+            // prove the tracker does NOT produce that number.
+            var wrong = Math.Round(preTax * (1 + 0.13 - 0.235), 2);
+            if (Math.Abs(cost.AllInTotalCad - wrong) < 0.02)
+            {
+                throw new InvalidOperationException($"All-in must not use the taxed-then-rebated ordering ({wrong:0.00}); OER must apply before HST.");
+            }
+
+            // All-in must exceed the commodity-only line (delivery + regulatory + HST outweigh the OER).
+            if (cost.AllInTotalCad <= cost.TotalCad)
+            {
+                throw new InvalidOperationException("The all-in out-of-pocket total must be higher than the commodity-only total.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public void BudgetPrefersLessSpendWhenOverPaceAndYieldsToSafetyMax()
+    {
+        // OER/HST zeroed so month-to-date all-in equals the seeded pre-tax subtotal for clean math.
+        var options = new DefenderOptions
+        {
+            ElectricityBudgetEnabled = true,
+            ElectricityMonthlyBudgetDollars = 100.0,
+            ElectricityBudgetAggressiveness = 1.0,
+            ElectricityBudgetMaxSetpointOffsetCelsius = 2.0,
+            ElectricityBudgetSafetyMaxCelsius = 26.0,
+            ElectricityOntarioRebatePercent = 0.0,
+            ElectricityHstPercent = 0.0,
+        };
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            using var fixture = DefenderStoreFixture.Create(contentRoot, options);
+            var store = fixture.Store;
+
+            // Mid-July on-peak afternoon: 2026-07-16 12:00 → month is exactly half elapsed (15.5/31).
+            var onPeakNoon = new DateTimeOffset(new DateTime(2026, 7, 16, 12, 0, 0, DateTimeKind.Local));
+
+            // Seed $80 month-to-date against a $50 pro-rated target ($100 × 0.5) → $30 over pace.
+            SetRuntimeProperty(store, "ElectricityAllInSubtotalMonthCad", 80.0);
+
+            var over = store.GetBudgetStatus(24.0, onPeakNoon);
+            if (!over.OverBudget || Math.Abs(over.ProRatedTargetCad - 50.0) > 0.5 || Math.Abs(over.OverUnderCad - 30.0) > 0.5)
+            {
+                throw new InvalidOperationException($"Expected ~$50 pro-rated target and ~$30 over, got target {over.ProRatedTargetCad:0.00}, over {over.OverUnderCad:0.00}.");
+            }
+
+            // Over pace at on-peak with full aggressiveness: pressure clamp(30/50)=0.6, weight 1.0,
+            // max 2.0 → +1.2 C.
+            if (Math.Abs(over.CurrentSetpointOffsetCelsius - 1.2) > 0.05 || over.SafetyOverrideActive)
+            {
+                throw new InvalidOperationException($"Over-budget on-peak should ease cooling by ~+1.2 C, got +{over.CurrentSetpointOffsetCelsius:0.00} C (safety {over.SafetyOverrideActive}).");
+            }
+
+            // Same over-pace state during OFF-peak must ease LESS (prefer running when power is cheap).
+            var offPeakNight = new DateTimeOffset(new DateTime(2026, 7, 16, 22, 0, 0, DateTimeKind.Local));
+            var offPeak = store.GetBudgetStatus(24.0, offPeakNight);
+            if (offPeak.CurrentSetpointOffsetCelsius >= over.CurrentSetpointOffsetCelsius || offPeak.CurrentSetpointOffsetCelsius <= 0)
+            {
+                throw new InvalidOperationException($"Off-peak bias ({offPeak.CurrentSetpointOffsetCelsius:0.00} C) must be positive but smaller than the on-peak bias ({over.CurrentSetpointOffsetCelsius:0.00} C).");
+            }
+
+            // Safety guardrail: at/above the safety maximum the budget offset is dropped entirely.
+            var hot = store.GetBudgetStatus(26.5, onPeakNoon);
+            if (!hot.SafetyOverrideActive || hot.CurrentSetpointOffsetCelsius > 0.001)
+            {
+                throw new InvalidOperationException($"At/above the {options.ElectricityBudgetSafetyMaxCelsius:0.0} C guardrail the budget must not ease cooling, got +{hot.CurrentSetpointOffsetCelsius:0.00} C (override {hot.SafetyOverrideActive}).");
+            }
+
+            // Under pace: no bias, normal comfort.
+            SetRuntimeProperty(store, "ElectricityAllInSubtotalMonthCad", 30.0);
+            var under = store.GetBudgetStatus(24.0, onPeakNoon);
+            if (under.OverBudget || under.CurrentSetpointOffsetCelsius > 0.001)
+            {
+                throw new InvalidOperationException($"Under the pro-rated pace the budget must not ease cooling, got +{under.CurrentSetpointOffsetCelsius:0.00} C.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public void BudgetOffsetRaisesEffectiveTargetInSetPointCalculation()
+    {
+        var options = new DefenderOptions
+        {
+            ElectricityBudgetEnabled = true,
+            ElectricityMonthlyBudgetDollars = 100.0,
+            ElectricityBudgetAggressiveness = 1.0,
+            ElectricityBudgetMaxSetpointOffsetCelsius = 2.0,
+            ElectricityBudgetSafetyMaxCelsius = 26.0,
+            ElectricityOntarioRebatePercent = 0.0,
+            ElectricityHstPercent = 0.0,
+        };
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            using var fixture = DefenderStoreFixture.Create(contentRoot, options);
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+
+            var onPeakNoon = new DateTimeOffset(new DateTime(2026, 7, 16, 12, 0, 0, DateTimeKind.Local));
+            SetRuntimeProperty(store, "ElectricityAllInSubtotalMonthCad", 80.0); // over pace → +1.2 C bias
+
+            // Room sitting at the user target: without the budget the defender is satisfied and holds the
+            // wall at 22.0; the budget bias raises the effective target so it walks the wall UP to save.
+            var withBudget = store.CalculateExpectedSetPoint(22.0, "idle", currentSetPointCelsius: 22.0, nowOverride: onPeakNoon);
+            if (withBudget <= 22.0)
+            {
+                throw new InvalidOperationException($"The budget bias must raise the commanded setpoint above the 22.0 C user target, got {withBudget:0.0} C.");
+            }
+
+            // Turning the budget off (via the safety guardrail: a hot room) must not raise the setpoint
+            // above target — the room at/above the guardrail is cooled normally.
+            var atGuardrail = store.CalculateExpectedSetPoint(26.5, "cooling", currentSetPointCelsius: 22.0, nowOverride: onPeakNoon);
+            if (atGuardrail > 22.5)
+            {
+                throw new InvalidOperationException($"At the safety guardrail the budget must not push the setpoint warmer, got {atGuardrail:0.0} C.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    private static void AssertPeriod(TouPeriod expected, DateTime localTime, string message)
+    {
+        var actual = AlectraTouSchedule.GetPeriod(localTime);
+        if (actual != expected)
+        {
+            throw new InvalidOperationException($"{message} Expected {expected}, got {actual} at {localTime:yyyy-MM-dd HH:mm ddd}.");
+        }
+    }
+
+    private static void AssertEqualCents(double expected, double actual, string message)
+    {
+        if (Math.Abs(expected - actual) > 0.001)
+        {
+            throw new InvalidOperationException($"{message} Expected {expected:0.###} c/kWh, got {actual:0.###} c/kWh.");
         }
     }
 

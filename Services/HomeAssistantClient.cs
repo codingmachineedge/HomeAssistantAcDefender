@@ -270,6 +270,21 @@ public sealed class HomeAssistantClient
         return new UsageLiveSnapshot(power, energy, cost, hourlyCost, currentBill, currentBillDue, currentBillStatus, alectraHuiEntities, true, DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// Lightweight single-entity read of the configured Alectra power sensor, normalized to kW. Used by
+    /// the cost tracker every cycle; returns null when the sensor is unconfigured, missing, or non-numeric.
+    /// </summary>
+    public async Task<double?> GetUsagePowerKilowattsAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return null;
+        }
+
+        var reading = await TryGetUsageEntityAsync(options.CurrentValue.UsagePowerEntityId, cancellationToken);
+        return NormalizePowerKilowatts(reading);
+    }
+
     public async Task<IReadOnlyList<UsageEntityReading>> GetAlectraHuiEntitiesAsync(CancellationToken cancellationToken)
     {
         if (!IsConfigured)

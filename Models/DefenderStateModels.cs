@@ -64,7 +64,9 @@ public sealed record DefenderSnapshot(
     IReadOnlyList<ThermostatChangeAudit> ThermostatChanges,
     DateTimeOffset UpdatedAt,
     IReadOnlyList<DefenderEvent> Events,
-    AcRuntimeSnapshot? AcRuntime = null);
+    AcRuntimeSnapshot? AcRuntime = null,
+    ElectricityCostSnapshot? ElectricityCost = null,
+    ElectricityBudgetSnapshot? ElectricityBudget = null);
 
 /// <summary>
 /// Live view of the Desired-State Enforcer: whether it is enforcing the owner's exact desired state,
@@ -671,6 +673,62 @@ public sealed record AcRuntimeSnapshot(
     double MonthHours,
     double LifetimeHours,
     DateTimeOffset? TrackingSince);
+
+/// <summary>
+/// Electricity-cost tracking (Alectra time-of-use). The three CAD totals accumulate from the power
+/// sensor integrated over time and priced at each interval's TOU rate: <see cref="TotalCad"/> is
+/// all-time since tracking began, <see cref="TodayCad"/> resets at local midnight, and
+/// <see cref="MonthCad"/> resets on the 1st. The current rate/period reflect "now" (with
+/// <see cref="UsingMostExpensiveFallback"/> set when the period could not be determined and On-Peak
+/// was assumed). Rates are the energy commodity portion in ¢/kWh unless an all-in factor is set.
+/// </summary>
+public sealed record ElectricityCostSnapshot(
+    bool Enabled,
+    double TotalCad,
+    double TodayCad,
+    double MonthCad,
+    double TotalKwh,
+    double TodayKwh,
+    double MonthKwh,
+    string CurrentPeriod,
+    double CurrentRateCentsPerKwh,
+    bool UsingMostExpensiveFallback,
+    double OnPeakCentsPerKwh,
+    double MidPeakCentsPerKwh,
+    double OffPeakCentsPerKwh,
+    double AllInMultiplier,
+    double AllInAdderCentsPerKwh,
+    DateTimeOffset? TrackingSince,
+    // All-in "out of pocket" totals: commodity + delivery + regulatory, minus the Ontario Electricity
+    // Rebate, plus HST. Same total/today/this-month buckets as the commodity line.
+    double AllInTotalCad,
+    double AllInTodayCad,
+    double AllInMonthCad,
+    double DeliveryFixedDollarsPerMonth,
+    double DeliveryVariableCentsPerKwh,
+    double RegulatoryCentsPerKwh,
+    double OntarioRebatePercent,
+    double HstPercent);
+
+/// <summary>
+/// Budget-preferring control status. Compares month-to-date all-in spend against a pro-rated target
+/// (monthly budget × fraction of the month elapsed) and reports the resulting comfort bias: a bounded
+/// warmer-setpoint offset applied when spend is running ahead of pace, always dropped when the room is
+/// at/above the safety maximum so dangerous heat is still cooled.
+/// </summary>
+public sealed record ElectricityBudgetSnapshot(
+    bool Enabled,
+    double MonthlyBudgetCad,
+    double MonthToDateAllInCad,
+    double ProRatedTargetCad,
+    double ProjectedMonthEndCad,
+    bool OverBudget,
+    double OverUnderCad,
+    double CurrentSetpointOffsetCelsius,
+    double Aggressiveness,
+    double SafetyMaxCelsius,
+    bool SafetyOverrideActive,
+    string Status);
 
 public sealed record ComfortSnapshot(
     bool UpstairsComfortEnabled,
