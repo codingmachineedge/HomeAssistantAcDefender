@@ -8,6 +8,8 @@ public sealed record FanModeRequest(string FanMode);
 
 public sealed record EmergencyProtocolRequest(string Protocol);
 
+public sealed record CameraWebRtcRequest(string? OfferSdp);
+
 public sealed record SettingsRequest(
     bool ScheduleEnabled,
     string WeatherActivationMode,

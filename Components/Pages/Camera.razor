@@ -1,0 +1,67 @@
+@page "/camera"
+@layout Components.Layout.EmptyLayout
+@attribute [ExcludeFromInteractiveRouting]
+
+@* Front-door live view. Static SSR page (no Blazor circuit) so the plain <script> below owns the
+   WebRTC lifecycle. Auth-gated like every non-login page; the SDP exchange happens against the
+   auth-gated /api/camera/webrtc endpoint, so nothing about the camera is public. *@
+
+<PageTitle>Front door — AC Defender</PageTitle>
+
+<div class="cam-page">
+    <div class="cam-head">
+        <a class="cam-back" href="/">← Command Center</a>
+        <h1>FRONT DOOR — LIVE</h1>
+        <div id="status" class="cam-status">Connecting…</div>
+    </div>
+    <video id="v" autoplay playsinline controls muted></video>
+    <p class="cam-hint">Muted by default — use the video controls for sound. The stream renews itself
+    automatically before Google's five-minute session limit.</p>
+</div>
+
+<style>
+    .cam-page { min-height: 100vh; background: #07090c; color: #d9e2e6; font-family: 'JetBrains Mono', Consolas, monospace; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+    .cam-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .cam-head h1 { font-size: 1rem; letter-spacing: 0.18em; color: #3ddc97; margin: 0; }
+    .cam-back { color: #6d7c86; text-decoration: none; font-size: 0.75rem; letter-spacing: 0.08em; }
+    .cam-back:hover { color: #3ddc97; }
+    .cam-status { margin-left: auto; font-size: 0.72rem; letter-spacing: 0.08em; color: #6d7c86; }
+    .cam-status.live { color: #3ddc97; }
+    .cam-status.err { color: #ff5c47; }
+    #v { width: 100%; flex: 1; min-height: 0; background: #000; border: 1px solid #2a3742; aspect-ratio: 16/10; max-height: calc(100vh - 130px); }
+    .cam-hint { color: #6d7c86; font-size: 0.7rem; letter-spacing: 0.05em; }
+</style>
+
+<script>
+    let pc;
+    const setStatus = (t, cls) => { const s = document.getElementById('status'); s.textContent = t; s.className = 'cam-status ' + (cls || ''); };
+
+    async function start() {
+        try {
+            if (pc) { pc.close(); pc = null; }
+            setStatus('Negotiating…');
+            pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+            pc.createDataChannel('dataSendChannel');          // Nest rejects offers without a data channel
+            pc.addTransceiver('audio', { direction: 'recvonly' });
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            pc.ontrack = e => { document.getElementById('v').srcObject = e.streams[0]; };
+            await pc.setLocalDescription(await pc.createOffer());
+            await new Promise(res => {                        // one-shot SDP: wait for ICE gathering
+                if (pc.iceGatheringState === 'complete') return res();
+                const t = setTimeout(res, 3000);
+                pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } };
+            });
+            const r = await fetch('/api/camera/webrtc', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ offerSdp: pc.localDescription.sdp })
+            });
+            const j = await r.json();
+            if (!r.ok || !j.answerSdp) { setStatus('Stream failed: ' + (j.error || r.status), 'err'); return; }
+            await pc.setRemoteDescription({ type: 'answer', sdp: j.answerSdp });
+            setStatus('LIVE', 'live');
+        } catch (e) { setStatus('Error: ' + e.message, 'err'); }
+    }
+
+    start();
+    setInterval(start, 4.5 * 60 * 1000);                      // renew under Google's ~5 min cap
+</script>
