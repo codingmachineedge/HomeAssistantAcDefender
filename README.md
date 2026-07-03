@@ -476,6 +476,63 @@ Supported weather rules:
 
 The defender still checks Home Assistant 24/7 even if a weather rule prevents corrective action.
 
+## Rival Schedule Watch (the AC app's own temperature schedule)
+
+The AC vendor app has its own "Temperature schedules" tab (per weekday) that pushes the wall setpoint
+on a timer. The reference schedule (screenshot: Friday):
+
+| Block | Starts | Setpoints (low/high) |
+| --- | --- | --- |
+| SLEEP | 12:00 a.m. | 21.5 / 23.0 |
+| DEEP SLEEP | 2:00 a.m. | 23.5 / 26.0 |
+| GOOD MORNING | 9:00 a.m. | 22.5 / 24.0 |
+
+The plan behind it, in the schedule owner's own words: *"I only turn on my AC when I sleep and set a
+timer for 2 hours. Assuming most of us sleep at 12am, we shouldn't notice AC being set to 25 — I'll
+move to 25."* — i.e. the AC starts at sleep time and the DEEP SLEEP block quietly drifts the room
+toward ~25–26 °C while everyone is asleep.
+
+**AC Defender does not follow this schedule.** It is the *other side's* plan, kept in configuration so
+the defender can recognize and answer it while still respecting **my temp** (the website target):
+
+- A setpoint change that is **not** from a Home Assistant user and lands on the active block's
+  low/high number (within `RivalScheduleSetpointToleranceCelsius`) is attributed to
+  `rival-schedule` in the audit log instead of a human wall touch.
+- A schedule push starts **no human quiet bookkeeping**: no cooldown, no Manual Comfort Grace, no
+  touch counters, no rage detector, no peace offering gift, and it teaches **nothing** to comfort
+  memory/compromise/intent — otherwise the nightly 26 °C push would train the defender to prefer the
+  rival's warm blocks.
+- While the wall sits at a scheduled setpoint **above my temp** and the room is warm, quiet waits are
+  bypassed so the walk-back to my temp happens promptly — a schedule is a machine running while the
+  household sleeps, so nobody is watching the correction. The website target is never changed, and
+  above `RivalScheduleSafetyBandCelsius` the normal hot-room comfort paths lead instead.
+- Block boundaries are announced as events ("Rival schedule block 'DEEP SLEEP' started (23.5/26.0 C).
+  My temp 22.0 C stays the goal."), and the Defense page has a **Rival Schedule Watch** card with the
+  active block, next boundary, and attributed pushes.
+- A real person on a phone or at the wall still gets the full human/stealth treatment, even during a
+  rival block — only changes matching the block's exact numbers without a Home Assistant `user_id`
+  are treated as the schedule.
+
+Times and setpoints are configuration, not code (`Defender` section, `appsettings.json` /
+environment). Blocks run from their start time until the next applicable block starts, wrapping past
+midnight, per weekday like the vendor app:
+
+```jsonc
+"RivalScheduleWatchEnabled": true,
+"RivalScheduleSetpointToleranceCelsius": 0.3,
+"RivalScheduleBypassQuietTiming": true,
+"RivalScheduleSafetyBandCelsius": 3.0,
+"RivalScheduleBlocks": [
+  { "Name": "SLEEP",        "Start": "00:00", "LowSetPointCelsius": 21.5, "HighSetPointCelsius": 23.0, "Days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" },
+  { "Name": "DEEP SLEEP",   "Start": "02:00", "LowSetPointCelsius": 23.5, "HighSetPointCelsius": 26.0, "Days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" },
+  { "Name": "GOOD MORNING", "Start": "09:00", "LowSetPointCelsius": 22.5, "HighSetPointCelsius": 24.0, "Days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" }
+],
+"RivalFanScheduleBlocks": []
+```
+
+The vendor app also has a "Fan schedules" tab; `RivalFanScheduleBlocks` is reserved for it
+(`Name` / `Start` / `FanMode` / `Days`) but is not enforced yet.
+
 ## Fan Energy Saver
 
 Fan energy saver is optional. When enabled, the worker compares the room temperature to the target. If the room is within the configured threshold and Home Assistant exposes the configured fan mode, the app calls `climate.set_fan_mode`.

@@ -111,4 +111,65 @@ public sealed class DefenderOptions
     public double ElectricityBudgetMaxSetpointOffsetCelsius { get; set; } = 1.5;
 
     public double ElectricityBudgetSafetyMaxCelsius { get; set; } = 26.0;
+
+    /// <summary>
+    /// Rival Schedule Watch. The AC vendor app has its own "Temperature schedules" tab (per weekday)
+    /// that pushes the wall setpoint on a timer — e.g. SLEEP 21.5/23 at 12:00 a.m., DEEP SLEEP
+    /// 23.5/26 at 2:00 a.m. (the "set a 2-hour timer, drift toward 25 while everyone sleeps" plan),
+    /// GOOD MORNING 22.5/24 at 9:00 a.m. AC Defender does NOT follow that schedule; these settings
+    /// describe it so the defender can recognize a scheduled machine push, keep it out of the
+    /// human-touch bookkeeping/learning, and answer it back toward the user's own target ("my temp").
+    /// See <see cref="Services.RivalScheduleWatch"/>.
+    /// </summary>
+    public bool RivalScheduleWatchEnabled { get; set; } = true;
+
+    // How close a new wall setpoint must be to a block's low/high number to count as the schedule.
+    public double RivalScheduleSetpointToleranceCelsius { get; set; } = 0.3;
+
+    /// <summary>
+    /// While the wall sits at a scheduled setpoint above my temp and the room is warm, skip the
+    /// human-oriented quiet waits — a schedule is a machine, and per the household's own words
+    /// everyone is asleep when it runs, so nobody is watching the correction.
+    /// </summary>
+    public bool RivalScheduleBypassQuietTiming { get; set; } = true;
+
+    // Above target + this band, the normal hot-room safety paths lead instead of the rival bypass.
+    public double RivalScheduleSafetyBandCelsius { get; set; } = 3.0;
+
+    // The rival app's Temperature schedule blocks. Defaults are empty; the real blocks live in
+    // appsettings.json / environment so times and setpoints stay configuration, not code.
+    public List<RivalScheduleBlockOptions> RivalScheduleBlocks { get; set; } = [];
+
+    // Placeholder for the vendor app's "Fan schedules" tab: parsed/stored for future use, not enforced.
+    public List<RivalFanScheduleBlockOptions> RivalFanScheduleBlocks { get; set; } = [];
+}
+
+/// <summary>
+/// One block of the rival AC app's temperature schedule as configured. <c>Start</c> is local 24-hour
+/// "HH:mm"; the block runs until the next applicable block starts. The two setpoints are the pair the
+/// vendor app shows per block (orange = lower target, blue = upper).
+/// </summary>
+public sealed class RivalScheduleBlockOptions
+{
+    public string Name { get; set; } = "";
+
+    public string Start { get; set; } = "00:00";
+
+    public double LowSetPointCelsius { get; set; }
+
+    public double HighSetPointCelsius { get; set; }
+
+    public string Days { get; set; } = "Mon,Tue,Wed,Thu,Fri,Sat,Sun";
+}
+
+/// <summary>Placeholder shape for the vendor app's Fan schedule tab (not enforced yet).</summary>
+public sealed class RivalFanScheduleBlockOptions
+{
+    public string Name { get; set; } = "";
+
+    public string Start { get; set; } = "00:00";
+
+    public string FanMode { get; set; } = "auto";
+
+    public string Days { get; set; } = "Mon,Tue,Wed,Thu,Fri,Sat,Sun";
 }

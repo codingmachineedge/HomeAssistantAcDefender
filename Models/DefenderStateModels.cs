@@ -66,7 +66,28 @@ public sealed record DefenderSnapshot(
     IReadOnlyList<DefenderEvent> Events,
     AcRuntimeSnapshot? AcRuntime = null,
     ElectricityCostSnapshot? ElectricityCost = null,
-    ElectricityBudgetSnapshot? ElectricityBudget = null);
+    ElectricityBudgetSnapshot? ElectricityBudget = null,
+    RivalScheduleSnapshot? RivalSchedule = null);
+
+/// <summary>
+/// Live view of Rival Schedule Watch: the AC vendor app's own temperature schedule (the other
+/// side's plan, never a defender target), which block is in force, the next boundary, and the last
+/// wall push that was attributed to the schedule instead of a human touch.
+/// </summary>
+public sealed record RivalScheduleSnapshot(
+    bool Enabled,
+    bool BypassQuietTiming,
+    int BlockCount,
+    string ActiveBlockName,
+    double? ActiveLowSetPointCelsius,
+    double? ActiveHighSetPointCelsius,
+    string NextBlockName,
+    DateTimeOffset? NextBlockStartsAt,
+    int MatchCount,
+    DateTimeOffset? LastMatchAt,
+    string LastMatchBlockName,
+    double? LastMatchSetPointCelsius,
+    string Status);
 
 /// <summary>
 /// Live view of the Desired-State Enforcer: whether it is enforcing the owner's exact desired state,

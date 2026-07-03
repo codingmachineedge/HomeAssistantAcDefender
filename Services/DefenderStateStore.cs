@@ -39,12 +39,16 @@ public sealed class DefenderStateStore
     private readonly string stateFilePath;
     private readonly JsonSerializerOptions jsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly Random random = new();
+    // The rival AC app's own temperature schedule, parsed once from configuration. This is the OTHER
+    // side's plan — never a defender target source. See Services/RivalScheduleWatch.cs.
+    private readonly IReadOnlyList<RivalScheduleBlock> rivalScheduleBlocks;
     private DefenderRuntimeState state;
 
     public DefenderStateStore(IOptions<DefenderOptions> options, IWebHostEnvironment environment, ILogger<DefenderStateStore> logger)
     {
         this.options = options.Value;
         this.logger = logger;
+        rivalScheduleBlocks = RivalScheduleWatch.Parse(this.options.RivalScheduleBlocks);
         stateFilePath = ResolveStatePath(this.options.StateFilePath, environment.ContentRootPath);
         state = LoadState();
     }
@@ -3008,6 +3012,96 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>
+    /// Rival Schedule Watch quiet bypass: true while the wall sits at the active rival block's
+    /// scheduled setpoint ABOVE my temp and the room still needs cooling. A schedule is a machine
+    /// running while the household sleeps, so the human camouflage waits are wasted on it — the
+    /// defender answers promptly instead of letting the room drift toward the rival's warm block.
+    /// The website target is never changed; extreme heat still defers to the normal safety paths.
+    /// </summary>
+    public bool ShouldBypassQuietTimingForRivalSchedule(ThermostatReading reading, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (!options.RivalScheduleWatchEnabled || rivalScheduleBlocks.Count == 0)
+            {
+                return false;
+            }
+
+            if (!options.RivalScheduleBypassQuietTiming)
+            {
+                state.RivalScheduleStatus = "Rival schedule watch is attributing schedule pushes, but quiet bypass is off.";
+                return false;
+            }
+
+            var localNow = now.ToLocalTime().DateTime;
+            var block = RivalScheduleWatch.GetActiveBlock(rivalScheduleBlocks, localNow);
+            if (block is null
+                || !RivalScheduleWatch.MatchesSetpoint(block, reading.SetPointCelsius, options.RivalScheduleSetpointToleranceCelsius)
+                || reading.SetPointCelsius <= state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius)
+            {
+                return false;
+            }
+
+            if (reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius)
+            {
+                state.RivalScheduleStatus = $"AC app block '{block.Name}' holds the wall at {reading.SetPointCelsius:0.0} C, but the room is already at my temp so it is only watched.";
+                SaveState();
+                return false;
+            }
+
+            var allowedRoomTemperature = state.TargetTemperatureCelsius + options.RivalScheduleSafetyBandCelsius;
+            if (reading.CurrentTemperatureCelsius > allowedRoomTemperature && !ShouldBypassNaturalRecovery(reading))
+            {
+                state.RivalScheduleStatus = $"AC app block '{block.Name}' is pushing warm, but the room is above {allowedRoomTemperature:0.0} C so normal comfort safety is leading.";
+                SaveState();
+                return false;
+            }
+
+            state.RivalScheduleStatus = $"AC app block '{block.Name}' holds the wall at {reading.SetPointCelsius:0.0} C above my temp "
+                + $"{state.TargetTemperatureCelsius:0.0} C; quiet waits are bypassed so the walk-back happens promptly.";
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Announces rival schedule block boundaries (e.g. "DEEP SLEEP started, expect a push toward
+    /// 26 C") so the defender's audit trail shows what the AC app is about to do. Observation only —
+    /// it never changes the target or sends commands.
+    /// </summary>
+    public void ObserveRivalSchedule(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (!options.RivalScheduleWatchEnabled || rivalScheduleBlocks.Count == 0)
+            {
+                return;
+            }
+
+            var localNow = now.ToLocalTime().DateTime;
+            var block = RivalScheduleWatch.GetActiveBlock(rivalScheduleBlocks, localNow);
+            var name = block?.Name ?? string.Empty;
+            if (string.Equals(state.RivalScheduleActiveBlockName, name, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            state.RivalScheduleActiveBlockName = name;
+            if (block is not null)
+            {
+                var pushesWarm = block.HighSetPointCelsius > state.TargetTemperatureCelsius + options.TemperatureToleranceCelsius;
+                state.RivalScheduleStatus = pushesWarm
+                    ? $"AC app block '{block.Name}' ({block.LowSetPointCelsius:0.0}–{block.HighSetPointCelsius:0.0} C) is active and can push the wall above my temp {state.TargetTemperatureCelsius:0.0} C; watching for its setpoint."
+                    : $"AC app block '{block.Name}' ({block.LowSetPointCelsius:0.0}–{block.HighSetPointCelsius:0.0} C) is active and stays at or below my temp; watching.";
+                AddEvent(pushesWarm ? "warning" : "info",
+                    $"Rival schedule block '{block.Name}' started ({block.LowSetPointCelsius:0.0}/{block.HighSetPointCelsius:0.0} C). My temp {state.TargetTemperatureCelsius:0.0} C stays the goal.");
+            }
+
+            SaveState();
+        }
+    }
+
     /// <summary>Room Trend Guard: true while real room samples show the room is already stable or cooling on its own.</summary>
     public bool TryRespectRoomTrendGuard(
         ThermostatReading reading,
@@ -5646,6 +5740,17 @@ public sealed class DefenderStateStore
         }
 
         var source = ClassifyChangeSource(reading);
+
+        // Rival Schedule Watch: the AC app's own temperature schedule pushing the wall (e.g. DEEP
+        // SLEEP stepping toward 26 C at 2:00 a.m.) is a machine change, not a human touch. It must
+        // not arm cooldown/grace, feed the touch counters or the rage detector, gift a peace
+        // offering, or teach comfort memory/compromise — otherwise the rival schedule would train
+        // the defender to prefer the rival's warm blocks every night.
+        if (TryRecordRivalScheduleChange(reading, previous, source, now))
+        {
+            return;
+        }
+
         state.LastChangeSource = source.Kind;
         state.LastChangeSourceDetail = source.Detail;
         state.LastChangeContextId = reading.Context?.Id;
@@ -5801,6 +5906,81 @@ public sealed class DefenderStateStore
 
         AddEvent("warning",
             $"External thermostat change ({source.Label}): {previous:0.0} C to {reading.SetPointCelsius:0.0} C at {now:yyyy-MM-dd HH:mm:ss}.");
+    }
+
+    /// <summary>
+    /// Attributes a device/automation-origin setpoint change to the rival AC app schedule when it
+    /// lands on the active block's low/high number. Records the audit + status and restarts the
+    /// warm-room walk, but intentionally skips ALL human-touch bookkeeping and learning. Changes
+    /// with a Home Assistant user_id keep the human treatment even when the value coincides —
+    /// a person on a phone still deserves the quiet, natural-looking answer.
+    /// </summary>
+    private bool TryRecordRivalScheduleChange(
+        ThermostatReading reading,
+        double previous,
+        ChangeSourceClassification source,
+        DateTimeOffset now)
+    {
+        if (!options.RivalScheduleWatchEnabled
+            || rivalScheduleBlocks.Count == 0
+            || string.Equals(source.Kind, "home-assistant-user", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var localNow = now.ToLocalTime().DateTime;
+        var block = RivalScheduleWatch.GetActiveBlock(rivalScheduleBlocks, localNow);
+        if (block is null
+            || !RivalScheduleWatch.MatchesSetpoint(block, reading.SetPointCelsius, options.RivalScheduleSetpointToleranceCelsius))
+        {
+            return false;
+        }
+
+        var label = $"AC app schedule ({block.Name})";
+        var detail = $"The wall moved to {reading.SetPointCelsius:0.0} C, matching the rival AC app '{block.Name}' block "
+            + $"({block.LowSetPointCelsius:0.0}/{block.HighSetPointCelsius:0.0} C) that is active now, and the change did not come from a "
+            + "Home Assistant user. Treated as the rival schedule (a machine), not a human wall touch, so no quiet bookkeeping or comfort learning started.";
+        state.LastChangeSource = "rival-schedule";
+        state.LastChangeSourceDetail = detail;
+        state.LastChangeContextId = reading.Context?.Id;
+        state.LastChangeContextParentId = reading.Context?.ParentId;
+        state.LastChangeContextUserId = reading.Context?.UserId;
+
+        state.RivalScheduleLastMatchAt = now;
+        state.RivalScheduleLastMatchBlockName = block.Name;
+        state.RivalScheduleLastMatchSetPointCelsius = Math.Round(reading.SetPointCelsius, 1);
+        state.RivalScheduleMatchCount++;
+        state.RivalScheduleStatus = $"AC app schedule '{block.Name}' moved the wall to {reading.SetPointCelsius:0.0} C at "
+            + $"{now.ToLocalTime():HH:mm:ss}; my temp {state.TargetTemperatureCelsius:0.0} C stays the goal.";
+
+        // Machine change: restart the warm-room walk cleanly so the answer starts from the room, and
+        // clear any pending schedule-independent step state. Nothing human-related is touched.
+        ResetCoolingDefenderStep();
+
+        var audit = new ThermostatChangeAudit(
+            now,
+            reading.EntityId,
+            Math.Round(previous, 1),
+            Math.Round(reading.SetPointCelsius, 1),
+            reading.CurrentTemperatureCelsius,
+            state.Weather?.OutdoorTemperatureCelsius,
+            state.Weather?.Condition,
+            "rival-schedule",
+            detail,
+            reading.Context?.Id,
+            reading.Context?.ParentId,
+            reading.Context?.UserId);
+
+        state.ThermostatChanges.Insert(0, audit);
+        if (state.ThermostatChanges.Count > 100)
+        {
+            state.ThermostatChanges.RemoveRange(100, state.ThermostatChanges.Count - 100);
+        }
+
+        AddEvent("warning",
+            $"Rival schedule change ({label}): {previous:0.0} C to {reading.SetPointCelsius:0.0} C at {now:yyyy-MM-dd HH:mm:ss}. "
+            + $"Walking back to my temp {state.TargetTemperatureCelsius:0.0} C without human-style quiet waits.");
+        return true;
     }
 
     private ChangeSourceClassification ClassifyChangeSource(ThermostatReading reading)
@@ -9307,7 +9487,31 @@ public sealed class DefenderStateStore
                 Math.Round(state.AcRuntimeSecondsLifetime / 3600.0, 2),
                 state.AcRuntimeTrackingSince),
             CreateElectricityCostSnapshot(),
-            CreateElectricityBudgetSnapshot());
+            CreateElectricityBudgetSnapshot(),
+            CreateRivalScheduleSnapshot(now));
+    }
+
+    private RivalScheduleSnapshot CreateRivalScheduleSnapshot(DateTimeOffset now)
+    {
+        var localNow = now.ToLocalTime().DateTime;
+        var active = RivalScheduleWatch.GetActiveBlock(rivalScheduleBlocks, localNow);
+        var next = RivalScheduleWatch.GetNextStart(rivalScheduleBlocks, localNow);
+        return new RivalScheduleSnapshot(
+            options.RivalScheduleWatchEnabled && rivalScheduleBlocks.Count > 0,
+            options.RivalScheduleBypassQuietTiming,
+            rivalScheduleBlocks.Count,
+            active?.Name ?? "none",
+            active?.LowSetPointCelsius,
+            active?.HighSetPointCelsius,
+            next?.Block.Name ?? "none",
+            next is { } upcoming ? new DateTimeOffset(upcoming.StartsAt, TimeZoneInfo.Local.GetUtcOffset(upcoming.StartsAt)) : null,
+            state.RivalScheduleMatchCount,
+            state.RivalScheduleLastMatchAt,
+            string.IsNullOrWhiteSpace(state.RivalScheduleLastMatchBlockName) ? "none" : state.RivalScheduleLastMatchBlockName!,
+            state.RivalScheduleLastMatchSetPointCelsius,
+            string.IsNullOrWhiteSpace(state.RivalScheduleStatus)
+                ? "Rival schedule watch is idle."
+                : state.RivalScheduleStatus);
     }
 
     private void AddEvent(string level, string message)
@@ -10334,6 +10538,19 @@ public sealed class DefenderStateStore
         public string? PendingCommandSourceLabel { get; set; }
 
         public string? PendingCommandSourceDetail { get; set; }
+
+        // Rival Schedule Watch: the AC app's own temperature schedule (observed, never followed).
+        public string? RivalScheduleActiveBlockName { get; set; }
+
+        public DateTimeOffset? RivalScheduleLastMatchAt { get; set; }
+
+        public string? RivalScheduleLastMatchBlockName { get; set; }
+
+        public double? RivalScheduleLastMatchSetPointCelsius { get; set; }
+
+        public int RivalScheduleMatchCount { get; set; }
+
+        public string RivalScheduleStatus { get; set; } = "Rival schedule watch is idle.";
 
         public DateTimeOffset? WebsiteCommandDebounceUntil { get; set; }
 

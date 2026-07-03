@@ -51,6 +51,9 @@ public sealed class AcDefenderService
 
             await TryBackfillRuntimeFromHistoryAsync(reading, cancellationToken);
 
+            // Rival Schedule Watch: announce AC-app schedule block boundaries (observation only).
+            stateStore.ObserveRivalSchedule(DateTimeOffset.UtcNow);
+
             var frontDoorNow = DateTimeOffset.UtcNow;
             if (stateStore.TryRespectFrontDoorKillSwitch(reading, frontDoorNow, out var shouldTurnOff, out var frontDoorUntil, out var frontDoorMessage))
             {
@@ -189,7 +192,8 @@ public sealed class AcDefenderService
             var quietBypassNow = DateTimeOffset.UtcNow;
             var coolerIntentBypass = stateStore.ShouldBypassQuietTimingForCoolerIntent(reading, quietBypassNow);
             var superDefenderBypass = stateStore.ShouldBypassQuietTimingForSuperDefender(reading, quietBypassNow);
-            var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass || superDefenderBypass;
+            var rivalScheduleBypass = stateStore.ShouldBypassQuietTimingForRivalSchedule(reading, quietBypassNow);
+            var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass || superDefenderBypass || rivalScheduleBypass;
 
             // Outdoor power rule: silence when it is cold outside (<20 C), lite mode between 20-22 C.
             if (stateStore.TryRespectOutdoorPowerRule(reading, bypassQuietTiming, quietBypassNow, out var outdoorUntil, out var outdoorMessage))
@@ -247,6 +251,10 @@ public sealed class AcDefenderService
             else if (superDefenderBypass)
             {
                 stateStore.SetNextAction("Super Defender detected repeated phone/Home Assistant changes; bypassing quiet waits while cooling is needed.", quietBypassNow);
+            }
+            else if (rivalScheduleBypass)
+            {
+                stateStore.SetNextAction("AC app schedule is holding the wall above my temp; bypassing quiet waits so the walk-back to my temp happens promptly.", quietBypassNow);
             }
 
             if (stateStore.ShouldUsePeakPowerFanSaver(reading))

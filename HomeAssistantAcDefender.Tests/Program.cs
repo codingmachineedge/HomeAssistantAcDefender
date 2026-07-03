@@ -90,6 +90,9 @@ tests.AllInCostAppliesOntarioRebateBeforeHst();
 tests.BudgetPrefersLessSpendWhenOverPaceAndYieldsToSafetyMax();
 tests.BudgetOffsetRaisesEffectiveTargetInSetPointCalculation();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
+tests.RivalScheduleBlocksResolveAcrossMidnightDaysAndTolerance();
+tests.RivalScheduleChangeSkipsHumanQuietBookkeepingButHumanTouchStillCounts();
+tests.RivalScheduleBypassesQuietTimingOnlyWhileScheduledWallIsAboveMyTemp();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
 internal sealed class DefenderSetPointRegressionTests
@@ -305,15 +308,19 @@ internal sealed class DefenderSetPointRegressionTests
         var store = fixture.Store;
         store.SetTarget(22.0);
 
+        // Pin the clock to local noon: this test asserts DAYTIME stepping, and running the suite
+        // during the night window (01:00-08:00) used to trip the NightMinimumSetPointCelsius floor.
+        var noon = new DateTimeOffset(DateTime.Today.AddHours(12));
+
         // approach defaults to 0.5 C; every step after the first is earned by the room actually
         // dropping to the previous setpoint (temperature-driven, not clock-driven).
-        AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle"), "First idle warm-room command should be 0.5 C below current room temperature.");
-        AssertEqual(24.0, store.CalculateExpectedSetPoint(24.8, "cooling"), "Should step down 0.5 C as the room reaches the setpoint.");
-        AssertEqual(23.5, store.CalculateExpectedSetPoint(24.3, "cooling"), "Should step down 0.5 C.");
-        AssertEqual(23.0, store.CalculateExpectedSetPoint(23.8, "cooling"), "Should step down 0.5 C.");
-        AssertEqual(22.5, store.CalculateExpectedSetPoint(23.3, "cooling"), "Should step down 0.5 C.");
-        AssertEqual(22.0, store.CalculateExpectedSetPoint(22.8, "cooling"), "Should reach the website target.");
-        AssertEqual(22.0, store.CalculateExpectedSetPoint(22.3, "cooling"), "Warm-room step-down must not go colder than the website target.");
+        AssertEqual(24.5, store.CalculateExpectedSetPoint(25.0, "idle", nowOverride: noon), "First idle warm-room command should be 0.5 C below current room temperature.");
+        AssertEqual(24.0, store.CalculateExpectedSetPoint(24.8, "cooling", nowOverride: noon), "Should step down 0.5 C as the room reaches the setpoint.");
+        AssertEqual(23.5, store.CalculateExpectedSetPoint(24.3, "cooling", nowOverride: noon), "Should step down 0.5 C.");
+        AssertEqual(23.0, store.CalculateExpectedSetPoint(23.8, "cooling", nowOverride: noon), "Should step down 0.5 C.");
+        AssertEqual(22.5, store.CalculateExpectedSetPoint(23.3, "cooling", nowOverride: noon), "Should step down 0.5 C.");
+        AssertEqual(22.0, store.CalculateExpectedSetPoint(22.8, "cooling", nowOverride: noon), "Should reach the website target.");
+        AssertEqual(22.0, store.CalculateExpectedSetPoint(22.3, "cooling", nowOverride: noon), "Warm-room step-down must not go colder than the website target.");
     }
 
     public void StepperNeverSnapsTheWallAndWalksBothWaysTowardMyTemp()
@@ -3157,6 +3164,222 @@ internal sealed class DefenderSetPointRegressionTests
         if (nearTargetBypass)
         {
             throw new InvalidOperationException("Super Defender should not bypass quiet timing when the room is already at target.");
+        }
+    }
+
+    public void RivalScheduleBlocksResolveAcrossMidnightDaysAndTolerance()
+    {
+        // The reference schedule from the AC vendor app (Temperature schedules tab, per weekday).
+        var blocks = RivalScheduleWatch.Parse(
+        [
+            new RivalScheduleBlockOptions { Name = "SLEEP", Start = "00:00", LowSetPointCelsius = 21.5, HighSetPointCelsius = 23.0 },
+            new RivalScheduleBlockOptions { Name = "DEEP SLEEP", Start = "02:00", LowSetPointCelsius = 23.5, HighSetPointCelsius = 26.0 },
+            new RivalScheduleBlockOptions { Name = "GOOD MORNING", Start = "09:00", LowSetPointCelsius = 22.5, HighSetPointCelsius = 24.0 },
+        ]);
+        if (blocks.Count != 3)
+        {
+            throw new InvalidOperationException("All three reference rival schedule blocks should parse.");
+        }
+
+        var friday = new DateTime(2026, 7, 3);
+        while (friday.DayOfWeek != DayOfWeek.Friday)
+        {
+            friday = friday.AddDays(1);
+        }
+
+        AssertRivalBlock("SLEEP", blocks, friday.AddHours(1), "01:00 belongs to the SLEEP block.");
+        AssertRivalBlock("DEEP SLEEP", blocks, friday.AddHours(2), "02:00 starts the DEEP SLEEP block.");
+        AssertRivalBlock("DEEP SLEEP", blocks, friday.AddHours(8).AddMinutes(59), "08:59 is still DEEP SLEEP.");
+        AssertRivalBlock("GOOD MORNING", blocks, friday.AddHours(9), "09:00 starts GOOD MORNING.");
+        AssertRivalBlock("GOOD MORNING", blocks, friday.AddHours(23).AddMinutes(30), "23:30 is still GOOD MORNING (runs to midnight).");
+
+        var next = RivalScheduleWatch.GetNextStart(blocks, friday.AddHours(23).AddMinutes(30));
+        if (next is not { } upcoming || upcoming.Block.Name != "SLEEP" || upcoming.StartsAt != friday.AddDays(1))
+        {
+            throw new InvalidOperationException("The next start after 23:30 should be SLEEP at midnight the next day.");
+        }
+
+        // Day filter: a Friday-only block stays in force (like a real thermostat) until the next
+        // applicable start, wrapping past midnight into Saturday.
+        var fridayOnly = RivalScheduleWatch.Parse(
+        [
+            new RivalScheduleBlockOptions { Name = "FRIDAY NIGHT", Start = "21:00", LowSetPointCelsius = 23.0, HighSetPointCelsius = 25.0, Days = "Fri" },
+        ]);
+        AssertRivalBlock("FRIDAY NIGHT", fridayOnly, friday.AddDays(1).AddHours(3), "Saturday 03:00 should still resolve Friday's block.");
+        AssertRivalBlock("FRIDAY NIGHT", fridayOnly, friday.AddHours(20), "Friday 20:00 resolves LAST week's Friday block — like a real thermostat, the last scheduled state persists until the next applicable start.");
+
+        var deepSleep = blocks.First(item => item.Name == "DEEP SLEEP");
+        if (!RivalScheduleWatch.MatchesSetpoint(deepSleep, 26.3, 0.3)
+            || !RivalScheduleWatch.MatchesSetpoint(deepSleep, 23.5, 0.3)
+            || RivalScheduleWatch.MatchesSetpoint(deepSleep, 25.0, 0.3))
+        {
+            throw new InvalidOperationException("Setpoint matching should accept the block's low/high numbers within tolerance and reject others.");
+        }
+    }
+
+    private static void AssertRivalBlock(string expected, IReadOnlyList<RivalScheduleBlock> blocks, DateTime localTime, string message)
+    {
+        var active = RivalScheduleWatch.GetActiveBlock(blocks, localTime);
+        if (active?.Name != expected)
+        {
+            throw new InvalidOperationException($"{message} Expected '{expected}' but found '{active?.Name ?? "none"}'.");
+        }
+    }
+
+    public void RivalScheduleChangeSkipsHumanQuietBookkeepingButHumanTouchStillCounts()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            // One always-active block so the assertion holds no matter when the test runs.
+            var options = new DefenderOptions
+            {
+                RivalScheduleWatchEnabled = true,
+                RivalScheduleSetpointToleranceCelsius = 0.3,
+                RivalScheduleBlocks =
+                [
+                    new RivalScheduleBlockOptions { Name = "DEEP SLEEP", Start = "00:00", LowSetPointCelsius = 23.5, HighSetPointCelsius = 26.0 },
+                ],
+            };
+            using var fixture = DefenderStoreFixture.Create(contentRoot, options);
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+
+            var baseline = new ThermostatReading(
+                "climate.dining_room",
+                23.5,
+                22.0,
+                "cool",
+                "idle",
+                null,
+                [],
+                new HomeAssistantStateContext("ctx-base", null, null));
+            store.RecordHomeAssistantReading(baseline);
+
+            // The AC app schedule pushes the wall to the DEEP SLEEP high number (device-origin).
+            var rivalPush = baseline with
+            {
+                SetPointCelsius = 26.0,
+                Context = new HomeAssistantStateContext("ctx-sched", null, null)
+            };
+            store.RecordHomeAssistantReading(rivalPush);
+
+            var snapshot = store.GetSnapshot();
+            var latest = snapshot.ThermostatChanges.First();
+            if (latest.ChangeSource != "rival-schedule"
+                || !latest.SourceDetail.Contains("DEEP SLEEP", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("A device-origin setpoint matching the active rival block should be attributed to the AC app schedule.");
+            }
+
+            if (snapshot.RivalSchedule is not { MatchCount: 1 } rival || rival.LastMatchBlockName != "DEEP SLEEP")
+            {
+                throw new InvalidOperationException("The rival schedule snapshot should record exactly one attributed schedule push.");
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            if (store.TryGetCooldown(now, out _))
+            {
+                throw new InvalidOperationException("A rival schedule push must not arm the human-touch cooldown.");
+            }
+
+            if (store.TryRespectManualComfortGrace(rivalPush, false, now, out _, out _))
+            {
+                throw new InvalidOperationException("A rival schedule push must not start Manual Comfort Grace.");
+            }
+
+            if (store.TryBeginPeaceOffering(rivalPush, now, out _, out _, out _))
+            {
+                throw new InvalidOperationException("A rival schedule push is a machine change and must not arm a peace offering gift.");
+            }
+
+            // A real person on a phone (user_id) still gets the full human treatment.
+            var humanTouch = baseline with
+            {
+                SetPointCelsius = 24.0,
+                Context = new HomeAssistantStateContext("ctx-human", null, "brother-phone")
+            };
+            store.RecordHomeAssistantReading(humanTouch);
+            snapshot = store.GetSnapshot();
+            latest = snapshot.ThermostatChanges.First();
+            if (latest.ChangeSource != "home-assistant-user")
+            {
+                throw new InvalidOperationException("A Home Assistant user change should keep the human classification even while a rival block is active.");
+            }
+
+            if (!store.TryGetCooldown(DateTimeOffset.UtcNow, out _))
+            {
+                throw new InvalidOperationException("A human touch should still arm the normal cooldown after a rival schedule push.");
+            }
+
+            if (snapshot.RivalSchedule is not { MatchCount: 1 })
+            {
+                throw new InvalidOperationException("A human touch must not count as a rival schedule push.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public void RivalScheduleBypassesQuietTimingOnlyWhileScheduledWallIsAboveMyTemp()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var options = new DefenderOptions
+            {
+                RivalScheduleWatchEnabled = true,
+                RivalScheduleBypassQuietTiming = true,
+                RivalScheduleSetpointToleranceCelsius = 0.3,
+                RivalScheduleSafetyBandCelsius = 3.0,
+                RivalScheduleBlocks =
+                [
+                    new RivalScheduleBlockOptions { Name = "DEEP SLEEP", Start = "00:00", LowSetPointCelsius = 23.5, HighSetPointCelsius = 26.0 },
+                ],
+            };
+            using var fixture = DefenderStoreFixture.Create(contentRoot, options);
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+            var settings = store.GetSettings();
+            settings.NaturalSafetyOverrideCelsius = 10.0;
+            SetRuntimeProperty(store, "Settings", settings);
+
+            var scheduledWall = new ThermostatReading(
+                "climate.dining_room",
+                24.5,
+                26.0,
+                "cool",
+                "idle",
+                null,
+                [],
+                new HomeAssistantStateContext("ctx-sched", null, null));
+            var now = DateTimeOffset.UtcNow;
+
+            if (!store.ShouldBypassQuietTimingForRivalSchedule(scheduledWall, now))
+            {
+                throw new InvalidOperationException("Quiet timing should be bypassed while the wall sits at the rival block's setpoint above my temp and the room is warm.");
+            }
+
+            if (store.ShouldBypassQuietTimingForRivalSchedule(scheduledWall with { CurrentTemperatureCelsius = 22.0 }, now))
+            {
+                throw new InvalidOperationException("No bypass when the room is already at my temp — the schedule push is only watched.");
+            }
+
+            if (store.ShouldBypassQuietTimingForRivalSchedule(scheduledWall with { SetPointCelsius = 24.5 }, now))
+            {
+                throw new InvalidOperationException("No bypass when the wall setpoint does not match the rival block — that could be a human choice.");
+            }
+
+            if (store.ShouldBypassQuietTimingForRivalSchedule(scheduledWall with { CurrentTemperatureCelsius = 26.0 }, now))
+            {
+                throw new InvalidOperationException("Above the safety band the normal hot-room comfort paths lead, not the rival bypass.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
         }
     }
 

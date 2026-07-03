@@ -626,6 +626,41 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Rival Schedule Watch", GuardCategory.System,
+            "Knows the AC vendor app's own temperature schedule (SLEEP / DEEP SLEEP / GOOD MORNING) and defends my temp when a scheduled block pushes the wall warmer while everyone sleeps.",
+            "The configured rival AC-app schedule blocks (start time + low/high setpoints per weekday), the live wall setpoint, Home Assistant change context, and the local clock.",
+            "The blocks are configuration (appsettings/environment), never code. A setpoint change that is not from a Home Assistant user and lands on the active block's low/high number is attributed to the AC app schedule instead of a human wall touch — so it starts no cooldown, no comfort grace, no touch counters, no peace offering, and teaches nothing to comfort memory/compromise (otherwise the schedule would train the defender to like the rival's warm blocks). While the wall sits at a scheduled setpoint above my temp and the room is warm, quiet waits are bypassed: a schedule is a machine running while the household sleeps, so nobody is watching the correction. My temp is never changed by the rival schedule, and extreme heat still defers to normal comfort safety. The vendor app's Fan schedule tab is reserved in configuration but not enforced yet.",
+            "Attributes schedule pushes in the audit log, announces block boundaries as events, and answers a scheduled warm push back toward my temp without human-style delays.",
+            ["RivalScheduleWatchEnabled", "RivalScheduleSetpointToleranceCelsius", "RivalScheduleBypassQuietTiming", "RivalScheduleSafetyBandCelsius", "RivalScheduleBlocks", "RivalFanScheduleBlocks"],
+            s =>
+            {
+                var d = s.RivalSchedule;
+                if (d is null)
+                {
+                    return GuardLiveView.Standard(false, false, "Off", "Rival schedule watch is not configured.",
+                    [
+                        new("Blocks", "0", "Configured AC-app temperature schedule blocks."),
+                    ]);
+                }
+
+                var recentMatch = d.LastMatchAt is { } matched && DateTimeOffset.UtcNow - matched < TimeSpan.FromHours(8);
+                return GuardLiveView.Standard(d.Enabled, recentMatch, "Answering", d.Status,
+                [
+                    new("Blocks", d.BlockCount.ToString(), "Configured AC-app temperature schedule blocks."),
+                    new("Active block", d.ActiveBlockName, d.ActiveLowSetPointCelsius is { } low && d.ActiveHighSetPointCelsius is { } high
+                        ? $"Scheduled setpoints {low:0.0}/{high:0.0} C."
+                        : "No rival block is in force right now."),
+                    new("Next block", d.NextBlockStartsAt is { } startsAt
+                        ? $"{d.NextBlockName} at {startsAt.ToLocalTime():HH:mm}"
+                        : d.NextBlockName, "The next boundary in the rival app's schedule."),
+                    new("Schedule pushes", d.MatchCount.ToString(), "Wall changes attributed to the AC app schedule instead of a human."),
+                    new("Last push", d.LastMatchAt is { } lastAt
+                        ? $"{d.LastMatchBlockName} → {d.LastMatchSetPointCelsius:0.0} C at {lastAt.ToLocalTime():HH:mm:ss}"
+                        : "none", "Most recent setpoint attributed to the rival schedule."),
+                ], busyTone: GuardTone.Warning);
+            }),
+
+        new GuardInfo(
             "Desired-State Enforcer", GuardCategory.System,
             "Makes the owner's chosen AC state win automatically: if someone else turns the unit off or moves the setpoint, it restores the exact desired state and keeps it there.",
             "Home Assistant HVAC mode, the live setpoint vs the owner's target, context.user_id attribution, recent override/assert counts, and the learned interference probability.",

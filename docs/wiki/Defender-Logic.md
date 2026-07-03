@@ -206,6 +206,12 @@ Gives repeated Home Assistant user/phone or automation thermostat changes a quie
 - **Logic:** after enough Home Assistant user/phone or automation changes inside the configured window, it holds only safe corrections for the quiet hold minutes. A too-warm room, cooler-intent fast lane, direct comfort bypass, matching expected setpoint, disabled setting, or expired hold clears it.
 - **Settings:** `RemoteSettlingGuardEnabled`, `RemoteSettlingTriggerChanges`, `RemoteSettlingWindowMinutes`, `RemoteSettlingHoldMinutes`, `RemoteSettlingSafetyBandCelsius`.
 
+### Rival Schedule Watch
+Knows the AC vendor app's own temperature schedule (e.g. SLEEP 21.5/23 at 12:00 a.m., DEEP SLEEP 23.5/26 at 2:00 a.m., GOOD MORNING 22.5/24 at 9:00 a.m.) and defends my temp when a scheduled block pushes the wall warmer while everyone sleeps.
+- **Watches:** the configured rival AC-app schedule blocks (start time + low/high setpoints per weekday), the live wall setpoint, Home Assistant change context, and the local clock.
+- **Logic:** a setpoint change that is not from a Home Assistant user and lands on the active block's low/high number is attributed to the AC app schedule (`rival-schedule`) instead of a human wall touch, so it starts no cooldown, grace, touch counters, rage detection, or peace offering, and teaches nothing to comfort memory/compromise. While the wall sits at a scheduled setpoint above my temp and the room is warm, quiet waits are bypassed; my temp is never changed and extreme heat still defers to normal comfort safety. Block boundaries are announced as events. The vendor app's fan schedule tab is a configuration placeholder only.
+- **Settings:** `RivalScheduleWatchEnabled`, `RivalScheduleSetpointToleranceCelsius`, `RivalScheduleBypassQuietTiming`, `RivalScheduleSafetyBandCelsius`, `RivalScheduleBlocks`, `RivalFanScheduleBlocks` (options/appsettings, not the settings page).
+
 ---
 
 ## Sensor timing
