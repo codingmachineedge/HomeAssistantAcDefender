@@ -602,6 +602,17 @@ ceiling, not a measured draw, so tune the amps to your unit's real running load 
 "AcEstimatedVolts": 240.0
 ```
 
+### AC usage calendar (Energy page → Calendar tab)
+
+An airline fare-style calendar for the AC: every day cell shows that day's real compressor hours and
+the estimated AC-only cost, colour-heated like a flight price calendar (cheap days green, expensive
+days toward red, relative to the month's most expensive day). Use the arrows to move between months,
+click any day for a detail line (hours, dollars, ≈ $/h at that day's TOU mix), or pick any start/end
+day in the range picker for exact range totals — a single day, a week, or whole months. The data
+comes from a persistent per-day ledger (`acDailyLedger` in the state file): fed live every cycle,
+seeded once from the recorder-history backfill so the logged past is split into calendar days too,
+and pruned to roughly the last 13 months.
+
 ### Sensors (on the Energy page snapshot)
 
 Commodity line (energy portion only):

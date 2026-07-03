@@ -1345,6 +1345,7 @@ public sealed class DefenderStateStore
         }
 
         state.AcRuntimeTrackingSince ??= now;
+        state.AcLedgerTrackingSince ??= now;
         if (options.AcCostEstimateEnabled)
         {
             state.AcEstimatedCostTrackingSince ??= now;
@@ -1360,19 +1361,65 @@ public sealed class DefenderStateStore
             // Estimated AC-only cost: this cooling slice at the assumed load (amps × volts), priced
             // at the TOU rate in force at the interval START — same convention as the whole-house
             // electricity tracker. Needs no Alectra sensor, so it keeps working when Alectra is down.
+            var costCad = 0.0;
             if (options.AcCostEstimateEnabled && AcEstimatedKilowatts() > 0)
             {
                 var energyKwh = AcEstimatedKilowatts() * deltaSeconds / 3600.0;
                 var period = AlectraTouSchedule.GetPeriod(lastSample.ToLocalTime().DateTime);
-                var costCad = energyKwh * BuildRateTable().EffectiveCentsPerKwh(period) / 100.0;
+                costCad = energyKwh * BuildRateTable().EffectiveCentsPerKwh(period) / 100.0;
                 state.AcEstimatedCostTodayCad += costCad;
                 state.AcEstimatedCostMonthCad += costCad;
                 state.AcEstimatedCostLifetimeCad += costCad;
             }
+
+            // Per-day ledger for the Energy calendar, bucketed to the day the slice STARTED on
+            // (same key convention as the interval pricing above).
+            AddToDailyLedger(lastSample.ToLocalTime().ToString("yyyy-MM-dd"), deltaSeconds, costCad);
         }
 
         state.AcRuntimeLastSampleAt = now;
         state.AcRuntimeLastWasCooling = string.Equals(reading.HvacAction, "cooling", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Callers must hold the gate. Prunes the oldest days beyond ~13 months so the state file
+    // cannot grow without bound.
+    private void AddToDailyLedger(string dayKey, double coolingSeconds, double costCad)
+    {
+        if (!state.AcDailyLedger.TryGetValue(dayKey, out var entry))
+        {
+            entry = new AcDailyLedgerEntry();
+            state.AcDailyLedger[dayKey] = entry;
+            const int MaxLedgerDays = 400;
+            if (state.AcDailyLedger.Count > MaxLedgerDays)
+            {
+                foreach (var stale in state.AcDailyLedger.Keys.OrderBy(k => k, StringComparer.Ordinal)
+                             .Take(state.AcDailyLedger.Count - MaxLedgerDays).ToList())
+                {
+                    state.AcDailyLedger.Remove(stale);
+                }
+            }
+        }
+
+        entry.CoolingSeconds += coolingSeconds;
+        entry.EstimatedCostCad += costCad;
+    }
+
+    /// <summary>
+    /// The per-day AC usage ledger for the Energy calendar, ordered oldest → newest. Hours are real
+    /// compressor time; dollars are the assumed-load TOU estimate (see AcCostEstimate options).
+    /// </summary>
+    public IReadOnlyList<AcDailyUsage> GetAcDailyUsage()
+    {
+        lock (gate)
+        {
+            return state.AcDailyLedger
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => new AcDailyUsage(
+                    pair.Key,
+                    Math.Round(pair.Value.CoolingSeconds / 3600.0, 2),
+                    Math.Round(pair.Value.EstimatedCostCad, 2)))
+                .ToArray();
+        }
     }
 
     // The assumed AC electrical load for the runtime cost estimate: amps × volts (default 30 A ×
@@ -1671,7 +1718,8 @@ public sealed class DefenderStateStore
             lock (gate)
             {
                 return state.AcRuntimeBackfilledAt is null
-                    || (options.AcCostEstimateEnabled && state.AcCostBackfilledAt is null);
+                    || (options.AcCostEstimateEnabled && state.AcCostBackfilledAt is null)
+                    || state.AcLedgerBackfilledAt is null;
             }
         }
     }
@@ -1692,13 +1740,15 @@ public sealed class DefenderStateStore
             var needCost = options.AcCostEstimateEnabled
                 && state.AcCostBackfilledAt is null
                 && AcEstimatedKilowatts() > 0;
-            if (!needRuntime && !needCost)
+            var needLedger = state.AcLedgerBackfilledAt is null;
+            if (!needRuntime && !needCost && !needLedger)
             {
                 return "Runtime history was already backfilled.";
             }
 
             var runtimeCutoff = state.AcRuntimeTrackingSince ?? now;
             var costCutoff = state.AcEstimatedCostTrackingSince ?? now;
+            var ledgerCutoff = state.AcLedgerTrackingSince ?? now;
             if (needRuntime)
             {
                 state.AcRuntimeBackfilledAt = now;
@@ -1708,6 +1758,12 @@ public sealed class DefenderStateStore
             {
                 state.AcCostBackfilledAt = now;
                 state.AcEstimatedCostTrackingSince ??= now;
+            }
+
+            if (needLedger)
+            {
+                state.AcLedgerBackfilledAt = now;
+                state.AcLedgerTrackingSince ??= now;
             }
 
             var localNow = now.ToLocalTime();
@@ -1766,6 +1822,19 @@ public sealed class DefenderStateStore
                         costToday += costCad;
                     }
                 }
+
+                // Per-day ledger (Energy calendar) with its own cutoff and one-time flag, so an
+                // already-deployed install gets its logged past split into calendar days too.
+                if (needLedger && ordered[i].Timestamp < ledgerCutoff)
+                {
+                    var end = ordered[i + 1].Timestamp < ledgerCutoff ? ordered[i + 1].Timestamp : ledgerCutoff;
+                    var seconds = Math.Clamp((end - ordered[i].Timestamp).TotalSeconds, 0, 900);
+                    var costCad = options.AcCostEstimateEnabled && AcEstimatedKilowatts() > 0
+                        ? AcEstimatedKilowatts() * seconds / 3600.0
+                            * rateTable.EffectiveCentsPerKwh(AlectraTouSchedule.GetPeriod(local.DateTime)) / 100.0
+                        : 0.0;
+                    AddToDailyLedger(local.ToString("yyyy-MM-dd"), seconds, costCad);
+                }
             }
 
             state.AcRuntimeDayKey ??= todayKey;
@@ -1779,6 +1848,9 @@ public sealed class DefenderStateStore
             var message = $"Backfilled AC runtime from {ordered.Count} recorder history states: +{lifetime / 3600.0:0.0}h lifetime, +{month / 3600.0:0.0}h this month, +{today / 3600.0:0.0}h today."
                 + (needCost
                     ? $" Estimated AC cost at {AcEstimatedKilowatts():0.0} kW TOU: +${costLifetime:0.00} lifetime, +${costMonth:0.00} this month, +${costToday:0.00} today."
+                    : string.Empty)
+                + (needLedger
+                    ? $" Calendar ledger now covers {state.AcDailyLedger.Count} day(s)."
                     : string.Empty);
             AddEvent("info", message);
             SaveState();
@@ -10548,6 +10620,15 @@ public sealed class DefenderStateStore
 
         public DateTimeOffset? AcCostBackfilledAt { get; set; }
 
+        // Per-day AC usage ledger for the Energy calendar: Toronto-local "yyyy-MM-dd" day key →
+        // cooling seconds + estimated TOU cost that day. Fed live alongside the counters above,
+        // seeded once from recorder history, pruned to roughly 13 months.
+        public Dictionary<string, AcDailyLedgerEntry> AcDailyLedger { get; set; } = new();
+
+        public DateTimeOffset? AcLedgerTrackingSince { get; set; }
+
+        public DateTimeOffset? AcLedgerBackfilledAt { get; set; }
+
         // Electricity-cost accounting (Alectra TOU), Toronto-local day/month rollover. Cost is in CAD $,
         // energy in kWh. Deltas are capped so app downtime / missed polls never over-count.
         public double ElectricityCostTodayCad { get; set; }
@@ -11266,3 +11347,11 @@ internal sealed record ChangeSourceClassification(
     string Label,
     string Detail,
     bool CountsAsRemote);
+
+/// <summary>One persisted day of AC usage: real cooling seconds and the estimated TOU-priced cost.</summary>
+public sealed class AcDailyLedgerEntry
+{
+    public double CoolingSeconds { get; set; }
+
+    public double EstimatedCostCad { get; set; }
+}

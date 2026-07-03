@@ -95,6 +95,7 @@ tests.RivalScheduleChangeSkipsHumanQuietBookkeepingButHumanTouchStillCounts();
 tests.RivalScheduleBypassesQuietTimingOnlyWhileScheduledWallIsAboveMyTemp();
 tests.AcEstimatedCostAccruesAtAssumedLoadAndTouRateWhileCooling();
 tests.AcEstimatedCostBackfillsFromPastLogsOnceAtHistoricalTouRates();
+tests.AcDailyLedgerBucketsLiveUsageByDay();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
 internal sealed class DefenderSetPointRegressionTests
@@ -1312,9 +1313,50 @@ internal sealed class DefenderSetPointRegressionTests
         AssertEqual(1.41, runtime.EstimatedCostMonthDollars, "Backfilled estimated cost (month) should price logged cooling at the historical TOU rate.");
         AssertEqual(1.41, runtime.EstimatedCostLifetimeDollars, "Backfilled estimated cost (lifetime) should price logged cooling at the historical TOU rate.");
 
+        // The per-day ledger (Energy calendar) got the same history, bucketed to the day it ran.
+        var ledger = store.GetAcDailyUsage();
+        var saturdayKey = saturday.ToString("yyyy-MM-dd");
+        var day = ledger.FirstOrDefault(item => item.Date == saturdayKey)
+            ?? throw new InvalidOperationException("Backfill should seed the per-day calendar ledger.");
+        AssertEqual(2.0, day.Hours, "The calendar ledger day should hold the backfilled cooling hours.");
+        AssertEqual(1.41, day.CostDollars, "The calendar ledger day should hold the backfilled TOU-priced cost.");
+
         // Second call is a no-op — cost is never double-counted.
         store.BackfillAcRuntimeFromHistory(samples, now);
         AssertEqual(1.41, store.GetSnapshot().AcRuntime!.EstimatedCostLifetimeDollars, "Cost backfill ran twice and double-counted dollars.");
+        AssertEqual(2.0, store.GetAcDailyUsage().First(item => item.Date == saturdayKey).Hours, "Ledger backfill ran twice and double-counted a day.");
+    }
+
+    public void AcDailyLedgerBucketsLiveUsageByDay()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+
+        var saturday = new DateTime(2026, 7, 4);
+        while (saturday.DayOfWeek != DayOfWeek.Saturday)
+        {
+            saturday = saturday.AddDays(1);
+        }
+
+        var cooling = new ThermostatReading("climate.dining_room", 25.0, 22.0, "cool", "cooling", null, []);
+        foreach (var dayOffset in new[] { 0, 1 }) // Saturday, then Sunday — both Off-Peak weekend days
+        {
+            var start = new DateTimeOffset(saturday.AddDays(dayOffset).AddHours(13));
+            store.RecordHomeAssistantReading(cooling, start);
+            store.RecordHomeAssistantReading(cooling, start.AddSeconds(60));
+            store.RecordHomeAssistantReading(cooling with { HvacAction = "idle" }, start.AddSeconds(120));
+        }
+
+        var ledger = store.GetAcDailyUsage();
+        foreach (var dayOffset in new[] { 0, 1 })
+        {
+            var key = saturday.AddDays(dayOffset).ToString("yyyy-MM-dd");
+            var day = ledger.FirstOrDefault(item => item.Date == key)
+                ?? throw new InvalidOperationException($"Ledger should hold an entry for {key}.");
+            // 120 s cooling that day = 0.03 h; 0.24 kWh x 9.8 c = $0.02.
+            AssertEqual(0.03, day.Hours, $"Ledger hours for {key} should reflect that day's cooling only.");
+            AssertEqual(0.02, day.CostDollars, $"Ledger cost for {key} should be that day's TOU-priced estimate.");
+        }
     }
 
     public void FullDayHouseholdSimulationRespectsEveryDiscordDemand()

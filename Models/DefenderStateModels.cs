@@ -689,6 +689,12 @@ public sealed record CoolingFailureSnapshot(
     double? RoomRiseCelsius);
 
 /// <summary>Accumulated compressor runtime (hvac_action == cooling), tracked from live readings.</summary>
+/// <summary>
+/// One calendar day of AC usage for the Energy calendar: Toronto-local "yyyy-MM-dd", real cooling
+/// hours, and the estimated AC-only cost (assumed amps×volts load × TOU rate at each moment).
+/// </summary>
+public sealed record AcDailyUsage(string Date, double Hours, double CostDollars);
+
 public sealed record AcRuntimeSnapshot(
     double TodayHours,
     double MonthHours,

@@ -1367,6 +1367,57 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 .ops-runtime__cost { font-size: 12px; font-weight: 700; color: var(--sub); margin-top: 2px; }
 .ops-runtime__label { font-size: 8px; color: var(--sub); letter-spacing: 0.18em; margin-top: 3px; }
 
+/* AC usage calendar (Energy page) — airline fare-calendar style */
+.cal-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.cal-toolbar__month { min-width: 150px; text-align: center; }
+.cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 4px;
+    margin-top: 10px;
+}
+.cal-dow { font-size: 9px; letter-spacing: 0.16em; color: var(--sub); text-align: center; padding: 2px 0; }
+.cal-cell {
+    border: 1px solid var(--line2);
+    background: var(--panel2);
+    border-radius: 6px;
+    min-height: 58px;
+    padding: 4px 5px;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s ease;
+}
+.cal-cell:hover { border-color: var(--accent); }
+.cal-cell--blank { border: none; background: transparent; cursor: default; }
+.cal-cell--future { opacity: 0.35; cursor: default; }
+.cal-cell--today { outline: 1px solid var(--accent); outline-offset: 1px; }
+.cal-cell--selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.cal-cell__day { font-size: 10px; color: var(--sub); }
+.cal-cell__hours { font-size: 13px; font-weight: 800; color: var(--accent); margin-top: 2px; }
+.cal-cell__hours--zero { color: var(--sub); font-weight: 600; }
+.cal-cell__cost { font-size: 11px; font-weight: 700; color: var(--sub); }
+/* cheap → expensive, like a flight price calendar */
+.cal-heat-1 { background: rgba(46, 204, 113, 0.14); }
+.cal-heat-2 { background: rgba(241, 196, 15, 0.14); }
+.cal-heat-3 { background: rgba(230, 126, 34, 0.16); }
+.cal-heat-4 { background: rgba(231, 76, 60, 0.18); }
+.cal-heat-4 .cal-cell__cost { color: #e74c3c; }
+.cal-detail {
+    margin-top: 10px;
+    border: 1px solid var(--line2);
+    background: var(--panel2);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+.cal-range { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+.cal-range__totals { font-size: 13px; font-weight: 600; }
+@media (max-width: 600px) {
+    .cal-cell { min-height: 48px; padding: 3px 4px; }
+    .cal-cell__hours { font-size: 11px; }
+    .cal-cell__cost { font-size: 9px; }
+}
+
 /* very apologetic overlay */
 @keyframes apologyBow {
     0%, 100% { transform: rotate(0deg) translateY(0); }

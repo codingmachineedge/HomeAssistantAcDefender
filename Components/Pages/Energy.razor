@@ -3,6 +3,7 @@
 @using System.Globalization
 @inject DefenderStateProvider State
 @inject HomeAssistantClient HomeAssistant
+@inject DefenderStateStore Store
 
 <PageTitle>Energy - AC Defender</PageTitle>
 
@@ -292,6 +293,75 @@
                 </SectionCard>
             </MudStack>
         </MudTabPanel>
+        <MudTabPanel Text="Calendar" Icon="@Icons.Material.Filled.CalendarMonth">
+            <MudStack Spacing="3" Class="mt-3">
+                <SectionCard Title="AC usage calendar"
+                             Subtitle="@CalendarSubtitle"
+                             Help="An airline fare-style calendar for the AC: every day shows real compressor hours and the estimated AC-only cost (assumed load × the Alectra time-of-use rate in force at each moment — no Alectra sensor needed). Cheap days are green, expensive days run to red, exactly like a flight price calendar. Click a day for details, use the arrows for other months, or pick a range below for totals.">
+                    <Actions>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="ReloadLedger" StartIcon="@Icons.Material.Filled.Refresh">Reload</MudButton>
+                    </Actions>
+                    <ChildContent>
+                        <div class="cal-toolbar">
+                            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small" OnClick="PrevMonth" aria-label="Previous month" />
+                            <MudText Typo="Typo.h6" Class="cal-toolbar__month">@_calMonth.ToString("MMMM yyyy", CultureInfo.InvariantCulture)</MudText>
+                            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" OnClick="NextMonth" Disabled="@IsCurrentCalendarMonth" aria-label="Next month" />
+                            <MudSpacer />
+                            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="GoToThisMonth" Disabled="@IsCurrentCalendarMonth">This month</MudButton>
+                        </div>
+                        <MudText Class="helper-text">@MonthSummary</MudText>
+                        <div class="cal-grid" role="grid" aria-label="AC usage calendar">
+                            @foreach (var dow in new[] { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" })
+                            {
+                                <div class="cal-dow">@dow</div>
+                            }
+                            @foreach (var cell in CalendarCells)
+                            {
+                                @if (cell is null)
+                                {
+                                    <div class="cal-cell cal-cell--blank"></div>
+                                }
+                                else
+                                {
+                                    <div class="cal-cell @CellCss(cell)" @onclick="() => SelectDay(cell)">
+                                        <div class="cal-cell__day">@cell.Day</div>
+                                        @if (cell.Usage is { } u && (u.Hours > 0 || u.CostDollars > 0))
+                                        {
+                                            <div class="cal-cell__hours">@ShortHours(u.Hours)</div>
+                                            <div class="cal-cell__cost">$@u.CostDollars.ToString("0.00")</div>
+                                        }
+                                        else if (!cell.IsFuture)
+                                        {
+                                            <div class="cal-cell__hours cal-cell__hours--zero">0h</div>
+                                        }
+                                    </div>
+                                }
+                            }
+                        </div>
+                        @if (SelectedUsage is { } sel)
+                        {
+                            <div class="cal-detail">
+                                <strong>@FormatDayKey(sel.Date)</strong> — AC ran <strong>@ShortHours(sel.Hours)</strong>
+                                for an estimated <strong>$@sel.CostDollars.ToString("0.00")</strong>
+                                (@(sel.Hours > 0 ? $"≈ ${sel.CostDollars / Math.Max(sel.Hours, 0.01):0.00}/h at the day's TOU mix" : "no compressor time logged")).
+                            </div>
+                        }
+                        <MudDivider Class="my-3" />
+                        <MudText Typo="Typo.subtitle2">Range totals</MudText>
+                        <MudText Class="helper-text">Pick any start and end day — a single day, a week, or whole months — and the totals below cover exactly that range.</MudText>
+                        <div class="cal-range">
+                            <MudDateRangePicker @bind-DateRange="_calRange" Margin="Margin.Dense" Variant="Variant.Outlined"
+                                                MaxDate="@DateTime.Today" Label="Start – end day" />
+                            <div class="cal-range__totals">@RangeSummary</div>
+                        </div>
+                        @if (_dailyUsage.Count == 0)
+                        {
+                            <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">No per-day AC usage has been recorded yet. The calendar fills in from live tracking and the one-time recorder-history backfill.</MudAlert>
+                        }
+                    </ChildContent>
+                </SectionCard>
+            </MudStack>
+        </MudTabPanel>
     </MudTabs>
 </MudStack>
 
@@ -511,7 +581,144 @@
         State.Changed += OnStateChanged;
         _ = RefreshUsageAsync();
         _ = RefreshUsageHistoryAsync();
+        ReloadLedger();
     }
+
+    // ---------- AC usage calendar (per-day runtime + estimated TOU cost) ----------
+
+    private Dictionary<string, AcDailyUsage> _dailyUsage = new();
+    private DateTime _calMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private string? _selectedDayKey;
+    private DateRange _calRange = new(DateTime.Today.AddDays(-6), DateTime.Today);
+
+    private sealed record CalendarCell(int Day, string Key, bool IsToday, bool IsFuture, AcDailyUsage? Usage, int HeatTier);
+
+    private void ReloadLedger()
+    {
+        _dailyUsage = Store.GetAcDailyUsage().ToDictionary(item => item.Date, StringComparer.Ordinal);
+    }
+
+    private bool IsCurrentCalendarMonth => _calMonth.Year == DateTime.Today.Year && _calMonth.Month == DateTime.Today.Month;
+
+    private void PrevMonth() => _calMonth = _calMonth.AddMonths(-1);
+
+    private void NextMonth() => _calMonth = _calMonth.AddMonths(1);
+
+    private void GoToThisMonth() => _calMonth = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
+    private void SelectDay(CalendarCell cell) => _selectedDayKey = _selectedDayKey == cell.Key ? null : cell.Key;
+
+    private AcDailyUsage? SelectedUsage =>
+        _selectedDayKey is { } key && _dailyUsage.TryGetValue(key, out var usage) ? usage : null;
+
+    private IEnumerable<AcDailyUsage> MonthUsage()
+    {
+        var prefix = _calMonth.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+        return _dailyUsage.Values.Where(item => item.Date.StartsWith(prefix, StringComparison.Ordinal));
+    }
+
+    // Heat tiers work like an airline fare calendar: each day's cost relative to the month's most
+    // expensive day picks green (cheap) → red (expensive).
+    private IEnumerable<CalendarCell?> CalendarCells
+    {
+        get
+        {
+            var maxCost = MonthUsage().Select(item => item.CostDollars).DefaultIfEmpty(0).Max();
+            var first = _calMonth;
+            var today = DateTime.Today;
+            for (var i = 0; i < (int)first.DayOfWeek; i++)
+            {
+                yield return null;
+            }
+
+            for (var day = 1; day <= DateTime.DaysInMonth(first.Year, first.Month); day++)
+            {
+                var date = new DateTime(first.Year, first.Month, day);
+                var key = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                _dailyUsage.TryGetValue(key, out var usage);
+                var tier = usage is null || usage.CostDollars <= 0 || maxCost <= 0
+                    ? 0
+                    : Math.Clamp((int)Math.Ceiling(usage.CostDollars / maxCost * 4), 1, 4);
+                yield return new CalendarCell(day, key, date == today, date > today, usage, tier);
+            }
+        }
+    }
+
+    private string CellCss(CalendarCell cell)
+    {
+        var css = cell.HeatTier > 0 ? $"cal-heat-{cell.HeatTier}" : string.Empty;
+        if (cell.IsToday)
+        {
+            css += " cal-cell--today";
+        }
+
+        if (cell.IsFuture)
+        {
+            css += " cal-cell--future";
+        }
+
+        if (cell.Key == _selectedDayKey)
+        {
+            css += " cal-cell--selected";
+        }
+
+        return css;
+    }
+
+    private string CalendarSubtitle
+    {
+        get
+        {
+            var runtime = State.Snapshot.AcRuntime;
+            return runtime?.EstimatedCostEnabled == true
+                ? $"Hours + estimated cost at {runtime.AssumedKilowatts:0.0} kW × Alectra TOU"
+                : "Hours per day (cost estimate is off)";
+        }
+    }
+
+    private string MonthSummary
+    {
+        get
+        {
+            var days = MonthUsage().Where(item => item.Hours > 0 || item.CostDollars > 0).ToList();
+            var hours = days.Sum(item => item.Hours);
+            var cost = days.Sum(item => item.CostDollars);
+            return days.Count == 0
+                ? "No AC usage recorded in this month."
+                : $"Month so far: {ShortHours(hours)} cooling ≈ ${cost:0.00} across {days.Count} active day(s).";
+        }
+    }
+
+    private string RangeSummary
+    {
+        get
+        {
+            if (_calRange?.Start is not { } rangeStart || _calRange.End is not { } rangeEnd)
+            {
+                return "Pick a start and end day to total that range.";
+            }
+
+            var startKey = rangeStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var endKey = rangeEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var days = _dailyUsage.Values
+                .Where(item => string.CompareOrdinal(item.Date, startKey) >= 0 && string.CompareOrdinal(item.Date, endKey) <= 0)
+                .ToList();
+            var hours = days.Sum(item => item.Hours);
+            var cost = days.Sum(item => item.CostDollars);
+            var totalDays = (rangeEnd.Date - rangeStart.Date).Days + 1;
+            return $"{FormatDayKey(startKey)} → {FormatDayKey(endKey)} ({totalDays} day(s)): {ShortHours(hours)} cooling ≈ ${cost:0.00}"
+                + (days.Count > 0 ? $" · busiest day {ShortHours(days.Max(item => item.Hours))}" : string.Empty);
+        }
+    }
+
+    private static string ShortHours(double hours) => hours >= 10
+        ? $"{hours:0.0}h"
+        : $"{(int)hours}h {(int)Math.Round(hours % 1 * 60)}m";
+
+    private static string FormatDayKey(string key) =>
+        DateTime.TryParseExact(key, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+            ? date.ToString("ddd MMM d, yyyy", CultureInfo.InvariantCulture)
+            : key;
 
     private async void OnStateChanged()
     {
