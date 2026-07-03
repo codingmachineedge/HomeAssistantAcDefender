@@ -211,6 +211,20 @@ Knows the AC vendor app's own temperature schedule (e.g. SLEEP 21.5/23 at 12:00 
 - **Watches:** the configured rival AC-app schedule blocks (start time + low/high setpoints per weekday), the live wall setpoint, Home Assistant change context, and the local clock.
 - **Logic:** a setpoint change that is not from a Home Assistant user and lands on the active block's low/high number is attributed to the AC app schedule (`rival-schedule`) instead of a human wall touch, so it starts no cooldown, grace, touch counters, rage detection, or peace offering, and teaches nothing to comfort memory/compromise. While the wall sits at a scheduled setpoint above my temp and the room is warm, quiet waits are bypassed; my temp is never changed and extreme heat still defers to normal comfort safety. Block boundaries are announced as events. The vendor app's fan schedule tab is a configuration placeholder only.
 - **Settings:** `RivalScheduleWatchEnabled`, `RivalScheduleSetpointToleranceCelsius`, `RivalScheduleBypassQuietTiming`, `RivalScheduleSafetyBandCelsius`, `RivalScheduleBlocks`, `RivalFanScheduleBlocks` (options/appsettings, not the settings page).
+- **Configuration sample** (blocks run from their start until the next applicable block, wrapping past midnight, per weekday like the vendor app):
+
+```jsonc
+"RivalScheduleWatchEnabled": true,
+"RivalScheduleSetpointToleranceCelsius": 0.3,
+"RivalScheduleBypassQuietTiming": true,
+"RivalScheduleSafetyBandCelsius": 3.0,
+"RivalScheduleBlocks": [
+  { "Name": "SLEEP",        "Start": "00:00", "LowSetPointCelsius": 21.5, "HighSetPointCelsius": 23.0, "Days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" },
+  { "Name": "DEEP SLEEP",   "Start": "02:00", "LowSetPointCelsius": 23.5, "HighSetPointCelsius": 26.0, "Days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" },
+  { "Name": "GOOD MORNING", "Start": "09:00", "LowSetPointCelsius": 22.5, "HighSetPointCelsius": 24.0, "Days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" }
+],
+"RivalFanScheduleBlocks": []   // vendor app Fan tab: reserved, not enforced yet
+```
 
 ---
 

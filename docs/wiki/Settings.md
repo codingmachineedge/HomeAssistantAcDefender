@@ -250,3 +250,31 @@ If presence entity IDs are blank, the app discovers `person.*` and `device_track
 ## Schedule Rows
 
 Each schedule card contains name, enabled flag, day buttons, start time, end time, target temperature, weather activation rule, and a live summary.
+
+## Electricity Budget
+
+Settings → Electricity budget (see [Energy & Costs](Energy-and-Costs.md) for the full behaviour):
+
+- **Prefer staying inside a monthly budget** — the master switch.
+- **Monthly budget ($)** — the preferred monthly spend.
+- **Aggressiveness (0–1)** — how hard to lean when over pace.
+- **Max warmer offset (C)** — hard cap on how much warmer the budget may let the room run.
+- **Safety max room temp (C)** — at/above this room temperature the budget is ignored entirely.
+- **Spend measured as** — `ac-estimate` (AC-only, static Alectra TOU prices, sensor-free) or
+  `all-in` (whole-house bill from the live Alectra sensor, with an automatic fallback to the
+  estimate while the sensor is stale).
+
+These are UI-owned: the matching `ElectricityBudget*` appsettings values only seed them once on
+first start, and every save is clamped to safe ranges.
+
+## Configuration-Only Options
+
+A few features are tuned in `appsettings.json` / environment rather than on the Settings page:
+
+- **Rival Schedule Watch** blocks and tolerances (`RivalSchedule*`) — see
+  [Defender Logic](Defender-Logic.md#rival-schedule-watch).
+- **Electricity cost tracking** rates and all-in bill factors (`Electricity*`) and the
+  **AC-only cost estimate** load (`AcCostEstimateEnabled`, `AcEstimatedAmps`,
+  `AcEstimatedVolts`) — see [Energy & Costs](Energy-and-Costs.md).
+- **Outdoor power rule** thresholds (`Outdoor*`) and the warm-room approach step
+  (`WarmRoomApproachCelsius`).
