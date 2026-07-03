@@ -31,6 +31,10 @@ entity or shows a real error.
    that eases cooling when you're spending too fast — never past a safety temperature.
 5. **Safety always wins.** Hot rooms bypass every stealth wait, emergencies stop
    everything, and a front-door person detector can kill the AC instantly.
+6. **Fully automated getting-yelled-at detection.** An angry setpoint jump or a burst of
+   thermostat touches means someone is about to yell — the rage detector sees it coming,
+   apologizes automatically, eases the AC up as a peace gesture, and stands down for two
+   hours. It stops *before* it happens, to prevent tears.
 
 | The money page | The usage calendar |
 | --- | --- |

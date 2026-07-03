@@ -37,3 +37,7 @@ Assistant climate entity or returns a real error.
   calendar, and steered by an optional monthly budget with a safety-first fallback.
 - **Safety always wins.** Hot rooms bypass every stealth wait; the budget yields to a
   maximum room temperature; emergencies stop everything.
+- **Fully automated getting-yelled-at detection.** An angry setpoint jump or a burst of
+  thermostat touches means someone is about to yell — the rage detector apologizes
+  automatically, eases the AC up as a peace gesture, and stands down for two hours.
+  It stops *before* it happens, to prevent tears.

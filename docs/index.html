@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AC Defender — the thermostat that holds the line</title>
+<meta name="description" content="A Home Assistant companion that defends your chosen temperature against schedules, phone apps, and wall touches — politely, safely, and cheaply.">
+<style>
+  :root {
+    --cream: #F0EEE6;
+    --paper: #FAF9F5;
+    --ink: #1F1E1D;
+    --sub: #6E6A63;
+    --clay: #CC785C;
+    --clay-dark: #B8603F;
+    --line: #E3DFD5;
+    --ok: #6A9B72;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--cream);
+    color: var(--ink);
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+  }
+  h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em; }
+  a { color: var(--clay-dark); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  header.hero { padding: 88px 0 64px; text-align: center; }
+  .hero .kicker { color: var(--clay); text-transform: uppercase; letter-spacing: 0.22em; font-size: 12px; font-weight: 600; }
+  .hero h1 { font-size: clamp(40px, 6vw, 68px); margin: 14px 0 18px; }
+  .hero p.tag { font-size: 20px; color: var(--sub); max-width: 640px; margin: 0 auto 34px; }
+  .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 13px 26px; border-radius: 999px; text-decoration: none;
+    font-weight: 600; font-size: 15px; border: 1.5px solid var(--ink); color: var(--ink);
+    transition: transform .12s ease, background .12s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn--primary { background: var(--clay); border-color: var(--clay); color: #fff; }
+  .btn--primary:hover { background: var(--clay-dark); border-color: var(--clay-dark); }
+
+  .shot { border-radius: 14px; border: 1px solid var(--line); box-shadow: 0 18px 50px rgba(31,30,29,.10); max-width: 100%; }
+  .hero .shot { margin-top: 52px; }
+
+  section { padding: 72px 0; }
+  section.alt { background: var(--paper); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .sec-kicker { color: var(--clay); text-transform: uppercase; letter-spacing: 0.2em; font-size: 11px; font-weight: 700; }
+  section h2 { font-size: clamp(28px, 4vw, 40px); margin: 10px 0 14px; }
+  section p.lead { color: var(--sub); font-size: 17px; max-width: 680px; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-top: 38px; }
+  .card {
+    background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 26px;
+  }
+  section.alt .card { background: var(--cream); }
+  .card .emoji { font-size: 26px; }
+  .card h3 { font-size: 20px; margin: 12px 0 8px; }
+  .card p { color: var(--sub); font-size: 15px; }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: center; margin-top: 40px; }
+  @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }
+  .split h3 { font-size: 26px; margin-bottom: 10px; }
+  .split p { color: var(--sub); margin-bottom: 12px; }
+  .split ul { color: var(--sub); padding-left: 20px; }
+  .split li { margin-bottom: 6px; }
+
+  .quote {
+    border-left: 3px solid var(--clay); padding: 6px 0 6px 20px; font-family: Georgia, serif;
+    font-size: 18px; color: var(--ink); font-style: italic; margin: 18px 0;
+  }
+
+  footer { padding: 54px 0 70px; text-align: center; color: var(--sub); font-size: 14px; }
+  footer .links { display: flex; gap: 22px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
+  footer a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
+  code.pill { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header class="hero wrap">
+  <div class="kicker">Home Assistant companion</div>
+  <h1>The thermostat that<br>holds the line.</h1>
+  <p class="tag">AC Defender watches a real Home Assistant climate entity 24/7 and keeps the room at
+  <em>your</em> temperature — even when the AC's own app, a bedtime schedule, or another person tries
+  to change it. Politely. Safely. Cheaply.</p>
+  <div class="btns">
+    <a class="btn btn--primary" href="wiki/Website-Tour.md">Take the tour</a>
+    <a class="btn" href="https://github.com/cafepromenade/ac-defender">View on GitHub</a>
+  </div>
+  <img class="shot" src="wiki/images/dashboard.png" alt="The AC Defender command center dashboard">
+</header>
+
+<section class="alt">
+  <div class="wrap">
+    <div class="sec-kicker">Five big ideas</div>
+    <h2>Small guards. One law.</h2>
+    <p class="lead">Your chosen temperature — <em>my temp</em> — is a hard floor. Everything else is a
+    team of little guards negotiating how to get back to it gracefully.</p>
+    <div class="cards">
+      <div class="card"><div class="emoji">🎯</div><h3>My temp is law</h3>
+        <p>No guard, schedule, budget, or learned habit may ever cool below your number. Warm rooms are
+        walked back in gentle 0.5&nbsp;°C steps — never a suspicious snap.</p></div>
+      <div class="card"><div class="emoji">🛡️</div><h3>A team of guards</h3>
+        <p>Dozens of focused guards handle courtesy waits, tug-of-war truces, stealth timing, night
+        shutdown, and emergency apologies. Each one is a live card with a plain-English explainer.</p></div>
+      <div class="card"><div class="emoji">🤝</div><h3>People get courtesy; machines don't</h3>
+        <p>Human wall touches earn cooldowns and peace offerings. The AC app's own 2&nbsp;a.m. warm-up
+        schedule is recognized as a machine and answered promptly — nobody is watching at 2&nbsp;a.m.</p></div>
+      <div class="card"><div class="emoji">💰</div><h3>Money awareness built in</h3>
+        <p>Real compressor hours are priced at time-of-use rates with no power sensor needed, shown on
+        an airline-style usage calendar, and steered by an optional monthly budget.</p></div>
+      <div class="card"><div class="emoji">🚨</div><h3>Safety always wins</h3>
+        <p>Hot rooms bypass every stealth wait. The budget yields to a maximum room temperature.
+        Emergencies stop everything, instantly.</p></div>
+      <div class="card"><div class="emoji">🙇</div><h3>Fully automated getting-yelled-at detection</h3>
+        <p>An angry setpoint jump or a burst of thermostat touches means someone is about to yell.
+        The rage detector sees it coming, apologizes automatically, eases the AC up as a peace
+        gesture, and stands down for two hours — it stops <em>before</em> it happens, to prevent tears.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-kicker">The rival schedule</div>
+    <h2>It knows the other side's plan.</h2>
+    <div class="split">
+      <div>
+        <p>The AC vendor app runs its own bedtime schedule — SLEEP, then DEEP&nbsp;SLEEP quietly
+        drifting the room toward 26&nbsp;°C while everyone dreams.</p>
+        <div class="quote">"Assuming most of us sleep at 12am, we shouldn't notice AC being set to 25…"</div>
+        <p><strong>Rival Schedule Watch</strong> keeps that schedule in configuration, recognizes its
+        pushes in the audit log, refuses to learn comfort preferences from a machine, and walks the
+        wall right back to my temp — skipping the human-style quiet waits.</p>
+      </div>
+      <img class="shot" src="wiki/images/defense.png" alt="The Defense page with live guard cards">
+    </div>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap">
+    <div class="sec-kicker">Energy &amp; costs</div>
+    <h2>Like a flight-price calendar, for your AC.</h2>
+    <div class="split">
+      <img class="shot" src="wiki/images/energy-calendar.png" alt="The AC usage calendar with heat-coloured days">
+      <div>
+        <p>Every day is a little box: how long the AC ran and roughly what it cost. Green days were
+        cheap, red days were expensive. Click a day, flip months, or total any range.</p>
+        <ul>
+          <li><strong>Sensor-free cost estimate</strong> — compressor hours × assumed load × the
+            Ontario time-of-use rate in force at each moment.</li>
+          <li><strong>Monthly budget</strong> — over pace, the room runs slightly warmer (biased to
+            expensive hours); under pace, normal comfort. Never past the safety maximum.</li>
+          <li><strong>Reliability rule</strong> — if the live power sensor goes stale, budgeting
+            automatically falls back to the static-price estimate instead of stalling.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-kicker">Desktop app</div>
+    <h2>On your desktop, too.</h2>
+    <div class="split">
+      <div>
+        <p>A native Windows app (Tauri&nbsp;+&nbsp;React&nbsp;+&nbsp;TypeScript, ~10&nbsp;MB) that signs
+        into your defender and puts the essentials on your desktop:</p>
+        <ul>
+          <li>Live room temperature, setpoint, and HVAC action</li>
+          <li>My-temp stepper with one-click apply</li>
+          <li>Defender master switch, force cooling, thermostat off</li>
+          <li>Runtime hours with estimated dollars, and the activity feed</li>
+        </ul>
+        <p>Build it from <code class="pill">desktop/</code> with <code class="pill">npm run tauri build</code> —
+        the HTTP session lives on the Rust side, so no CORS, no browser.</p>
+      </div>
+      <div class="card">
+        <h3>📚 Keep reading</h3>
+        <p style="margin-bottom:12px">The wiki explains every page with real screenshots — written so
+        simply anyone can follow along.</p>
+        <p><a href="wiki/Website-Tour.md">Website Tour</a> · <a href="wiki/Energy-and-Costs.md">Energy &amp; Costs</a> ·
+        <a href="wiki/Defender-Logic.md">Defender Logic</a> · <a href="wiki/Settings.md">Settings</a> ·
+        <a href="wiki/API.md">API</a> · <a href="wiki/Deployment.md">Deployment</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="links">
+    <a href="https://github.com/cafepromenade/ac-defender">GitHub</a>
+    <a href="wiki/Home.md">Documentation</a>
+    <a href="wiki/Website-Tour.md">Screenshots</a>
+  </div>
+  <div>AC Defender · watches a real thermostat, tells no lies · built with Home Assistant, ASP.NET Core, MudBlazor, Tauri &amp; React</div>
+</footer>
+
+</body>
+</html>
