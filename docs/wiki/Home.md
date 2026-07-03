@@ -15,6 +15,7 @@ Assistant climate entity or returns a real error.
 | Page | What it answers |
 | --- | --- |
 | **[Website Tour](Website-Tour.md)** | "What am I looking at?" — every page, with screenshots, in plain words |
+| **[Every Guard, Explained Simply](Every-Guard-Explained.md)** | Every single algorithm, described so a five-year-old could follow |
 | **[Energy & Costs](Energy-and-Costs.md)** | How hours become dollars: TOU rates, the AC-only estimate, the usage calendar, the monthly budget |
 | **[Defender Logic](Defender-Logic.md)** | The full decision cycle and every guard's exact rules |
 | **[Settings](Settings.md)** | Every knob on the Settings page |

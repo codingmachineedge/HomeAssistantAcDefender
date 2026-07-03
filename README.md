@@ -49,6 +49,7 @@ anyone can follow.
 | Page | What it covers |
 | --- | --- |
 | [Website Tour](docs/wiki/Website-Tour.md) | Every page, with screenshots, in plain words |
+| [Every Guard, Explained Simply](docs/wiki/Every-Guard-Explained.md) | Every single algorithm, described so anyone can follow |
 | [Energy & Costs](docs/wiki/Energy-and-Costs.md) | TOU rates, the sensor-free AC cost estimate, the calendar, the monthly budget |
 | [Defender Logic](docs/wiki/Defender-Logic.md) | The decision cycle and every guard's exact rules |
 | [Settings](docs/wiki/Settings.md) | Every knob on the Settings page |

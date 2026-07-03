@@ -151,6 +151,7 @@ of date from the code.
 
 ## Where next?
 
+- [Every Guard, Explained Simply](Every-Guard-Explained.md) — every algorithm in plain words.
 - [Defender Logic](Defender-Logic.md) — every guard's exact rules.
 - [Energy & Costs](Energy-and-Costs.md) — how the dollars are computed.
 - [Settings](Settings.md) — every knob, listed.
