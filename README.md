@@ -585,6 +585,23 @@ so a missed poll is never billed as hours of runtime. The counters survive resta
 The rate engine lives in [`Services/AlectraTouRates.cs`](Services/AlectraTouRates.cs) — a pure,
 tested module with the summer/winter schedules and the Ontario statutory-holiday calendar.
 
+### Estimated AC-only cost (no sensor needed)
+
+The whole-house tracker above needs the Alectra Hui power sensor; when that integration is down (or
+was never installed) the Dashboard still shows an **estimated AC-only cost** under the AC RUNTIME
+hours (TODAY / THIS MONTH / LIFETIME). Every second of real compressor runtime
+(`hvac_action = cooling`) is priced as a fixed assumed load — amps × volts, default **30 A × 240 V =
+7.2 kW** — at the Alectra TOU rate in force at that moment, and the one-time runtime backfill from
+past recorder logs prices the logged history the same way (each historical interval at its own
+historical TOU period). It is an estimate of the energy commodity portion: a 30 A breaker rating is a
+ceiling, not a measured draw, so tune the amps to your unit's real running load for a tighter number.
+
+```jsonc
+"AcCostEstimateEnabled": true,
+"AcEstimatedAmps": 30.0,
+"AcEstimatedVolts": 240.0
+```
+
 ### Sensors (on the Energy page snapshot)
 
 Commodity line (energy portion only):

@@ -693,7 +693,14 @@ public sealed record AcRuntimeSnapshot(
     double TodayHours,
     double MonthHours,
     double LifetimeHours,
-    DateTimeOffset? TrackingSince);
+    DateTimeOffset? TrackingSince,
+    // Estimated AC-only cost: cooling runtime priced at an assumed amps×volts load and the Alectra
+    // TOU rate in force at each moment. Sensor-free, so it survives the Alectra integration being down.
+    bool EstimatedCostEnabled = false,
+    double EstimatedCostTodayDollars = 0,
+    double EstimatedCostMonthDollars = 0,
+    double EstimatedCostLifetimeDollars = 0,
+    double AssumedKilowatts = 0);
 
 /// <summary>
 /// Electricity-cost tracking (Alectra time-of-use). The three CAD totals accumulate from the power

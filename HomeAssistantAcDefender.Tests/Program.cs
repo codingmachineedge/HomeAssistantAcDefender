@@ -93,6 +93,8 @@ tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
 tests.RivalScheduleBlocksResolveAcrossMidnightDaysAndTolerance();
 tests.RivalScheduleChangeSkipsHumanQuietBookkeepingButHumanTouchStillCounts();
 tests.RivalScheduleBypassesQuietTimingOnlyWhileScheduledWallIsAboveMyTemp();
+tests.AcEstimatedCostAccruesAtAssumedLoadAndTouRateWhileCooling();
+tests.AcEstimatedCostBackfillsFromPastLogsOnceAtHistoricalTouRates();
 Console.WriteLine("Defender setpoint regression checks passed.");
 
 internal sealed class DefenderSetPointRegressionTests
@@ -1245,6 +1247,74 @@ internal sealed class DefenderSetPointRegressionTests
         {
             throw new InvalidOperationException("Backfill ran twice and double-counted runtime.");
         }
+    }
+
+    public void AcEstimatedCostAccruesAtAssumedLoadAndTouRateWhileCooling()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+
+        // A Saturday afternoon: weekends are Off-Peak all day (9.8 c/kWh), so the dollars are exact.
+        var saturday = new DateTime(2026, 7, 4);
+        while (saturday.DayOfWeek != DayOfWeek.Saturday)
+        {
+            saturday = saturday.AddDays(1);
+        }
+
+        var start = new DateTimeOffset(saturday.AddHours(13));
+        var cooling = new ThermostatReading("climate.dining_room", 25.0, 22.0, "cool", "cooling", null, []);
+        store.RecordHomeAssistantReading(cooling, start);
+        store.RecordHomeAssistantReading(cooling, start.AddSeconds(60));
+        store.RecordHomeAssistantReading(cooling with { HvacAction = "idle" }, start.AddSeconds(120));
+        store.RecordHomeAssistantReading(cooling with { HvacAction = "idle" }, start.AddSeconds(180));
+
+        var runtime = store.GetSnapshot().AcRuntime!;
+        if (!runtime.EstimatedCostEnabled || runtime.AssumedKilowatts is < 7.19 or > 7.21)
+        {
+            throw new InvalidOperationException($"Estimated cost should default to 30 A x 240 V = 7.2 kW, got {runtime.AssumedKilowatts:0.00} kW (enabled={runtime.EstimatedCostEnabled}).");
+        }
+
+        // 120 s cooling x 7.2 kW = 0.24 kWh x 9.8 c = $0.024; the idle minute adds nothing.
+        AssertEqual(0.02, runtime.EstimatedCostTodayDollars, "Today's estimated AC cost should be the cooling seconds priced at the off-peak TOU rate.");
+        AssertEqual(0.02, runtime.EstimatedCostMonthDollars, "This month's estimated AC cost should match today's for a single-day run.");
+        AssertEqual(0.02, runtime.EstimatedCostLifetimeDollars, "Lifetime estimated AC cost should match for a single-day run.");
+    }
+
+    public void AcEstimatedCostBackfillsFromPastLogsOnceAtHistoricalTouRates()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+
+        var saturday = new DateTime(2026, 7, 4);
+        while (saturday.DayOfWeek != DayOfWeek.Saturday)
+        {
+            saturday = saturday.AddDays(1);
+        }
+
+        // "Now" is Saturday 18:00; the past logs hold 12:00-14:00 of cooling that day (Off-Peak).
+        var now = new DateTimeOffset(saturday.AddHours(18));
+        var samples = new List<ClimateHistorySample>();
+        for (var i = 0; i <= 12; i++)
+        {
+            var t = new DateTimeOffset(saturday.AddHours(12).AddMinutes(i * 10));
+            samples.Add(new ClimateHistorySample(t, 23.0, 25.0, "cool", i < 12 ? "cooling" : "idle", null));
+        }
+
+        var message = store.BackfillAcRuntimeFromHistory(samples, now);
+        if (!message.Contains("Estimated AC cost", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Backfill message should report the estimated AC cost, got: {message}");
+        }
+
+        var runtime = store.GetSnapshot().AcRuntime!;
+        // 2 h x 7.2 kW = 14.4 kWh x 9.8 c = $1.41 in every bucket (all on the same Saturday).
+        AssertEqual(1.41, runtime.EstimatedCostTodayDollars, "Backfilled estimated cost (today) should price logged cooling at the historical TOU rate.");
+        AssertEqual(1.41, runtime.EstimatedCostMonthDollars, "Backfilled estimated cost (month) should price logged cooling at the historical TOU rate.");
+        AssertEqual(1.41, runtime.EstimatedCostLifetimeDollars, "Backfilled estimated cost (lifetime) should price logged cooling at the historical TOU rate.");
+
+        // Second call is a no-op — cost is never double-counted.
+        store.BackfillAcRuntimeFromHistory(samples, now);
+        AssertEqual(1.41, store.GetSnapshot().AcRuntime!.EstimatedCostLifetimeDollars, "Cost backfill ran twice and double-counted dollars.");
     }
 
     public void FullDayHouseholdSimulationRespectsEveryDiscordDemand()

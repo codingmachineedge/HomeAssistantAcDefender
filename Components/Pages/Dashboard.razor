@@ -230,18 +230,30 @@
                 <div class="ops-runtime">
                     <div class="ops-runtime__stat">
                         <div class="ops-runtime__value">@RuntimeText(Snapshot?.AcRuntime?.TodayHours)</div>
+                        @if (Snapshot?.AcRuntime?.EstimatedCostEnabled == true)
+                        {
+                            <div class="ops-runtime__cost">@CostText(Snapshot?.AcRuntime?.EstimatedCostTodayDollars)</div>
+                        }
                         <div class="ops-runtime__label">TODAY</div>
                     </div>
                     <div class="ops-runtime__stat">
                         <div class="ops-runtime__value">@RuntimeText(Snapshot?.AcRuntime?.MonthHours)</div>
+                        @if (Snapshot?.AcRuntime?.EstimatedCostEnabled == true)
+                        {
+                            <div class="ops-runtime__cost">@CostText(Snapshot?.AcRuntime?.EstimatedCostMonthDollars)</div>
+                        }
                         <div class="ops-runtime__label">THIS MONTH</div>
                     </div>
                     <div class="ops-runtime__stat">
                         <div class="ops-runtime__value">@RuntimeText(Snapshot?.AcRuntime?.LifetimeHours)</div>
+                        @if (Snapshot?.AcRuntime?.EstimatedCostEnabled == true)
+                        {
+                            <div class="ops-runtime__cost">@CostText(Snapshot?.AcRuntime?.EstimatedCostLifetimeDollars)</div>
+                        }
                         <div class="ops-runtime__label">LIFETIME</div>
                     </div>
                 </div>
-                <div class="helper-text" style="margin-top: 8px;">Real compressor time (hvac_action = cooling)@(Snapshot?.AcRuntime?.TrackingSince is { } since ? $", counted since {Format.ToToronto(since):yyyy-MM-dd}" : "").</div>
+                <div class="helper-text" style="margin-top: 8px;">Real compressor time (hvac_action = cooling)@(Snapshot?.AcRuntime?.TrackingSince is { } since ? $", counted since {Format.ToToronto(since):yyyy-MM-dd}" : "").@(Snapshot?.AcRuntime?.EstimatedCostEnabled == true ? $" Cost estimated at {Snapshot?.AcRuntime?.AssumedKilowatts:0.0} kW assumed AC load × the Alectra time-of-use rate at each moment — no Alectra sensor needed." : "")</div>
             </div>
 
             @* direct orders *@
@@ -316,6 +328,9 @@
     private static string RuntimeText(double? hours) => hours is { } h
         ? h >= 10 ? $"{h:0}h" : $"{(int)h}h {(int)Math.Round(h % 1 * 60)}m"
         : "--";
+
+    // Estimated AC-only cost under each runtime stat (assumed load × TOU rate; see helper text).
+    private static string CostText(double? dollars) => dollars is { } d ? $"≈ ${d:0.00}" : "--";
 
     // ---------- floor ----------
 

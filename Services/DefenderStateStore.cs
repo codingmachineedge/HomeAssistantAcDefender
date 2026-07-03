@@ -1334,15 +1334,21 @@ public sealed class DefenderStateStore
         {
             state.AcRuntimeDayKey = dayKey;
             state.AcRuntimeSecondsToday = 0;
+            state.AcEstimatedCostTodayCad = 0;
         }
 
         if (!string.Equals(state.AcRuntimeMonthKey, monthKey, StringComparison.Ordinal))
         {
             state.AcRuntimeMonthKey = monthKey;
             state.AcRuntimeSecondsMonth = 0;
+            state.AcEstimatedCostMonthCad = 0;
         }
 
         state.AcRuntimeTrackingSince ??= now;
+        if (options.AcCostEstimateEnabled)
+        {
+            state.AcEstimatedCostTrackingSince ??= now;
+        }
 
         if (state.AcRuntimeLastSampleAt is { } lastSample && state.AcRuntimeLastWasCooling)
         {
@@ -1350,11 +1356,29 @@ public sealed class DefenderStateStore
             state.AcRuntimeSecondsToday += deltaSeconds;
             state.AcRuntimeSecondsMonth += deltaSeconds;
             state.AcRuntimeSecondsLifetime += deltaSeconds;
+
+            // Estimated AC-only cost: this cooling slice at the assumed load (amps × volts), priced
+            // at the TOU rate in force at the interval START — same convention as the whole-house
+            // electricity tracker. Needs no Alectra sensor, so it keeps working when Alectra is down.
+            if (options.AcCostEstimateEnabled && AcEstimatedKilowatts() > 0)
+            {
+                var energyKwh = AcEstimatedKilowatts() * deltaSeconds / 3600.0;
+                var period = AlectraTouSchedule.GetPeriod(lastSample.ToLocalTime().DateTime);
+                var costCad = energyKwh * BuildRateTable().EffectiveCentsPerKwh(period) / 100.0;
+                state.AcEstimatedCostTodayCad += costCad;
+                state.AcEstimatedCostMonthCad += costCad;
+                state.AcEstimatedCostLifetimeCad += costCad;
+            }
         }
 
         state.AcRuntimeLastSampleAt = now;
         state.AcRuntimeLastWasCooling = string.Equals(reading.HvacAction, "cooling", StringComparison.OrdinalIgnoreCase);
     }
+
+    // The assumed AC electrical load for the runtime cost estimate: amps × volts (default 30 A ×
+    // 240 V = 7.2 kW). A breaker rating is a ceiling, not a measurement — tune in configuration.
+    private double AcEstimatedKilowatts() =>
+        Math.Max(0, options.AcEstimatedAmps) * Math.Max(0, options.AcEstimatedVolts) / 1000.0;
 
     /// <summary>
     /// Builds the configured Alectra TOU rate table (commodity ¢/kWh plus the optional all-in factor)
@@ -1646,7 +1670,8 @@ public sealed class DefenderStateStore
         {
             lock (gate)
             {
-                return state.AcRuntimeBackfilledAt is null;
+                return state.AcRuntimeBackfilledAt is null
+                    || (options.AcCostEstimateEnabled && state.AcCostBackfilledAt is null);
             }
         }
     }
@@ -1655,24 +1680,44 @@ public sealed class DefenderStateStore
     /// One-time backfill: integrate cooling runtime from Home Assistant's recorder history (the
     /// past logs) so today/month/lifetime do not start at zero. Only periods BEFORE live tracking
     /// began are counted, so nothing is double-counted; gaps are capped at 15 minutes per pair.
+    /// The estimated AC cost gets the same treatment with its own one-time flag and cutoff: every
+    /// historical cooling interval is priced at the assumed amps×volts load and the TOU rate in
+    /// force at that interval, so the cost estimate also covers the logged past.
     /// </summary>
     public string BackfillAcRuntimeFromHistory(IReadOnlyList<ClimateHistorySample> samples, DateTimeOffset now)
     {
         lock (gate)
         {
-            if (state.AcRuntimeBackfilledAt is not null)
+            var needRuntime = state.AcRuntimeBackfilledAt is null;
+            var needCost = options.AcCostEstimateEnabled
+                && state.AcCostBackfilledAt is null
+                && AcEstimatedKilowatts() > 0;
+            if (!needRuntime && !needCost)
             {
                 return "Runtime history was already backfilled.";
             }
 
-            state.AcRuntimeBackfilledAt = now;
-            var cutoff = state.AcRuntimeTrackingSince ?? now;
+            var runtimeCutoff = state.AcRuntimeTrackingSince ?? now;
+            var costCutoff = state.AcEstimatedCostTrackingSince ?? now;
+            if (needRuntime)
+            {
+                state.AcRuntimeBackfilledAt = now;
+            }
+
+            if (needCost)
+            {
+                state.AcCostBackfilledAt = now;
+                state.AcEstimatedCostTrackingSince ??= now;
+            }
+
             var localNow = now.ToLocalTime();
             var todayKey = localNow.ToString("yyyy-MM-dd");
             var monthKey = localNow.ToString("yyyy-MM");
             double lifetime = 0, month = 0, today = 0;
+            double costLifetime = 0, costMonth = 0, costToday = 0;
+            var rateTable = BuildRateTable();
 
-            var ordered = samples.Where(s => s.Timestamp < cutoff).OrderBy(s => s.Timestamp).ToList();
+            var ordered = samples.OrderBy(s => s.Timestamp).ToList();
             for (var i = 0; i + 1 < ordered.Count; i++)
             {
                 if (!string.Equals(ordered[i].HvacAction, "cooling", StringComparison.OrdinalIgnoreCase))
@@ -1680,18 +1725,46 @@ public sealed class DefenderStateStore
                     continue;
                 }
 
-                var end = ordered[i + 1].Timestamp < cutoff ? ordered[i + 1].Timestamp : cutoff;
-                var seconds = Math.Clamp((end - ordered[i].Timestamp).TotalSeconds, 0, 900);
-                lifetime += seconds;
                 var local = ordered[i].Timestamp.ToLocalTime();
-                if (string.Equals(local.ToString("yyyy-MM"), monthKey, StringComparison.Ordinal))
+                var sameMonth = string.Equals(local.ToString("yyyy-MM"), monthKey, StringComparison.Ordinal);
+                var sameDay = string.Equals(local.ToString("yyyy-MM-dd"), todayKey, StringComparison.Ordinal);
+
+                if (needRuntime && ordered[i].Timestamp < runtimeCutoff)
                 {
-                    month += seconds;
+                    var end = ordered[i + 1].Timestamp < runtimeCutoff ? ordered[i + 1].Timestamp : runtimeCutoff;
+                    var seconds = Math.Clamp((end - ordered[i].Timestamp).TotalSeconds, 0, 900);
+                    lifetime += seconds;
+                    if (sameMonth)
+                    {
+                        month += seconds;
+                    }
+
+                    if (sameDay)
+                    {
+                        today += seconds;
+                    }
                 }
 
-                if (string.Equals(local.ToString("yyyy-MM-dd"), todayKey, StringComparison.Ordinal))
+                // Cost has its own cutoff: live cost tracking may have started later than live
+                // runtime tracking (the estimate shipped later), so cooling that was live-counted
+                // as HOURS but never priced still gets its dollars here — priced at the TOU rate
+                // in force when it actually ran.
+                if (needCost && ordered[i].Timestamp < costCutoff)
                 {
-                    today += seconds;
+                    var end = ordered[i + 1].Timestamp < costCutoff ? ordered[i + 1].Timestamp : costCutoff;
+                    var seconds = Math.Clamp((end - ordered[i].Timestamp).TotalSeconds, 0, 900);
+                    var period = AlectraTouSchedule.GetPeriod(local.DateTime);
+                    var costCad = AcEstimatedKilowatts() * seconds / 3600.0 * rateTable.EffectiveCentsPerKwh(period) / 100.0;
+                    costLifetime += costCad;
+                    if (sameMonth)
+                    {
+                        costMonth += costCad;
+                    }
+
+                    if (sameDay)
+                    {
+                        costToday += costCad;
+                    }
                 }
             }
 
@@ -1700,7 +1773,13 @@ public sealed class DefenderStateStore
             state.AcRuntimeSecondsToday += today;
             state.AcRuntimeSecondsMonth += month;
             state.AcRuntimeSecondsLifetime += lifetime;
-            var message = $"Backfilled AC runtime from {ordered.Count} recorder history states: +{lifetime / 3600.0:0.0}h lifetime, +{month / 3600.0:0.0}h this month, +{today / 3600.0:0.0}h today.";
+            state.AcEstimatedCostTodayCad += costToday;
+            state.AcEstimatedCostMonthCad += costMonth;
+            state.AcEstimatedCostLifetimeCad += costLifetime;
+            var message = $"Backfilled AC runtime from {ordered.Count} recorder history states: +{lifetime / 3600.0:0.0}h lifetime, +{month / 3600.0:0.0}h this month, +{today / 3600.0:0.0}h today."
+                + (needCost
+                    ? $" Estimated AC cost at {AcEstimatedKilowatts():0.0} kW TOU: +${costLifetime:0.00} lifetime, +${costMonth:0.00} this month, +${costToday:0.00} today."
+                    : string.Empty);
             AddEvent("info", message);
             SaveState();
             return message;
@@ -9485,7 +9564,12 @@ public sealed class DefenderStateStore
                 Math.Round(state.AcRuntimeSecondsToday / 3600.0, 2),
                 Math.Round(state.AcRuntimeSecondsMonth / 3600.0, 2),
                 Math.Round(state.AcRuntimeSecondsLifetime / 3600.0, 2),
-                state.AcRuntimeTrackingSince),
+                state.AcRuntimeTrackingSince,
+                options.AcCostEstimateEnabled && AcEstimatedKilowatts() > 0,
+                Math.Round(state.AcEstimatedCostTodayCad, 2),
+                Math.Round(state.AcEstimatedCostMonthCad, 2),
+                Math.Round(state.AcEstimatedCostLifetimeCad, 2),
+                Math.Round(AcEstimatedKilowatts(), 2)),
             CreateElectricityCostSnapshot(),
             CreateElectricityBudgetSnapshot(),
             CreateRivalScheduleSnapshot(now));
@@ -10450,6 +10534,19 @@ public sealed class DefenderStateStore
         public DateTimeOffset? AcRuntimeTrackingSince { get; set; }
 
         public DateTimeOffset? AcRuntimeBackfilledAt { get; set; }
+
+        // Estimated AC-only cost (no sensor needed): cooling runtime × assumed amps×volts load,
+        // priced at the Alectra TOU rate in force at each moment. CAD $, same Toronto-local
+        // day/month rollover keys as the runtime counters above.
+        public double AcEstimatedCostTodayCad { get; set; }
+
+        public double AcEstimatedCostMonthCad { get; set; }
+
+        public double AcEstimatedCostLifetimeCad { get; set; }
+
+        public DateTimeOffset? AcEstimatedCostTrackingSince { get; set; }
+
+        public DateTimeOffset? AcCostBackfilledAt { get; set; }
 
         // Electricity-cost accounting (Alectra TOU), Toronto-local day/month rollover. Cost is in CAD $,
         // energy in kWh. Deltas are capped so app downtime / missed polls never over-count.

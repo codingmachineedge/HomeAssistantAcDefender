@@ -1364,6 +1364,7 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 }
 
 .ops-runtime__value { font-size: 18px; font-weight: 800; color: var(--accent); }
+.ops-runtime__cost { font-size: 12px; font-weight: 700; color: var(--sub); margin-top: 2px; }
 .ops-runtime__label { font-size: 8px; color: var(--sub); letter-spacing: 0.18em; margin-top: 3px; }
 
 /* very apologetic overlay */

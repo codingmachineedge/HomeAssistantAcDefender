@@ -113,6 +113,21 @@ public sealed class DefenderOptions
     public double ElectricityBudgetSafetyMaxCelsius { get; set; } = 26.0;
 
     /// <summary>
+    /// Estimated AC-only electricity cost, shown under the runtime hours on the Dashboard. The
+    /// Alectra whole-house sensor can be down (or absent), so this needs no sensor at all: every
+    /// second of real compressor runtime (hvac_action = cooling) is priced as a fixed assumed load —
+    /// amps × volts (default 30 A × 240 V = 7.2 kW) — at the Alectra time-of-use rate in force at
+    /// that moment. Runtime backfilled from past recorder logs is priced the same way, so today /
+    /// this-month / lifetime cost estimates cover the full logged history. This is an ESTIMATE of the
+    /// energy commodity portion: a 30 A breaker rating is the ceiling, not the measured draw.
+    /// </summary>
+    public bool AcCostEstimateEnabled { get; set; } = true;
+
+    public double AcEstimatedAmps { get; set; } = 30.0;
+
+    public double AcEstimatedVolts { get; set; } = 240.0;
+
+    /// <summary>
     /// Rival Schedule Watch. The AC vendor app has its own "Temperature schedules" tab (per weekday)
     /// that pushes the wall setpoint on a timer — e.g. SLEEP 21.5/23 at 12:00 a.m., DEEP SLEEP
     /// 23.5/26 at 2:00 a.m. (the "set a 2-hour timer, drift toward 25 while everyone sleeps" plan),
