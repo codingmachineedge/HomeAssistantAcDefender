@@ -1,3 +1,8 @@
+---
+layout: doc
+title: "Home"
+---
+
 # Home Assistant AC Defender Wiki
 
 Home Assistant AC Defender is a Docker-hosted ASP.NET Core Blazor website and background
@@ -14,14 +19,14 @@ Assistant climate entity or returns a real error.
 
 | Page | What it answers |
 | --- | --- |
-| **[Website Tour](Website-Tour.md)** | "What am I looking at?" — every page, with screenshots, in plain words |
-| **[Every Guard, Explained Simply](Every-Guard-Explained.md)** | Every single algorithm, described so a five-year-old could follow |
-| **[Energy & Costs](Energy-and-Costs.md)** | How hours become dollars: TOU rates, the AC-only estimate, the usage calendar, the monthly budget |
-| **[Defender Logic](Defender-Logic.md)** | The full decision cycle and every guard's exact rules |
-| **[Settings](Settings.md)** | Every knob on the Settings page |
-| **[API](API.md)** | The JSON endpoints and SSE stream |
-| **[Architecture](Architecture.md)** | How the code is put together |
-| **[Deployment](Deployment.md)** | Docker hosting |
+| **[Website Tour](Website-Tour.html)** | "What am I looking at?" — every page, with screenshots, in plain words |
+| **[Every Guard, Explained Simply](Every-Guard-Explained.html)** | Every single algorithm, described so a five-year-old could follow |
+| **[Energy & Costs](Energy-and-Costs.html)** | How hours become dollars: TOU rates, the AC-only estimate, the usage calendar, the monthly budget |
+| **[Defender Logic](Defender-Logic.html)** | The full decision cycle and every guard's exact rules |
+| **[Settings](Settings.html)** | Every knob on the Settings page |
+| **[API](API.html)** | The JSON endpoints and SSE stream |
+| **[Architecture](Architecture.html)** | How the code is put together |
+| **[Deployment](Deployment.html)** | Docker hosting |
 
 ## The big ideas
 

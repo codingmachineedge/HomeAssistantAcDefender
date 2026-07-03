@@ -1,3 +1,8 @@
+---
+layout: doc
+title: "Energy & Costs"
+---
+
 # Energy & Costs
 
 How AC Defender turns real thermostat activity into dollars — and how it prefers spending
@@ -110,7 +115,7 @@ the Energy page — so budgeting never silently stalls while Alectra is down.
 
 ## Related pages
 
-- [Website Tour](Website-Tour.md) — what every page looks like.
-- [Settings](Settings.md) — all the knobs.
-- [Defender Logic](Defender-Logic.md) — the guards that act on these signals
+- [Website Tour](Website-Tour.html) — what every page looks like.
+- [Settings](Settings.html) — all the knobs.
+- [Defender Logic](Defender-Logic.html) — the guards that act on these signals
   (Alectra Peak Power Saver, Rival Schedule Watch, night cooling budget…).

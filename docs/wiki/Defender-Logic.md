@@ -1,3 +1,8 @@
+---
+layout: doc
+title: "Defender Logic"
+---
+
 # Defender Logic
 
 This page describes every algorithm the AC Defender runs. The same descriptions appear in the app:

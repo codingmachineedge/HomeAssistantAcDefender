@@ -1,3 +1,8 @@
+---
+layout: doc
+title: "Deployment"
+---
+
 # Deployment
 
 The app is designed to run in Docker Compose.
@@ -66,8 +71,8 @@ created them, and historical usage needs the entity recorded by the recorder
 
 Any `Defender` option from `appsettings.json` can be overridden the same way, e.g.
 `Defender__RivalScheduleWatchEnabled=false` or `Defender__AcEstimatedAmps=20`. See
-[Energy & Costs](Energy-and-Costs.md) for the electricity/TOU keys and
-[Defender Logic](Defender-Logic.md) for the guard keys.
+[Energy & Costs](Energy-and-Costs.html) for the electricity/TOU keys and
+[Defender Logic](Defender-Logic.html) for the guard keys.
 
 When a Home Assistant climate state includes `context`, the defender stores it with the
 reading and the audit log: a `user_id` means a Home Assistant user/phone change, a

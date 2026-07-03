@@ -1,3 +1,8 @@
+---
+layout: doc
+title: "Architecture"
+---
+
 # Architecture
 
 The application is one ASP.NET Core process with two responsibilities:

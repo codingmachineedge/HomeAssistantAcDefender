@@ -1,3 +1,8 @@
+---
+layout: doc
+title: "Website Tour"
+---
+
 # Website Tour
 
 A picture-book walk through every page — written so simply that anyone can follow along.
@@ -151,8 +156,8 @@ of date from the code.
 
 ## Where next?
 
-- [Every Guard, Explained Simply](Every-Guard-Explained.md) — every algorithm in plain words.
-- [Defender Logic](Defender-Logic.md) — every guard's exact rules.
-- [Energy & Costs](Energy-and-Costs.md) — how the dollars are computed.
-- [Settings](Settings.md) — every knob, listed.
-- [API](API.md) — the JSON endpoints behind all of this.
+- [Every Guard, Explained Simply](Every-Guard-Explained.html) — every algorithm in plain words.
+- [Defender Logic](Defender-Logic.html) — every guard's exact rules.
+- [Energy & Costs](Energy-and-Costs.html) — how the dollars are computed.
+- [Settings](Settings.html) — every knob, listed.
+- [API](API.html) — the JSON endpoints behind all of this.

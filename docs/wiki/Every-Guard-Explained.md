@@ -1,7 +1,12 @@
+---
+layout: doc
+title: "Every Guard, Explained Simply"
+---
+
 # Every Guard, Explained Simply
 
 Every single algorithm in AC Defender, described so simply a five-year-old could follow.
-Each one also has an exact technical write-up in [Defender Logic](Defender-Logic.md) and a
+Each one also has an exact technical write-up in [Defender Logic](Defender-Logic.html) and a
 live card on the Defense page.
 
 The one rule behind all of them: **the room belongs to *my temp* — the number you picked.
@@ -239,4 +244,4 @@ meter goes quiet, it switches to its own estimate instead of giving up.
 ---
 
 *Want the exact math and settings for any of these? Every one has a precise entry in
-[Defender Logic](Defender-Logic.md) and a live card with real evidence on the Defense page.*
+[Defender Logic](Defender-Logic.html) and a live card with real evidence on the Defense page.*

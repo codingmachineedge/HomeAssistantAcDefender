@@ -1,3 +1,8 @@
+---
+layout: doc
+title: "API"
+---
+
 # API
 
 ## State

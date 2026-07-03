@@ -1,3 +1,8 @@
+---
+layout: doc
+title: "Settings"
+---
+
 # Settings
 
 The MudBlazor settings page controls defender behavior without editing configuration files. Each input, button, and action label includes short helper text below it. Times are displayed with a 24-hour clock.
@@ -253,7 +258,7 @@ Each schedule card contains name, enabled flag, day buttons, start time, end tim
 
 ## Electricity Budget
 
-Settings → Electricity budget (see [Energy & Costs](Energy-and-Costs.md) for the full behaviour):
+Settings → Electricity budget (see [Energy & Costs](Energy-and-Costs.html) for the full behaviour):
 
 - **Prefer staying inside a monthly budget** — the master switch.
 - **Monthly budget ($)** — the preferred monthly spend.
@@ -272,9 +277,9 @@ first start, and every save is clamped to safe ranges.
 A few features are tuned in `appsettings.json` / environment rather than on the Settings page:
 
 - **Rival Schedule Watch** blocks and tolerances (`RivalSchedule*`) — see
-  [Defender Logic](Defender-Logic.md#rival-schedule-watch).
+  [Defender Logic](Defender-Logic.html#rival-schedule-watch).
 - **Electricity cost tracking** rates and all-in bill factors (`Electricity*`) and the
   **AC-only cost estimate** load (`AcCostEstimateEnabled`, `AcEstimatedAmps`,
-  `AcEstimatedVolts`) — see [Energy & Costs](Energy-and-Costs.md).
+  `AcEstimatedVolts`) — see [Energy & Costs](Energy-and-Costs.html).
 - **Outdoor power rule** thresholds (`Outdoor*`) and the warm-room approach step
   (`WarmRoomApproachCelsius`).
