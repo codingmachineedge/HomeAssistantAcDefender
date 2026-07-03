@@ -1476,6 +1476,23 @@ public sealed class DefenderStateStore
     /// The per-day AC usage ledger for the Energy calendar, ordered oldest → newest. Hours are real
     /// compressor time; dollars are the assumed-load TOU estimate (see AcCostEstimate options).
     /// </summary>
+    /// <summary>
+    /// Someone pressed the kiosk's "show this &amp; last month's usage" button. The kiosk itself is
+    /// unbranded, but the press is a valuable signal here: a person is actively concerned about
+    /// costs. Recorded as an event so cost sensitivity shows up in the defender's own timeline.
+    /// </summary>
+    public void RecordKioskCostConcern(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            state.KioskCostConcernAt = now;
+            state.KioskCostConcernCount++;
+            AddEvent("info",
+                $"Energy kiosk usage button pressed at {now.ToLocalTime():HH:mm:ss} — someone is reviewing the costs (press #{state.KioskCostConcernCount}).");
+            SaveState();
+        }
+    }
+
     public IReadOnlyList<AcDailyUsage> GetAcDailyUsage()
     {
         lock (gate)
@@ -11195,6 +11212,12 @@ public sealed class DefenderStateStore
         public string? LastChangeContextId { get; set; }
 
         public string? LastChangeContextParentId { get; set; }
+
+        // Energy-kiosk cost-concern signal: last time (and how often) someone pressed the kiosk's
+        // monthly-usage button. The kiosk never mentions the defender; the defender still listens.
+        public DateTimeOffset? KioskCostConcernAt { get; set; }
+
+        public int KioskCostConcernCount { get; set; }
 
         public string? LastChangeContextUserId { get; set; }
 

@@ -721,6 +721,46 @@ public sealed class HomeAssistantClient
         return 2;
     }
 
+    /// <summary>Generic service call for the hub kiosk (cast/volume). Throws on non-success.</summary>
+    public Task CallHomeAssistantServiceAsync(string domain, string service, object payload, CancellationToken cancellationToken)
+        => CallServiceAsync(domain, service, payload, cancellationToken);
+
+    /// <summary>Raw state + selected attributes for any entity; null when missing/unreachable.</summary>
+    public async Task<(string State, string? AppName, double? VolumeLevel)?> GetMediaPlayerStateAsync(string entityId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await SendAsync(HttpMethod.Get, $"api/states/{Uri.EscapeDataString(entityId.Trim())}", null, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            var root = doc.RootElement;
+            var attrs = root.TryGetProperty("attributes", out var a) ? a : default;
+            string? app = attrs.ValueKind == JsonValueKind.Object && attrs.TryGetProperty("app_name", out var ap) ? ap.GetString() : null;
+            double? vol = attrs.ValueKind == JsonValueKind.Object && attrs.TryGetProperty("volume_level", out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
+            return (root.GetProperty("state").GetString() ?? "unknown", app, vol);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Pushes a state-machine-only sensor into Home Assistant (POST api/states). These entities feed
+    /// the kiosk dashboard; they vanish on HA restart, so the kiosk worker re-posts them every cycle.
+    /// </summary>
+    public async Task PushSensorStateAsync(string entityId, string state, object attributes, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(new { state, attributes });
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        using var response = await SendAsync(HttpMethod.Post, $"api/states/{Uri.EscapeDataString(entityId)}", content, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     private async Task CallServiceAsync(string domain, string service, object payload, CancellationToken cancellationToken)
     {
         var json = JsonSerializer.Serialize(payload);

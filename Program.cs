@@ -19,6 +19,7 @@ if (await CliCommands.TryRunAsync(args, builder.Configuration))
 
 builder.Services.Configure<HomeAssistantOptions>(builder.Configuration.GetSection(HomeAssistantOptions.SectionName));
 builder.Services.Configure<DefenderOptions>(builder.Configuration.GetSection(DefenderOptions.SectionName));
+builder.Services.Configure<KioskOptions>(builder.Configuration.GetSection(KioskOptions.SectionName));
 builder.Services.AddSingleton<DefenderStateStore>();
 builder.Services.AddSingleton<AcDefenderService>();
 builder.Services.AddSingleton<TwoFactorAuth>();
@@ -27,6 +28,7 @@ builder.Services.AddSingleton<SdmCameraService>();
 builder.Services.AddSingleton<HomeAssistantTokenStore>();
 builder.Services.AddHttpClient<HomeAssistantClient>();
 builder.Services.AddHostedService<AcDefenderWorker>();
+builder.Services.AddHostedService<HubKioskService>();
 builder.Services.AddScoped<DefenderStateProvider>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMudServices();
