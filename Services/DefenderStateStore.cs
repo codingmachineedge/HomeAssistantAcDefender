@@ -37,7 +37,15 @@ public sealed class DefenderStateStore
     private readonly DefenderOptions options;
     private readonly ILogger<DefenderStateStore> logger;
     private readonly string stateFilePath;
+    // Append-only, never-capped audit of every thermostat change, one compact JSON object per line,
+    // written to the SAME (persisted) directory as the state file. The in-memory ThermostatChanges
+    // list caps at 100 so the UI stays light; this file keeps every change forever so history is
+    // never lost as older entries roll off the list. See AppendThermostatHistory.
+    private readonly string historyFilePath;
+    private readonly object historyGate = new();
     private readonly JsonSerializerOptions jsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    // Compact (single-line) serializer for the JSON-lines history file.
+    private readonly JsonSerializerOptions historyJsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = false };
     private readonly Random random = new();
     // The rival AC app's own temperature schedule, parsed once from configuration. This is the OTHER
     // side's plan — never a defender target source. See Services/RivalScheduleWatch.cs.
@@ -50,7 +58,9 @@ public sealed class DefenderStateStore
         this.logger = logger;
         rivalScheduleBlocks = RivalScheduleWatch.Parse(this.options.RivalScheduleBlocks);
         stateFilePath = ResolveStatePath(this.options.StateFilePath, environment.ContentRootPath);
+        historyFilePath = Path.Combine(Path.GetDirectoryName(stateFilePath) ?? ".", "thermostat-history.jsonl");
         state = LoadState();
+        BackfillHistoryFromStateOnce();
         SeedBudgetSettingsFromOptionsOnce();
     }
 
@@ -6141,6 +6151,8 @@ public sealed class DefenderStateStore
             state.ThermostatChanges.RemoveRange(100, state.ThermostatChanges.Count - 100);
         }
 
+        AppendThermostatHistory(audit);
+
         ApplyTouchIntentGrace(reading, now);
         ApplyCoolerIntentFastLane(reading, now);
         TryUpdateComfortMemory(reading, now);
@@ -6218,6 +6230,8 @@ public sealed class DefenderStateStore
         {
             state.ThermostatChanges.RemoveRange(100, state.ThermostatChanges.Count - 100);
         }
+
+        AppendThermostatHistory(audit);
 
         AddEvent("warning",
             $"Rival schedule change ({label}): {previous:0.0} C to {reading.SetPointCelsius:0.0} C at {now:yyyy-MM-dd HH:mm:ss}. "
@@ -10272,6 +10286,62 @@ public sealed class DefenderStateStore
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not save defender state to {StateFilePath}", stateFilePath);
+        }
+    }
+
+    /// <summary>
+    /// One-time seed: if the append-only history file does not exist yet (first run after this
+    /// feature shipped), write the changes currently held in the loaded state — oldest first — so
+    /// the ~100 changes already captured in the state blob are carried into the permanent record
+    /// instead of being lost as new changes push them off the capped in-memory list.
+    /// </summary>
+    private void BackfillHistoryFromStateOnce()
+    {
+        try
+        {
+            if (File.Exists(historyFilePath))
+            {
+                return;
+            }
+
+            // state.ThermostatChanges is newest-first; write chronologically (oldest first).
+            for (var i = state.ThermostatChanges.Count - 1; i >= 0; i--)
+            {
+                AppendThermostatHistory(state.ThermostatChanges[i]);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not seed thermostat history from state at {HistoryFilePath}", historyFilePath);
+        }
+    }
+
+    /// <summary>
+    /// Durable, append-only history: writes one compact JSON line per thermostat change to
+    /// thermostat-history.jsonl in the persisted state directory. Unlike the in-memory
+    /// ThermostatChanges list (capped at 100 for the UI), this file is NEVER trimmed — it is the
+    /// permanent record so month-over-month patterns are never lost. Append is best-effort: a
+    /// failure here must never break the defender's control loop, so it only logs a warning.
+    /// </summary>
+    private void AppendThermostatHistory(ThermostatChangeAudit audit)
+    {
+        try
+        {
+            var line = JsonSerializer.Serialize(audit, historyJsonOptions);
+            lock (historyGate)
+            {
+                var directory = Path.GetDirectoryName(historyFilePath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                File.AppendAllText(historyFilePath, line + Environment.NewLine);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not append thermostat history to {HistoryFilePath}", historyFilePath);
         }
     }
 
