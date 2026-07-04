@@ -120,6 +120,9 @@ public sealed class DefenderStateStore
         lock (gate)
         {
             state.TargetTemperatureCelsius = NormalizeTargetTemperature(temperatureCelsius);
+            // A deliberate website target overrides any standing repeated-raise surrender.
+            state.SurrenderUntil = null;
+            state.SurrenderTargetCelsius = null;
             ResetCoolingDefenderStep();
             ResetNaturalRecovery("Website target changed; comfort sync is ready.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
@@ -2095,11 +2098,30 @@ public sealed class DefenderStateStore
     {
         lock (gate)
         {
+            var now = DateTimeOffset.UtcNow;
+
+            // TAMPER TRUCE: the thermostat vanishing right after an active correction exchange is
+            // what a person pulling the unit off the wall looks like (see the Jun 23 / Jul 2 dawn
+            // battles that ended in ->0). Fighting harder is how thermostats get detached; instead
+            // stand down for two hours so the person finds a defender that respects the message.
+            var recentDefenderCommand = state.LastDefenderCommandAt is { } cmd && now - cmd <= TimeSpan.FromMinutes(20);
+            var recentHumanTouch = state.ExternalTouchTimes.Any(t => now - t <= TimeSpan.FromMinutes(45));
+            var alreadyQuiet = state.EmergencyQuietUntil is { } quiet && quiet > now;
+            if (recentDefenderCommand && recentHumanTouch && !alreadyQuiet)
+            {
+                state.EmergencyQuietUntil = now.AddHours(2);
+                state.EmergencyProtocol = "Tamper truce";
+                state.EmergencyStatus = "🤝 TAMPER TRUCE: the thermostat disappeared right after a correction exchange — "
+                    + "someone may have detached it in frustration. All corrections stop for 2 hours.";
+                AddEvent("warning",
+                    "Tamper truce: thermostat became unreachable minutes after a correction exchange; standing down 2 hours instead of escalating.");
+            }
+
             state.ConnectionState = "unavailable";
             state.LastError = message;
             state.NextAction = "Waiting for Home Assistant connection.";
-            state.NextActionAt = DateTimeOffset.UtcNow.AddSeconds(options.PollIntervalSeconds);
-            state.UpdatedAt = DateTimeOffset.UtcNow;
+            state.NextActionAt = now.AddSeconds(options.PollIntervalSeconds);
+            state.UpdatedAt = now;
             AddEvent("warning", message);
             SaveState();
             return CreateSnapshot();
@@ -5672,6 +5694,15 @@ public sealed class DefenderStateStore
             // No guard, learned offset, boost, or comfort override is allowed to cool below it.
             target = Math.Max(target, state.TargetTemperatureCelsius);
 
+            // REPEATED-RAISE SURRENDER: a human insisted (3+ raises to the same value in 30 min), so
+            // their number IS the target for a few hours — with no warm-room escape. Only ever
+            // raises the effective target; my temp stays the floor and emergencies still win.
+            if (state.SurrenderUntil is { } surrenderUntil && surrenderUntil > now
+                && state.SurrenderTargetCelsius is { } surrendered)
+            {
+                target = Math.Max(target, surrendered);
+            }
+
             // BUDGET PREFERENCE: when month-to-date all-in spend is running ahead of the pro-rated
             // budget, let the room run a little warmer (raise the effective target) to spend less —
             // biased toward the expensive on/mid-peak periods. It only ever RAISES the target (never
@@ -6174,6 +6205,7 @@ public sealed class DefenderStateStore
         ApplyCoolerIntentFastLane(reading, now);
         TryUpdateComfortMemory(reading, now);
         TryStartComfortCompromise(reading, now);
+        TryStartRepeatedRaiseSurrender(reading, previous, now);
 
         AddEvent("warning",
             $"External thermostat change ({source.Label}): {previous:0.0} C to {reading.SetPointCelsius:0.0} C at {now:yyyy-MM-dd HH:mm:ss}.");
@@ -6703,6 +6735,53 @@ public sealed class DefenderStateStore
             netChange,
             extraMinutes,
             $"Touch intent sees mixed wall choices ({netChange:+0.0;-0.0;0.0} C net).");
+    }
+
+    /// <summary>
+    /// Repeated-raise surrender: when a human re-raises the setpoint to roughly the same value
+    /// 3+ times inside 30 minutes, the defender ADOPTS that value for 4 hours — deliberately with
+    /// NO warm-room escape hatch, because the warm-room bypass is exactly what turned dawn
+    /// disagreements into a detached thermostat. The human wins the argument; safety is preserved
+    /// by capping the adopted value and leaving emergencies untouched.
+    /// </summary>
+    private void TryStartRepeatedRaiseSurrender(ThermostatReading reading, double previous, DateTimeOffset now)
+    {
+        // Prune the 30-minute window first so stale volleys never linger.
+        while (state.ExternalRaiseTimes.Count > 0 && now - state.ExternalRaiseTimes[0] > TimeSpan.FromMinutes(30))
+        {
+            state.ExternalRaiseTimes.RemoveAt(0);
+            state.ExternalRaiseValues.RemoveAt(0);
+        }
+
+        if (previous <= 5.0 || reading.SetPointCelsius <= 5.0 || reading.SetPointCelsius <= previous + 0.05)
+        {
+            return; // not a real raise
+        }
+
+        state.ExternalRaiseTimes.Add(now);
+        state.ExternalRaiseValues.Add(Math.Round(reading.SetPointCelsius, 1));
+        while (state.ExternalRaiseTimes.Count > 10)
+        {
+            state.ExternalRaiseTimes.RemoveAt(0);
+            state.ExternalRaiseValues.RemoveAt(0);
+        }
+
+        var wanted = reading.SetPointCelsius;
+        var similarRaises = state.ExternalRaiseValues.Count(v => Math.Abs(v - wanted) <= 0.7);
+        if (similarRaises < 3)
+        {
+            return;
+        }
+
+        var adopted = Math.Round(Math.Min(wanted, 27.0), 1); // safety cap; emergencies still override
+        state.SurrenderTargetCelsius = adopted;
+        state.SurrenderUntil = now.AddHours(4);
+        state.ExternalRaiseTimes.Clear();
+        state.ExternalRaiseValues.Clear();
+        ResetCoolingDefenderStep();
+        AddEvent("warning",
+            $"Repeated-raise surrender: {similarRaises} raises to ~{wanted:0.0} C within 30 minutes — the person clearly wants it. "
+            + $"Adopting {adopted:0.0} C until {state.SurrenderUntil.Value.ToLocalTime():HH:mm} instead of arguing.");
     }
 
     private void TryStartComfortCompromise(ThermostatReading reading, DateTimeOffset now)
@@ -11218,6 +11297,17 @@ public sealed class DefenderStateStore
         public DateTimeOffset? KioskCostConcernAt { get; set; }
 
         public int KioskCostConcernCount { get; set; }
+
+        // Repeated-raise surrender: recent external RAISES (times + values, pruned to 30 min). When a
+        // human re-raises to about the same value 3+ times, the defender adopts it for 4 hours —
+        // losing an argument gracefully beats winning it and losing the thermostat off the wall.
+        public List<DateTimeOffset> ExternalRaiseTimes { get; set; } = [];
+
+        public List<double> ExternalRaiseValues { get; set; } = [];
+
+        public DateTimeOffset? SurrenderUntil { get; set; }
+
+        public double? SurrenderTargetCelsius { get; set; }
 
         public string? LastChangeContextUserId { get; set; }
 
