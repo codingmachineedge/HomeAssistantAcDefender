@@ -144,6 +144,23 @@ The schedule editor for your own time-of-day targets lives at the bottom of this
 
 ---
 
+## 📹 Front door (`/camera`)
+
+A live view of the front-door doorbell, streamed straight from Google into the site
+(WebRTC). It starts automatically, renews itself under Google's five-minute session
+limit, and sits behind the same sign-in as everything else — the camera is never public.
+
+---
+
+## 🔑 Signing in with Google
+
+Besides username + password, the guard post can show a **Sign in with Google** button.
+Click it and a short code appears (like `BWW-LVW-GBRS`); open `google.com/device` on any
+device, enter the code with an allow-listed Google account, and the page signs you in by
+itself. Only accounts on the allow-list may enter.
+
+---
+
 ## 📖 Guide (`/guide`)
 
 ![Guide](images/guide.png)

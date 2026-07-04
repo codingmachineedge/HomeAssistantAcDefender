@@ -47,3 +47,8 @@ Assistant climate entity or returns a real error.
   thermostat touches means someone is about to yell — the rage detector apologizes
   automatically, eases the AC up as a peace gesture, and stands down for two hours.
   It stops *before* it happens, to prevent tears.
+- **A persistent human always wins.** The truce family — Repeated-Raise Surrender (insist
+  three times and your number stands for four hours), the ULTRA OMEGA Tamper Truce (a
+  vanished thermostat after an argument means stand down, not alarms), and the Wake-Up
+  Truce (a bedroom door opening at dawn warms the target before the person reaches the
+  hallway). Nobody should ever have to detach a thermostat again.

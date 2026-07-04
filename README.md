@@ -35,6 +35,11 @@ entity or shows a real error.
    thermostat touches means someone is about to yell — the rage detector sees it coming,
    apologizes automatically, eases the AC up as a peace gesture, and stands down for two
    hours. It stops *before* it happens, to prevent tears.
+7. **A persistent human always wins.** The truce family: insist on the same warmer number
+   three times and the defender adopts it for four hours (Repeated-Raise Surrender); a
+   thermostat that vanishes mid-argument triggers the **ULTRA OMEGA ALERT** Tamper Truce —
+   two hours of stand-down, not alarms; and a bedroom door sensor opening at dawn warms
+   the target before the person reaches the hallway (Wake-Up Truce).
 
 | The money page | The usage calendar |
 | --- | --- |

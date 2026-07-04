@@ -29,6 +29,7 @@ builder.Services.AddSingleton<HomeAssistantTokenStore>();
 builder.Services.AddHttpClient<HomeAssistantClient>();
 builder.Services.AddHostedService<AcDefenderWorker>();
 builder.Services.AddHostedService<HubKioskService>();
+builder.Services.AddHostedService<WakeTruceService>();
 builder.Services.AddScoped<DefenderStateProvider>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMudServices();

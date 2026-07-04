@@ -128,6 +128,21 @@ public sealed class DefenderOptions
     public double AcEstimatedVolts { get; set; } = 240.0;
 
     /// <summary>
+    /// Wake-Up Truce: a bedroom door sensor opening during the dawn window means that person is
+    /// awake — the defender pre-emptively adopts the truce temperature for a few hours so they never
+    /// have to fight the thermostat at all. Disabled until the door sensor entity is configured.
+    /// </summary>
+    public string WakeTruceDoorSensorEntityId { get; set; } = "";
+
+    public string WakeTruceWindowStart { get; set; } = "04:00";
+
+    public string WakeTruceWindowEnd { get; set; } = "09:00";
+
+    public double WakeTruceTargetCelsius { get; set; } = 25.0;
+
+    public int WakeTruceHoldMinutes { get; set; } = 120;
+
+    /// <summary>
     /// Rival Schedule Watch. The AC vendor app has its own "Temperature schedules" tab (per weekday)
     /// that pushes the wall setpoint on a timer — e.g. SLEEP 21.5/23 at 12:00 a.m., DEEP SLEEP
     /// 23.5/26 at 2:00 a.m. (the "set a 2-hour timer, drift toward 25 while everyone sleeps" plan),

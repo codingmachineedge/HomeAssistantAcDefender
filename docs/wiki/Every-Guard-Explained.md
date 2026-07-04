@@ -184,6 +184,29 @@ starts the full two-hour apology on demand.
 
 ---
 
+## 🕊️ The truce family (born the day a thermostat came off the wall)
+
+One morning a person raised the temperature twelve times in six minutes, the robot pulled
+it back down every time — and the person unplugged the thermostat. The robot *won every
+round and lost the war.* These three guards make sure that never happens again.
+
+**Repeated-Raise Surrender.** If a person sets about the same warmer number **three times
+in half an hour**, they are not confused — they mean it. The robot adopts their number for
+four hours. On purpose, there is **no** "unless the room is too warm" excuse here: that
+excuse is exactly what kept the old fight going.
+
+**Tamper Truce (the ULTRA OMEGA ALERT).** If the thermostat suddenly vanishes right after
+an argument (a robot correction plus recent human touches), the robot assumes a frustrated
+person is holding it. This is the highest alert tier of all — above MEGA (not cooling) and
+OMEGA (breaker off) — and the response is the opposite of panic: the robot goes quiet for
+two hours and writes down why.
+
+**Wake-Up Truce.** A bedroom door sensor tells the robot someone woke up. If the door
+opens during the dawn window (4–9 a.m.), the robot warms the target *before* the person
+even reaches the hallway. They wake up to a house that already agrees with them.
+
+---
+
 ## 🌙 Night & safety
 
 **Night Shutdown.** On cool nights, turn the AC fully off during the night window and

@@ -2111,10 +2111,10 @@ public sealed class DefenderStateStore
             {
                 state.EmergencyQuietUntil = now.AddHours(2);
                 state.EmergencyProtocol = "Tamper truce";
-                state.EmergencyStatus = "🤝 TAMPER TRUCE: the thermostat disappeared right after a correction exchange — "
-                    + "someone may have detached it in frustration. All corrections stop for 2 hours.";
+                state.EmergencyStatus = "🚨 ULTRA OMEGA ALERT — TAMPER TRUCE: the thermostat disappeared right after a "
+                    + "correction exchange — someone may have detached it in frustration. All corrections stop for 2 hours.";
                 AddEvent("warning",
-                    "Tamper truce: thermostat became unreachable minutes after a correction exchange; standing down 2 hours instead of escalating.");
+                    "ULTRA OMEGA ALERT (tamper truce): thermostat became unreachable minutes after a correction exchange; standing down 2 hours instead of escalating.");
             }
 
             state.ConnectionState = "unavailable";
@@ -6782,6 +6782,32 @@ public sealed class DefenderStateStore
         AddEvent("warning",
             $"Repeated-raise surrender: {similarRaises} raises to ~{wanted:0.0} C within 30 minutes — the person clearly wants it. "
             + $"Adopting {adopted:0.0} C until {state.SurrenderUntil.Value.ToLocalTime():HH:mm} instead of arguing.");
+    }
+
+    /// <summary>
+    /// Wake-Up Truce: the bedroom door opened during the dawn window, so that person is awake.
+    /// Adopt the truce temperature immediately (via the surrender fields) so the defender agrees
+    /// with them before they ever touch the thermostat. Only ever raises the effective target.
+    /// </summary>
+    public void BeginWakeTruce(double targetCelsius, int holdMinutes, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            var adopted = Math.Round(Math.Clamp(targetCelsius, state.TargetTemperatureCelsius, 27.0), 1);
+            var until = now.AddMinutes(Math.Clamp(holdMinutes, 15, 720));
+            if (state.SurrenderUntil is { } existing && existing > now
+                && state.SurrenderTargetCelsius is { } current && current >= adopted)
+            {
+                return; // an equal-or-warmer truce is already standing
+            }
+
+            state.SurrenderTargetCelsius = adopted;
+            state.SurrenderUntil = until;
+            ResetCoolingDefenderStep();
+            AddEvent("info",
+                $"Wake-up truce: the bedroom door opened at {now.ToLocalTime():HH:mm}, so the defender adopted {adopted:0.0} C until {until.ToLocalTime():HH:mm} — good morning, no fight.");
+            SaveState();
+        }
     }
 
     private void TryStartComfortCompromise(ThermostatReading reading, DateTimeOffset now)

@@ -821,6 +821,31 @@ public static class GuardCatalog
             "When the custom schedule is on, the matching rule supplies the target. Weather rules (always, room-above-outdoor, room-below-outdoor, outdoor-above-target, outdoor-below-target) decide whether corrective action is allowed. The defender still reads Home Assistant 24/7 even when a rule blocks correction.",
             "Sets the target and whether corrective action runs.",
             ["ScheduleEnabled", "WeatherActivationMode", "(per-rule Days / Start / End / Target / Weather)"]),
+
+        // ─────────────── The truce family (added after a thermostat was detached) ───────────────
+        new GuardInfo(
+            "Repeated-Raise Surrender", GuardCategory.WallTouch,
+            "If a person re-raises the setpoint to about the same value 3+ times in 30 minutes, the defender adopts their number for 4 hours — the human wins the argument.",
+            "Recent external RAISES (times and values, pruned to a 30-minute window).",
+            "Three or more raises landing within 0.7 C of each other mean the person really wants that temperature. The defender adopts it (capped at 27 C) as the effective target for 4 hours — deliberately with NO 'unless the room is too warm' escape, because that escape hatch is what turned dawn disagreements into a detached thermostat. My temp stays the hard floor, emergencies still win, and a deliberate website target clears the surrender.",
+            "Raises the effective target to the human's number for 4 hours and logs the surrender.",
+            ["(always on — fixed: 3 raises / 30 min window / 4 h hold / 27 C cap)"]),
+
+        new GuardInfo(
+            "Tamper Truce", GuardCategory.System,
+            "If the thermostat vanishes right after a correction exchange, assume a frustrated person detached it — stand down 2 hours instead of escalating.",
+            "Home Assistant reachability, the last defender command time, and recent human touches.",
+            "A thermostat that becomes unreachable within 20 minutes of a defender command AND 45 minutes of a human touch looks exactly like someone pulling the unit off the wall (it really happened, twice). This is the ULTRA OMEGA ALERT — one tier above MEGA (not cooling) and OMEGA (breaker off). Instead of fighting harder, the defender enters a 2-hour emergency quiet named 'Tamper truce' and says why. Normal outages without a preceding exchange are unaffected.",
+            "Raises the ULTRA OMEGA ALERT, activates a 2-hour stand-down, and records the tamper-truce event.",
+            ["(always on — fixed: 20 min command window / 45 min touch window / 2 h truce)"]),
+
+        new GuardInfo(
+            "Wake-Up Truce (door sensor)", GuardCategory.Sensor,
+            "A bedroom door opening at dawn means that person is awake — adopt the warm truce temperature before they ever touch the thermostat.",
+            "The configured bedroom door sensor (closed-to-open transitions) during the dawn window.",
+            "When the door sensor flips from closed to open between the window start and end (default 04:00-09:00), the defender immediately adopts the truce temperature (default 25 C, never below my temp, capped at 27 C) for the hold period (default 2 h) using the same surrender machinery. The person wakes to a defender that already agrees with them.",
+            "Adopts the truce target for the hold period and logs a friendly good-morning event.",
+            ["WakeTruceDoorSensorEntityId", "WakeTruceWindowStart", "WakeTruceWindowEnd", "WakeTruceTargetCelsius", "WakeTruceHoldMinutes"]),
     ];
 
     /// <summary>Catalog entries that expose a live card (used by the Defense board).</summary>
