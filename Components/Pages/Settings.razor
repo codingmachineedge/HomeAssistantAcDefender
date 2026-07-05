@@ -146,6 +146,41 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
+            @if (Show("cool outdoor shutdown open window armistice forecast off restore daytime")) {
+                <MudExpansionPanel Text="Cool-outdoor shutdown" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Turn the AC fully off when it is cool outside" Value="_coolOutdoorShutdownEnabled" ValueChanged="@(v => SetDirty(v, x => _coolOutdoorShutdownEnabled = x))" Help="Below the threshold, and only when the forecast agrees it stays cool, the AC is turned off once per cool episode and restored automatically — by the weather, or immediately if the room crosses the safety band. Turning it back on manually is respected. Quiet minutes bank food rations." />
+                        <SettingDouble Label="Shutdown below (C)" Value="_coolOutdoorShutdownBelowCelsius" ValueChanged="@(v => SetDirty(v, x => _coolOutdoorShutdownBelowCelsius = x))" Min="5" Max="25" Step="0.5" Help="Outdoor temperatures under this may turn the AC fully off." />
+                        <SettingDouble Label="Restore margin (C)" Value="_coolOutdoorRestoreMarginCelsius" ValueChanged="@(v => SetDirty(v, x => _coolOutdoorRestoreMarginCelsius = x))" Min="0.5" Max="5" Step="0.5" Help="Cool mode comes back once outdoor warms past threshold + this margin — the anti-flap band." />
+                        <SettingInt Label="Minimum off dwell (minutes)" Value="_coolOutdoorMinimumOffMinutes" ValueChanged="@(v => SetDirty(v, x => _coolOutdoorMinimumOffMinutes = x))" Min="5" Max="240" Help="The AC stays off at least this long before a weather restore. Room comfort ignores the dwell entirely." />
+                        <SettingSwitch Label="Forecast gate" Value="_coolOutdoorForecastGateEnabled" ValueChanged="@(v => SetDirty(v, x => _coolOutdoorForecastGateEnabled = x))" Help="Only shut down when the hourly forecast peak over the gate hours stays under the restore point — no off/on flapping before a hot afternoon. With no fresh forecast the shutdown simply waits; with the gate off, the current temperature alone decides (dwell and margin still protect)." />
+                        <SettingInt Label="Forecast gate hours" Value="_coolOutdoorForecastGateHours" ValueChanged="@(v => SetDirty(v, x => _coolOutdoorForecastGateHours = x))" Min="1" Max="12" Help="How far ahead the forecast must stay cool before a shutdown is allowed." />
+                        <SettingInt Label="Forecast refresh (minutes)" Value="_forecastRefreshMinutes" ValueChanged="@(v => SetDirty(v, x => _forecastRefreshMinutes = x))" Min="10" Max="180" Help="How often the Home Assistant hourly forecast is fetched (weather.get_forecasts)." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("siesta mess hall nap rations food pantry field kitchen hot day release reactor winforge")) {
+                <MudExpansionPanel Text="Siesta &amp; rations" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
+                        <SettingSwitch Label="Siesta (mess hall)" Value="_siestaEnabled" ValueChanged="@(v => SetDirty(v, x => _siestaEnabled = x))" Help="Lets the guard force nap on command (dashboard button). While they sleep the AC eases off and the money it would probably have spent banks as food rations. The room passing the wake band always wakes them early." />
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="string" Value="_siestaThermostatAction" ValueChanged="@(v => SetDirty(v, x => _siestaThermostatAction = x))" Label="On siesta start" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem T="string" Value="@("park")">Park the setpoint (raise-only, uses the stand-down park number)</MudSelectItem>
+                                <MudSelectItem T="string" Value="@("off")">Turn the AC fully off</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <SettingDouble Label="Wake band (C above target)" Value="_siestaWakeBandCelsius" ValueChanged="@(v => SetDirty(v, x => _siestaWakeBandCelsius = x))" Min="0.1" Max="5" Step="0.1" Help="The room passing target + this band wakes the guards immediately. The budget safety maximum also always wakes them." />
+                        <SettingInt Label="Longest siesta (minutes)" Value="_siestaMaxMinutes" ValueChanged="@(v => SetDirty(v, x => _siestaMaxMinutes = x))" Min="15" Max="1440" Help="Start requests are clamped to this." />
+                        <SettingSwitch Label="Food rations (field kitchen)" Value="_foodRationsEnabled" ValueChanged="@(v => SetDirty(v, x => _foodRationsEnabled = x))" Help="Banks unspent AC dollars during siestas and cool-outdoor shutdowns, and spends them on forecast-hot days so the monthly budget eases exactly when cooling matters most." />
+                        <SettingDouble Label="Pantry cap ($)" Value="_foodBalanceMaxCad" ValueChanged="@(v => SetDirty(v, x => _foodBalanceMaxCad = x))" Min="0" Max="500" Step="1" Help="The most the pantry can hold; it is kept across months, bounded by this cap." />
+                        <SettingDouble Label="Hot-day threshold (C)" Value="_foodReleaseHotThresholdCelsius" ValueChanged="@(v => SetDirty(v, x => _foodReleaseHotThresholdCelsius = x))" Min="20" Max="45" Step="0.5" Help="Rations release when the forecast (or, without one, the live outdoor reading) reaches this." />
+                        <SettingInt Label="Hot-day lookahead (hours)" Value="_foodReleaseLookaheadHours" ValueChanged="@(v => SetDirty(v, x => _foodReleaseLookaheadHours = x))" Min="1" Max="48" Help="How far ahead the forecast is scanned for the hot window." />
+                        <SettingDouble Label="Daily release cap ($)" Value="_foodReleaseMaxPerDayCad" ValueChanged="@(v => SetDirty(v, x => _foodReleaseMaxPerDayCad = x))" Min="0" Max="100" Step="0.5" Help="The most the pantry pays off the budget per day. 0 turns releases off entirely." />
+                        <SettingSwitch Label="Reactor power (WinForge)" Value="_reactorPowerEnabled" ValueChanged="@(v => SetDirty(v, x => _reactorPowerEnabled = x))" Help="Rations can summon the WinForge Web reactor's AI operator — one ration per hour. The voucher is readable at /api/reactor-power for WinForge to poll." />
+                        <SettingDouble Label="Ration size ($)" Value="_foodRationSizeCad" ValueChanged="@(v => SetDirty(v, x => _foodRationSizeCad = x))" Min="0.05" Max="5" Step="0.05" Help="Dollars per ration. One ration = one reactor-hour." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
             @if (Show("website debounce buttons rest command spam")) {
                 <MudExpansionPanel Text="Website debounce" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
@@ -839,6 +874,24 @@
     private int _coolingStepMinimumGapSeconds = 60;
     private double _nightMinimumSetPointCelsius = 23.0;
     private int _nightCoolingBudgetMinutes = 90;
+    private bool _coolOutdoorShutdownEnabled;
+    private double _coolOutdoorShutdownBelowCelsius = 20.0;
+    private double _coolOutdoorRestoreMarginCelsius = 1.5;
+    private int _coolOutdoorMinimumOffMinutes = 30;
+    private bool _coolOutdoorForecastGateEnabled = true;
+    private int _coolOutdoorForecastGateHours = 4;
+    private int _forecastRefreshMinutes = 30;
+    private bool _siestaEnabled = true;
+    private string _siestaThermostatAction = "park";
+    private double _siestaWakeBandCelsius = 1.0;
+    private int _siestaMaxMinutes = 480;
+    private bool _foodRationsEnabled = true;
+    private double _foodBalanceMaxCad = 20.0;
+    private double _foodReleaseHotThresholdCelsius = 30.0;
+    private int _foodReleaseLookaheadHours = 12;
+    private double _foodReleaseMaxPerDayCad = 5.0;
+    private bool _reactorPowerEnabled = true;
+    private double _foodRationSizeCad = 0.25;
     private bool _electricityBudgetEnabled;
     private double _electricityMonthlyBudgetDollars = 150.0;
     private double _electricityBudgetAggressiveness = 0.5;
@@ -1147,6 +1200,24 @@
         _coolingStepMinimumGapSeconds = settings.CoolingStepMinimumGapSeconds;
         _nightMinimumSetPointCelsius = settings.NightMinimumSetPointCelsius;
         _nightCoolingBudgetMinutes = settings.NightCoolingBudgetMinutes;
+        _coolOutdoorShutdownEnabled = settings.CoolOutdoorShutdownEnabled;
+        _coolOutdoorShutdownBelowCelsius = settings.CoolOutdoorShutdownBelowCelsius;
+        _coolOutdoorRestoreMarginCelsius = settings.CoolOutdoorRestoreMarginCelsius;
+        _coolOutdoorMinimumOffMinutes = settings.CoolOutdoorMinimumOffMinutes;
+        _coolOutdoorForecastGateEnabled = settings.CoolOutdoorForecastGateEnabled;
+        _coolOutdoorForecastGateHours = settings.CoolOutdoorForecastGateHours;
+        _forecastRefreshMinutes = settings.ForecastRefreshMinutes;
+        _siestaEnabled = settings.SiestaEnabled;
+        _siestaThermostatAction = string.Equals(settings.SiestaThermostatAction, "off", StringComparison.OrdinalIgnoreCase) ? "off" : "park";
+        _siestaWakeBandCelsius = settings.SiestaWakeBandCelsius;
+        _siestaMaxMinutes = settings.SiestaMaxMinutes;
+        _foodRationsEnabled = settings.FoodRationsEnabled;
+        _foodBalanceMaxCad = settings.FoodBalanceMaxCad;
+        _foodReleaseHotThresholdCelsius = settings.FoodReleaseHotThresholdCelsius;
+        _foodReleaseLookaheadHours = settings.FoodReleaseLookaheadHours;
+        _foodReleaseMaxPerDayCad = settings.FoodReleaseMaxPerDayCad;
+        _reactorPowerEnabled = settings.ReactorPowerEnabled;
+        _foodRationSizeCad = settings.FoodRationSizeCad;
         _electricityBudgetEnabled = settings.ElectricityBudgetEnabled;
         _electricityMonthlyBudgetDollars = settings.ElectricityMonthlyBudgetDollars;
         _electricityBudgetAggressiveness = settings.ElectricityBudgetAggressiveness;
@@ -1717,7 +1788,25 @@
             _electricityBudgetAggressiveness,
             _electricityBudgetMaxSetpointOffsetCelsius,
             _electricityBudgetSafetyMaxCelsius,
-            _electricityBudgetBasis);
+            _electricityBudgetBasis,
+            _coolOutdoorShutdownEnabled,
+            _coolOutdoorShutdownBelowCelsius,
+            _coolOutdoorRestoreMarginCelsius,
+            _coolOutdoorMinimumOffMinutes,
+            _coolOutdoorForecastGateEnabled,
+            _coolOutdoorForecastGateHours,
+            _forecastRefreshMinutes,
+            _siestaEnabled,
+            _siestaThermostatAction,
+            _siestaWakeBandCelsius,
+            _siestaMaxMinutes,
+            _foodRationsEnabled,
+            _foodBalanceMaxCad,
+            _foodReleaseHotThresholdCelsius,
+            _foodReleaseLookaheadHours,
+            _foodReleaseMaxPerDayCad,
+            _reactorPowerEnabled,
+            _foodRationSizeCad);
 
         var snapshot = StateStore.UpdateSettings(request);
         LoadFromSnapshot(snapshot);

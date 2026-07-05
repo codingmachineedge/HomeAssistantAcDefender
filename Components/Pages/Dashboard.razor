@@ -398,6 +398,24 @@
                 {
                     bits.Add($"OUTDOOR {o:0.0}°C {Snapshot.Weather.Condition?.ToUpperInvariant()}");
                 }
+                if (Snapshot?.Forecast is { Available: true } fc && fc.MaxNextGateHoursCelsius is { } fcMax)
+                {
+                    bits.Add(fc.PeakAt is { } fcPeak
+                        ? $"FORECAST PEAK {fcMax:0.0}°C @ {fcPeak.ToLocalTime():HH:mm}"
+                        : $"FORECAST PEAK {fcMax:0.0}°C");
+                }
+                else if (Snapshot?.Forecast is { Available: false })
+                {
+                    bits.Add("FORECAST OFFLINE");
+                }
+                if (Snapshot?.Siesta is { Active: true } nap)
+                {
+                    bits.Add($"MESS HALL OPEN — GUARDS WAKE {nap.Until?.ToLocalTime():HH:mm} · RATIONS +${nap.FoodEarnedThisSiestaCad:0.00}");
+                }
+                if (Snapshot?.FoodRations is { ReactorPowerActive: true } reactor && reactor.ReactorPowerUntil is { } reactorUntil)
+                {
+                    bits.Add($"☢ WINFORGE REACTOR POWERED UNTIL {reactorUntil.ToLocalTime():HH:mm}");
+                }
                 if (!string.IsNullOrWhiteSpace(Snapshot?.PeakPowerSaver.TouPeriod))
                 {
                     bits.Add($"ALECTRA {Snapshot.PeakPowerSaver.TouPeriod.ToUpperInvariant()}");

@@ -371,4 +371,81 @@ api.MapPost("/emergency", async (EmergencyProtocolRequest request, AcDefenderSer
     }
 });
 
+// Siesta (mess hall): start = thermostat-affecting (parks or turns the unit off once), so it
+// takes the non-bypass debounce gate like /thermostat/off; cancel only clears a hold.
+api.MapPost("/siesta", async (SiestaRequest request, DefenderStateStore store, AcDefenderService defender, CancellationToken cancellationToken) =>
+{
+    if (string.Equals(request.Action, "start", StringComparison.OrdinalIgnoreCase))
+    {
+        var gate = store.TryBeginWebsiteCommand("start siesta");
+        if (!gate.Accepted)
+        {
+            return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
+        if (!store.TryStartSiesta(request.Minutes ?? 60, "manual", out var startMessage))
+        {
+            return Results.BadRequest(new { error = startMessage });
+        }
+
+        try
+        {
+            await defender.ApplySiestaThermostatActionAsync(cancellationToken);
+        }
+        catch
+        {
+            // The park/off command is best-effort; the nap itself is already on.
+        }
+
+        return Results.Ok(store.GetSnapshot());
+    }
+
+    if (string.Equals(request.Action, "cancel", StringComparison.OrdinalIgnoreCase))
+    {
+        var gate = store.TryBeginWebsiteCommand("cancel siesta", bypassDebounce: true);
+        if (!gate.Accepted)
+        {
+            return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
+        return store.TryCancelSiesta(out var cancelMessage)
+            ? Results.Ok(store.GetSnapshot())
+            : Results.BadRequest(new { error = cancelMessage });
+    }
+
+    return Results.BadRequest(new { error = "action must be start or cancel" });
+});
+
+// Reactor power: spend rations to summon the WinForge reactor's AI operator (1 ration = 1 h).
+// Redemption stays auth-gated; it moves no money and touches no thermostat, so it bypasses the
+// thermostat debounce.
+api.MapPost("/reactor-power", (ReactorPowerRequest request, DefenderStateStore store) =>
+{
+    var gate = store.TryBeginWebsiteCommand("summon reactor operator", bypassDebounce: true);
+    if (!gate.Accepted)
+    {
+        return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
+    return store.TryRedeemReactorPower(request.Hours, out var message)
+        ? Results.Ok(store.GetSnapshot())
+        : Results.BadRequest(new { error = message });
+});
+
+// The PUBLIC reactor-power voucher for WinForge Web's poller: active flag + expiry only — no
+// balances, no defender state. Deliberately outside the auth group (harmless LAN read) with an
+// open CORS header so the Tauri/browser frontend can fetch it cross-origin.
+app.MapGet("/api/reactor-power", (HttpContext context, DefenderStateStore store) =>
+{
+    context.Response.Headers.AccessControlAllowOrigin = "*";
+    var (active, until) = store.GetReactorPowerVoucher();
+    return Results.Ok(new
+    {
+        active,
+        until,
+        secondsRemaining = active && until is { } u ? (int)Math.Max(0, (u - DateTimeOffset.UtcNow).TotalSeconds) : 0,
+        mode = "ai-operator",
+    });
+}).AllowAnonymous();
+
 app.Run();

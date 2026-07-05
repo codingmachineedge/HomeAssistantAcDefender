@@ -138,6 +138,11 @@ public sealed class DefenderStateStore
         {
             state.FrontDoorPausedDefender = false; // the user's word overrides any auto-resume plan
             state.DefenderEnabled = enabled;
+            if (!enabled && state.SiestaUntil is { } napUntil && napUntil > DateTimeOffset.UtcNow)
+            {
+                // A paused defender IS a stand-down; a nap on top would double-count the savings.
+                ClearSiestaLocked("Defender paused — the siesta ended (rations earned are kept).");
+            }
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", enabled ? "Defender enabled." : "Defender paused.");
             SaveState();
@@ -520,6 +525,106 @@ public sealed class DefenderStateStore
                 state.Settings.NightCoolingBudgetMinutes = Math.Clamp(nightBudget, 0, 420);
             }
 
+            if (request.CoolOutdoorShutdownEnabled is { } coolOutdoorEnabled)
+            {
+                state.Settings.CoolOutdoorShutdownEnabled = coolOutdoorEnabled;
+                if (!coolOutdoorEnabled)
+                {
+                    ClearCoolOutdoorEpisodeLocked("Cool-Outdoor Shutdown turned off.");
+                }
+            }
+
+            if (request.CoolOutdoorShutdownBelowCelsius is { } coolOutdoorBelow)
+            {
+                state.Settings.CoolOutdoorShutdownBelowCelsius = Math.Round(Math.Clamp(coolOutdoorBelow, 5.0, 25.0), 1);
+            }
+
+            if (request.CoolOutdoorRestoreMarginCelsius is { } coolOutdoorMargin)
+            {
+                state.Settings.CoolOutdoorRestoreMarginCelsius = Math.Round(Math.Clamp(coolOutdoorMargin, 0.5, 5.0), 1);
+            }
+
+            if (request.CoolOutdoorMinimumOffMinutes is { } coolOutdoorDwell)
+            {
+                state.Settings.CoolOutdoorMinimumOffMinutes = Math.Clamp(coolOutdoorDwell, 5, 240);
+            }
+
+            if (request.CoolOutdoorForecastGateEnabled is { } coolOutdoorGate)
+            {
+                state.Settings.CoolOutdoorForecastGateEnabled = coolOutdoorGate;
+            }
+
+            if (request.CoolOutdoorForecastGateHours is { } coolOutdoorGateHours)
+            {
+                state.Settings.CoolOutdoorForecastGateHours = Math.Clamp(coolOutdoorGateHours, 1, 12);
+            }
+
+            if (request.ForecastRefreshMinutes is { } forecastRefresh)
+            {
+                state.Settings.ForecastRefreshMinutes = Math.Clamp(forecastRefresh, 10, 180);
+            }
+
+            if (request.SiestaEnabled is { } siestaEnabled)
+            {
+                state.Settings.SiestaEnabled = siestaEnabled;
+                if (!siestaEnabled && state.SiestaUntil is not null)
+                {
+                    ClearSiestaLocked("Siesta feature turned off — guards back on duty.");
+                }
+            }
+
+            if (request.SiestaThermostatAction is { } siestaAction)
+            {
+                state.Settings.SiestaThermostatAction =
+                    string.Equals(siestaAction, "off", StringComparison.OrdinalIgnoreCase) ? "off" : "park";
+            }
+
+            if (request.SiestaWakeBandCelsius is { } siestaWakeBand)
+            {
+                state.Settings.SiestaWakeBandCelsius = Math.Round(Math.Clamp(siestaWakeBand, 0.1, 5.0), 1);
+            }
+
+            if (request.SiestaMaxMinutes is { } siestaMax)
+            {
+                state.Settings.SiestaMaxMinutes = Math.Clamp(siestaMax, 15, 1440);
+            }
+
+            if (request.FoodRationsEnabled is { } rationsEnabled)
+            {
+                state.Settings.FoodRationsEnabled = rationsEnabled;
+            }
+
+            if (request.FoodBalanceMaxCad is { } pantryCap)
+            {
+                state.Settings.FoodBalanceMaxCad = Math.Round(Math.Clamp(pantryCap, 0.0, 500.0), 2);
+                state.FoodBalanceCad = Math.Min(state.FoodBalanceCad, state.Settings.FoodBalanceMaxCad);
+            }
+
+            if (request.FoodReleaseHotThresholdCelsius is { } hotThreshold)
+            {
+                state.Settings.FoodReleaseHotThresholdCelsius = Math.Round(Math.Clamp(hotThreshold, 20.0, 45.0), 1);
+            }
+
+            if (request.FoodReleaseLookaheadHours is { } lookahead)
+            {
+                state.Settings.FoodReleaseLookaheadHours = Math.Clamp(lookahead, 1, 48);
+            }
+
+            if (request.FoodReleaseMaxPerDayCad is { } releaseCap)
+            {
+                state.Settings.FoodReleaseMaxPerDayCad = Math.Round(Math.Clamp(releaseCap, 0.0, 100.0), 2);
+            }
+
+            if (request.ReactorPowerEnabled is { } reactorEnabled)
+            {
+                state.Settings.ReactorPowerEnabled = reactorEnabled;
+            }
+
+            if (request.FoodRationSizeCad is { } rationSize)
+            {
+                state.Settings.FoodRationSizeCad = Math.Round(Math.Clamp(rationSize, 0.05, 5.0), 2);
+            }
+
             // Budget-preferring control: every value is clamped so a bad UI/API payload can never
             // produce an unsafe configuration (the safety maximum keeps a sane 24-32 C range).
             if (request.ElectricityBudgetEnabled is { } budgetEnabled)
@@ -746,6 +851,134 @@ public sealed class DefenderStateStore
             SaveState();
             return CreateSnapshot();
         }
+    }
+
+    // ─────────────── Weather forecast (in-memory only) ───────────────
+    // Deliberately NOT persisted: ~48 small entries refreshed every ForecastRefreshMinutes and
+    // refetched within one cycle of a restart. Persisting would only add SaveState churn and a
+    // stale-data trap. forecastUpdatedAt carries freshness for every consumer.
+    private WeatherForecastReading? forecast;
+    private DateTimeOffset? forecastUpdatedAt;
+    private DateTimeOffset? forecastNextAttemptAt;
+    private string forecastStatus = "No forecast fetched yet.";
+
+    /// <summary>True when the forecast is due for a refresh: never fetched, older than the
+    /// configured cadence, or past the failure-backoff timestamp.</summary>
+    public bool ShouldRefreshForecast(DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (forecastNextAttemptAt is { } next && now < next)
+            {
+                return false;
+            }
+
+            return forecastUpdatedAt is not { } updated
+                || now - updated >= TimeSpan.FromMinutes(Math.Max(1, state.Settings.ForecastRefreshMinutes));
+        }
+    }
+
+    /// <summary>Records a forecast fetch. A null reading keeps the last good entries (freshness
+    /// still decays via forecastUpdatedAt) and backs the next attempt off five minutes so a broken
+    /// weather integration cannot spin every poll.</summary>
+    public DefenderSnapshot RecordForecastReading(WeatherForecastReading? reading, DateTimeOffset now)
+    {
+        lock (gate)
+        {
+            if (reading is { Entries.Count: > 0 })
+            {
+                forecast = reading;
+                forecastUpdatedAt = now;
+                forecastNextAttemptAt = null;
+                forecastStatus = $"{reading.ForecastType} forecast: {reading.Entries.Count} entries from {reading.EntityId}.";
+            }
+            else
+            {
+                forecastNextAttemptAt = now.AddMinutes(5);
+                forecastStatus = forecast is null
+                    ? "Forecast unavailable (fetch failed or the outdoor source has no forecast)."
+                    : "Forecast fetch failed; keeping the previous entries until a retry succeeds.";
+            }
+
+            return CreateSnapshot();
+        }
+    }
+
+    /// <summary>
+    /// The reusable forecast projection consumed by the Cool-Outdoor Shutdown gate and the
+    /// food-rations hot window: the hottest forecast temperature over the horizon (and when),
+    /// plus rest-of-today and tomorrow maxima. Daily entries count for their whole local day.
+    /// </summary>
+    public ForecastProjection GetForecastProjection(DateTimeOffset now, double horizonHours)
+    {
+        lock (gate)
+        {
+            return GetForecastProjectionLocked(now, horizonHours);
+        }
+    }
+
+    /// <summary>Toronto-local day key ("yyyy-MM-dd") — the container runs with TZ=America/Toronto,
+    /// so local time == Toronto (same convention as the runtime accounting and night windows).</summary>
+    private static string TorontoDayKey(DateTimeOffset timestamp) => timestamp.ToLocalTime().ToString("yyyy-MM-dd");
+
+    private ForecastProjection GetForecastProjectionLocked(DateTimeOffset now, double horizonHours)
+    {
+        if (forecast is not { Entries.Count: > 0 } reading || forecastUpdatedAt is not { } updated)
+        {
+            return new ForecastProjection(false, false, null, null, null, null, null);
+        }
+
+        var stale = now - updated > TimeSpan.FromMinutes(3.0 * Math.Max(1, state.Settings.ForecastRefreshMinutes));
+        var horizonEnd = now.AddHours(Math.Max(0.5, horizonHours));
+        var localToday = TorontoDayKey(now);
+        var localTomorrow = TorontoDayKey(now.AddDays(1));
+
+        double? maxCelsius = null;
+        DateTimeOffset? peakAt = null;
+        double? maxToday = null;
+        double? maxTomorrow = null;
+        var isDaily = string.Equals(reading.ForecastType, "daily", StringComparison.OrdinalIgnoreCase);
+
+        foreach (var entry in reading.Entries)
+        {
+            if (entry.TemperatureCelsius is not { } temperature)
+            {
+                continue;
+            }
+
+            // A daily entry stands for its whole local day; an hourly entry for its hour.
+            var entryDay = TorontoDayKey(entry.Timestamp);
+            var inHorizon = isDaily
+                ? entryDay == localToday || (entry.Timestamp >= now && entry.Timestamp <= horizonEnd)
+                : entry.Timestamp >= now.AddHours(-1) && entry.Timestamp <= horizonEnd;
+
+            if (inHorizon && (maxCelsius is not { } currentMax || temperature > currentMax))
+            {
+                maxCelsius = temperature;
+                peakAt = entry.Timestamp;
+            }
+
+            if (entryDay == localToday && (isDaily || entry.Timestamp >= now.AddHours(-1))
+                && (maxToday is not { } todayMax || temperature > todayMax))
+            {
+                maxToday = temperature;
+            }
+
+            if (entryDay == localTomorrow && (maxTomorrow is not { } tomorrowMax || temperature > tomorrowMax))
+            {
+                maxTomorrow = temperature;
+            }
+        }
+
+        return new ForecastProjection(true, stale, updated, maxCelsius, peakAt, maxToday, maxTomorrow);
+    }
+
+    /// <summary>Max forecast temperature within the next lookahead, or null when no FRESH forecast
+    /// exists. Callers must hold the gate (used inside AccumulateAcRuntime's cost slice).</summary>
+    private double? MaxForecastCelsiusLocked(TimeSpan lookahead, DateTimeOffset now)
+    {
+        var projection = GetForecastProjectionLocked(now, lookahead.TotalHours);
+        return projection.Available && !projection.Stale ? projection.MaxCelsius : null;
     }
 
     /// <summary>True when the automatic thermostat-history learner is due to run (on startup, then every
@@ -1182,6 +1415,235 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>
+    /// Cool-Outdoor Shutdown (Open-Window Armistice): when it is genuinely cool outside (below
+    /// the user threshold) AND the hourly forecast says it stays cool for the gate hours, turn
+    /// the AC fully off ONCE per cool episode and hold. Auto-restores cool mode when outdoor
+    /// warms past threshold+margin (after the minimum off dwell) — or immediately, dwell
+    /// ignored, when the room crosses the safety band. A human turning the AC back on
+    /// mid-episode is respected for the rest of the episode; an AC the human turned off
+    /// themselves is adopted without a command and handed back to the normal restore rules.
+    /// Unknown outdoor or a missing/stale forecast blocks only the SHUTDOWN, never the
+    /// restores. Returns true while the worker should idle; a restore is signalled with
+    /// false and restoreCool=true exactly once (restoreSetPoint non-null on comfort restore).
+    /// </summary>
+    public bool TryBeginCoolOutdoorShutdown(
+        ThermostatReading reading,
+        DateTimeOffset now,
+        out DateTimeOffset? until,
+        out string message,
+        out bool turnOff,
+        out bool restoreCool,
+        out double? restoreSetPoint)
+    {
+        lock (gate)
+        {
+            until = null;
+            message = string.Empty;
+            turnOff = false;
+            restoreCool = false;
+            restoreSetPoint = null;
+
+            var s = state.Settings;
+            if (!s.CoolOutdoorShutdownEnabled)
+            {
+                if (state.CoolOutdoorEpisodeActive)
+                {
+                    ClearCoolOutdoorEpisodeLocked("Cool-Outdoor Shutdown is off.");
+                    SaveState();
+                }
+
+                return false;
+            }
+
+            var outdoor = state.Weather?.OutdoorTemperatureCelsius;
+            var restoreAt = Math.Round(s.CoolOutdoorShutdownBelowCelsius + s.CoolOutdoorRestoreMarginCelsius, 1);
+            var modeOff = string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase);
+            var nextCheck = now.AddSeconds(Math.Max(15, options.PollIntervalSeconds));
+
+            if (state.CoolOutdoorEpisodeActive)
+            {
+                // HUMAN OVERRIDE: stand aside for the rest of the episode; it ends when outdoor
+                // genuinely warms past the restore point (a real reading — never a blip on null).
+                if (state.CoolOutdoorHumanOverrideThisEpisode)
+                {
+                    if (outdoor is { } overriddenOutdoor && overriddenOutdoor >= restoreAt)
+                    {
+                        ClearCoolOutdoorEpisodeLocked($"Outdoor warmed to {overriddenOutdoor:0.0} C; the overridden cool episode ended.");
+                        SaveState();
+                    }
+
+                    return false;
+                }
+
+                // Detect the override: we sent OFF, the command grace passed, and the mode reads
+                // something other than off again — a human turned it back on. Respect them.
+                if (state.CoolOutdoorOffSentThisEpisode
+                    && !modeOff
+                    && state.CoolOutdoorOffCommandedAt is { } commandedAt
+                    && now - commandedAt > TimeSpan.FromSeconds(Math.Max(15, options.CommandGraceSeconds)))
+                {
+                    state.CoolOutdoorHumanOverrideThisEpisode = true;
+                    state.CoolOutdoorShutdownAccruing = false;
+                    state.CoolOutdoorStatus = "Someone turned the AC back on — respected for the rest of this cool episode.";
+                    AddEvent("info", "Cool-Outdoor Shutdown: the AC was turned back on by hand; standing aside for the rest of this cool episode.");
+                    SaveState();
+                    return false;
+                }
+
+                // COMFORT RESTORE — safety bands always win, dwell and forecast ignored. Only
+                // command the restore for an off WE sent; an adopted manual off falls through to
+                // the normal pipeline (enforcer / cool-mode restore), which handles comfort.
+                if (ShouldBypassNaturalRecovery(reading))
+                {
+                    var reason = $"Room reached {reading.CurrentTemperatureCelsius:0.0} C during the cool-outdoor shutdown — cooling comes back immediately (safety wins).";
+                    if (state.CoolOutdoorOffSentThisEpisode && modeOff)
+                    {
+                        restoreCool = true;
+                        restoreSetPoint = Math.Max(state.TargetTemperatureCelsius, Math.Round(reading.CurrentTemperatureCelsius - 1.0, 1));
+                        RecordPendingThermostatCommand(
+                            commandedSetPointCelsius: restoreSetPoint,
+                            commandedHvacMode: "cool",
+                            commandedFanMode: null,
+                            commandSourceKind: "cool-outdoor-restore",
+                            commandSourceLabel: "Cool-Outdoor Shutdown",
+                            commandSourceDetail: "The room crossed the safety band during a cool-outdoor shutdown; cooling was restored immediately.");
+                        state.LastCommand = $"Home Assistant {reading.EntityId} cooling restored at {restoreSetPoint:0.0} C (cool-outdoor comfort restore).";
+                        until = nextCheck;
+                        message = reason;
+                    }
+
+                    ClearCoolOutdoorEpisodeLocked(reason);
+                    AddEvent("warning", reason);
+                    SaveState();
+                    return false;
+                }
+
+                // WEATHER RESTORE: needs a real outdoor reading at/above the restore point and
+                // the minimum off dwell. An unknown outdoor keeps holding (never flap on a blip).
+                var offSince = state.CoolOutdoorOffCommandedAt ?? state.CoolOutdoorEpisodeStartedAt ?? now;
+                var dwellEnd = offSince.AddMinutes(Math.Max(1, s.CoolOutdoorMinimumOffMinutes));
+                if (outdoor is { } warmedOutdoor && warmedOutdoor >= restoreAt)
+                {
+                    if (now < dwellEnd)
+                    {
+                        until = dwellEnd;
+                        message = $"Outdoor is {warmedOutdoor:0.0} C (restore point {restoreAt:0.0} C) but the minimum off dwell runs until {dwellEnd.ToLocalTime():HH:mm}.";
+                        state.CoolOutdoorStatus = message;
+                        return true;
+                    }
+
+                    var restoreReason = $"Outdoor warmed to {warmedOutdoor:0.0} C — the cool episode is over.";
+                    if (state.CoolOutdoorOffSentThisEpisode && modeOff)
+                    {
+                        // Mode-only restore: the next cycle's normal pipeline computes the setpoint.
+                        restoreCool = true;
+                        RecordPendingThermostatCommand(
+                            commandedSetPointCelsius: null,
+                            commandedHvacMode: "cool",
+                            commandedFanMode: null,
+                            commandSourceKind: "cool-outdoor-restore",
+                            commandSourceLabel: "Cool-Outdoor Shutdown",
+                            commandSourceDetail: "Outdoor warmed past the restore point; AC Defender restored cool mode after the cool-outdoor shutdown.");
+                        state.LastCommand = $"Home Assistant {reading.EntityId} cool mode restored (outdoor warmed past {restoreAt:0.0} C).";
+                        until = nextCheck;
+                        message = $"Outdoor warmed to {warmedOutdoor:0.0} C — restoring cool mode after the cool-outdoor shutdown.";
+                        restoreReason = message;
+                    }
+
+                    ClearCoolOutdoorEpisodeLocked(restoreReason);
+                    AddEvent("info", restoreReason);
+                    SaveState();
+                    return false;
+                }
+
+                // STILL HOLDING. The accrual gate is honest: food may only accrue while the unit
+                // is genuinely off (someone cooling again = no accrual, no fake state).
+                state.CoolOutdoorShutdownAccruing = modeOff;
+                until = dwellEnd > now ? dwellEnd : nextCheck;
+                message = outdoor is { } holdingOutdoor
+                    ? $"Cool-outdoor shutdown: AC stays off while it is {holdingOutdoor:0.0} C outside (restores at {restoreAt:0.0} C). Turning it back on manually is respected."
+                    : $"Cool-outdoor shutdown: AC stays off (outdoor reading unavailable; restores at {restoreAt:0.0} C or on room comfort).";
+                state.CoolOutdoorStatus = message;
+                return true;
+            }
+
+            // ── No active episode: evaluate a new shutdown ──
+            // Unknown outdoor = do nothing (mirror night shutdown: never turn off blind).
+            if (outdoor is not { } coolOutdoor || coolOutdoor >= s.CoolOutdoorShutdownBelowCelsius)
+            {
+                state.CoolOutdoorStatus = outdoor is { } watchOutdoor
+                    ? $"Watching: outdoor {watchOutdoor:0.0} C (shutdown below {s.CoolOutdoorShutdownBelowCelsius:0.0} C)."
+                    : "Watching: no outdoor reading yet.";
+                return false;
+            }
+
+            // FORECAST GATE: only shut down when the forecast peak over the gate hours stays
+            // under the restore point — otherwise a hot afternoon guarantees an off/on flap.
+            // Missing or stale forecast blocks only the shutdown (safe degradation: the Outdoor
+            // Power Rule still keeps the defender quiet below ~20 C).
+            if (s.CoolOutdoorForecastGateEnabled)
+            {
+                var projection = GetForecastProjectionLocked(now, s.CoolOutdoorForecastGateHours);
+                if (!projection.Available || projection.Stale || projection.MaxCelsius is not { } forecastMax)
+                {
+                    state.CoolOutdoorStatus = $"Outdoor is {coolOutdoor:0.0} C but the shutdown waits for a fresh forecast to confirm it stays cool.";
+                    return false;
+                }
+
+                if (forecastMax >= restoreAt)
+                {
+                    state.CoolOutdoorStatus = $"Outdoor is {coolOutdoor:0.0} C but the forecast peaks at {forecastMax:0.0} C within {s.CoolOutdoorForecastGateHours} h — no shutdown before a warm stretch.";
+                    return false;
+                }
+            }
+
+            // Episode entry: one-shot OFF (tagged so the HA echo is never logged as a wall
+            // touch). An AC already off — the user's own doing or night shutdown's — is adopted
+            // without a command, which also stops cool-mode restore fighting a human's off.
+            state.CoolOutdoorEpisodeActive = true;
+            state.CoolOutdoorEpisodeStartedAt = now;
+            state.CoolOutdoorHumanOverrideThisEpisode = false;
+            state.CoolOutdoorOffSentThisEpisode = false;
+            state.CoolOutdoorOffCommandedAt = null;
+            if (!modeOff)
+            {
+                turnOff = true;
+                state.CoolOutdoorOffSentThisEpisode = true;
+                state.CoolOutdoorOffCommandedAt = now;
+                RecordPendingThermostatCommand(
+                    commandedSetPointCelsius: null,
+                    commandedHvacMode: "off",
+                    commandedFanMode: null,
+                    commandSourceKind: "cool-outdoor-shutdown",
+                    commandSourceLabel: "Cool-Outdoor Shutdown",
+                    commandSourceDetail: "It is genuinely cool outside and the forecast stays cool; AC Defender turned the AC fully off to save power.");
+                state.LastCommand = $"Home Assistant {reading.EntityId} thermostat turned off (cool-outdoor shutdown at {coolOutdoor:0.0} C outside).";
+            }
+
+            state.CoolOutdoorShutdownAccruing = true;
+            until = now.AddMinutes(Math.Max(1, s.CoolOutdoorMinimumOffMinutes));
+            message = $"Cool-outdoor shutdown: it is {coolOutdoor:0.0} C outside and the forecast stays cool — AC off, guards at ease. Restores at {restoreAt:0.0} C outdoor or on room comfort.";
+            state.CoolOutdoorStatus = message;
+            AddEvent("info", $"Cool-Outdoor Shutdown: outdoor {coolOutdoor:0.0} C < {s.CoolOutdoorShutdownBelowCelsius:0.0} C{(turnOff ? "; AC turned off" : "; adopted the AC's existing off state")}.");
+            state.UpdatedAt = now;
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>Ends the cool-outdoor episode (does not SaveState — callers do).</summary>
+    private void ClearCoolOutdoorEpisodeLocked(string reason)
+    {
+        state.CoolOutdoorEpisodeActive = false;
+        state.CoolOutdoorEpisodeStartedAt = null;
+        state.CoolOutdoorOffSentThisEpisode = false;
+        state.CoolOutdoorOffCommandedAt = null;
+        state.CoolOutdoorHumanOverrideThisEpisode = false;
+        state.CoolOutdoorShutdownAccruing = false;
+        state.CoolOutdoorStatus = reason;
+    }
+
+    /// <summary>
     /// Peace offering: after an app/phone user raised the setpoint, send ONE concession command a
     /// small step ABOVE their number, then stand down for the hold window so the gesture sticks.
     /// A room that gets genuinely hot cancels the hold (comfort still wins eventually).
@@ -1285,6 +1747,458 @@ public sealed class DefenderStateStore
                 && string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase)
                 && reading.SetPointCelsius < parkSetPoint - 0.05;
         }
+    }
+
+    // ─────────────── Siesta (mess hall) + food rations (field kitchen) ───────────────
+
+    /// <summary>
+    /// Starts a manual siesta: the guards nap for the clamped duration while the AC eases off and
+    /// food rations accrue. Rejected while the feature is off, the defender is paused (a siesta
+    /// would double-count the stand-down), or an emergency quiet is in force.
+    /// </summary>
+    public bool TryStartSiesta(int minutes, string reason, out string message, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            var s = state.Settings;
+            if (!s.SiestaEnabled)
+            {
+                message = "Siesta is turned off in Standing Orders.";
+                return false;
+            }
+
+            if (!state.DefenderEnabled)
+            {
+                message = "The defender is paused — the guards are already off duty, so a siesta would double-count the stand-down.";
+                return false;
+            }
+
+            if (state.EmergencyQuietUntil is { } quiet && quiet > now)
+            {
+                message = "An emergency quiet protocol is in force; the guards cannot also nap.";
+                return false;
+            }
+
+            var clamped = Math.Clamp(minutes, 15, Math.Max(15, s.SiestaMaxMinutes));
+            state.SiestaStartedAt = now;
+            state.SiestaUntil = now.AddMinutes(clamped);
+            state.SiestaReason = string.IsNullOrWhiteSpace(reason) ? "manual" : reason;
+            state.SiestaFoodEarnedThisSiestaCad = 0;
+            state.FoodLastAccrualSampleAt = null; // the nap starts a fresh accrual interval
+            message = $"Siesta started: mess hall open until {state.SiestaUntil.Value.ToLocalTime():HH:mm} ({clamped} min). Quiet minutes bank rations.";
+            state.SiestaStatus = message;
+            AddEvent("info", $"Siesta (mess hall): guards asleep for {clamped} min — the money the AC would have spent banks as rations.");
+            state.UpdatedAt = now;
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>Cancels an active siesta (rations already earned are kept).</summary>
+    public bool TryCancelSiesta(out string message, string source = "website", DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            if (state.SiestaUntil is not { } until || until <= now)
+            {
+                message = "No siesta is running.";
+                return false;
+            }
+
+            var reason = $"Siesta cancelled ({source}) — guards back on duty; rations earned ({Cad(state.SiestaFoodEarnedThisSiestaCad)}) are kept.";
+            ClearSiestaLocked(reason);
+            AddEvent("info", reason);
+            state.UpdatedAt = now;
+            SaveState();
+            message = reason;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The siesta hold: while the nap timer runs the cycle idles here. Wake conditions (checked
+    /// every cycle — comfort and safety always win): timer expiry, the room passing
+    /// target + wake band, or the room reaching the budget safety maximum. Returns true while
+    /// the worker should idle; on wake it returns false so the same cycle falls through to the
+    /// normal pipeline (cool-mode restore brings cooling back if the siesta turned it off).
+    /// </summary>
+    public bool TryRespectSiesta(ThermostatReading reading, DateTimeOffset now, out DateTimeOffset? until, out string message)
+    {
+        lock (gate)
+        {
+            until = null;
+            message = string.Empty;
+            if (state.SiestaUntil is not { } napUntil)
+            {
+                return false;
+            }
+
+            if (now >= napUntil)
+            {
+                var doneReason = $"Siesta over — guards back on duty; this nap banked {Cad(state.SiestaFoodEarnedThisSiestaCad)} of rations.";
+                ClearSiestaLocked(doneReason);
+                AddEvent("info", doneReason);
+                SaveState();
+                return false;
+            }
+
+            var s = state.Settings;
+            var wakeAt = state.TargetTemperatureCelsius + Math.Max(0.1, s.SiestaWakeBandCelsius);
+            var budgetSafety = s.ElectricityBudgetSafetyMaxCelsius;
+            if (reading.CurrentTemperatureCelsius > wakeAt
+                || (budgetSafety > 0 && reading.CurrentTemperatureCelsius >= budgetSafety))
+            {
+                var wakeReason = $"Room hit {reading.CurrentTemperatureCelsius:0.0} C during the siesta — guards woken early; rations earned are kept.";
+                ClearSiestaLocked(wakeReason);
+                AddEvent("warning", wakeReason);
+                SaveState();
+                return false;
+            }
+
+            until = napUntil;
+            message = $"Siesta (mess hall) until {napUntil.ToLocalTime():HH:mm} — guards asleep, {Cad(state.SiestaFoodEarnedThisSiestaCad)} of rations banked so far. The room passing {wakeAt:0.0} C wakes them.";
+            state.SiestaStatus = message;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The one-shot thermostat action for a starting siesta (night-shutdown convention: sent once,
+    /// never re-sent — a human turning the AC back on mid-nap is respected; accrual just pauses
+    /// while it cools). "park" raises the setpoint to the stand-down park number (raise-only,
+    /// cool-mode-only); "off" turns the unit off.
+    /// </summary>
+    public bool TryGetSiestaThermostatAction(ThermostatReading reading, out bool turnOff, out double? parkSetPoint)
+    {
+        lock (gate)
+        {
+            turnOff = false;
+            parkSetPoint = null;
+            if (state.SiestaUntil is not { } until || until <= DateTimeOffset.UtcNow)
+            {
+                return false;
+            }
+
+            var s = state.Settings;
+            if (string.Equals(s.SiestaThermostatAction, "off", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                turnOff = true;
+                RecordPendingThermostatCommand(
+                    commandedSetPointCelsius: null,
+                    commandedHvacMode: "off",
+                    commandedFanMode: null,
+                    commandSourceKind: "siesta",
+                    commandSourceLabel: "Siesta (mess hall)",
+                    commandSourceDetail: "A siesta started with the 'off' action; AC Defender turned the AC off while the guards nap.");
+                state.LastCommand = $"Home Assistant {reading.EntityId} thermostat turned off for the siesta.";
+                SaveState();
+                return true;
+            }
+
+            var park = Math.Round(Math.Clamp(s.StandDownParkSetPointCelsius, 20.0, 30.0), 1);
+            if (string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase)
+                && reading.SetPointCelsius < park - 0.05)
+            {
+                parkSetPoint = park;
+                RecordPendingThermostatCommand(
+                    commandedSetPointCelsius: park,
+                    commandedHvacMode: "cool",
+                    commandedFanMode: null,
+                    commandSourceKind: "siesta",
+                    commandSourceLabel: "Siesta (mess hall)",
+                    commandSourceDetail: "A siesta started with the 'park' action; AC Defender raised the setpoint so the unit barely runs while the guards nap.");
+                state.LastCommand = $"Home Assistant {reading.EntityId} parked at {park:0.0} C for the siesta.";
+                SaveState();
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>Ends the siesta (does not SaveState — callers do). Earned rations are kept.</summary>
+    private void ClearSiestaLocked(string reason)
+    {
+        state.SiestaStartedAt = null;
+        state.SiestaUntil = null;
+        state.SiestaReason = null;
+        state.SiestaStatus = reason;
+        state.FoodLastAccrualSampleAt = null;
+    }
+
+    /// <summary>
+    /// FOOD ACCRUAL (honest counterfactual): while the guards nap — a siesta timer or the
+    /// cool-outdoor shutdown hold — every quiet minute banks the money the AC would probably
+    /// have spent: its usual share of run-time from the last week × its assumed power draw ×
+    /// the Alectra rate right now. A slice where the compressor actually cools earns $0 (no
+    /// fake state), no usage history means $0 (never invent savings), and the pantry cap wins.
+    /// Callers must hold the gate; called from RecordHomeAssistantReading every reading.
+    /// </summary>
+    private void AccrueSiestaFood(ThermostatReading reading, DateTimeOffset now)
+    {
+        RollFoodCountersLocked(now);
+        var napping = (state.SiestaUntil is { } napUntil && napUntil > now) || state.CoolOutdoorShutdownAccruing;
+        if (!state.Settings.FoodRationsEnabled || !napping)
+        {
+            state.FoodLastAccrualSampleAt = null;
+            return;
+        }
+
+        var coolingNow = string.Equals(reading.HvacAction, "cooling", StringComparison.OrdinalIgnoreCase);
+        if (state.FoodLastAccrualSampleAt is { } lastSample && !coolingNow && !state.AcRuntimeLastWasCooling)
+        {
+            var deltaSeconds = Math.Clamp((now - lastSample).TotalSeconds, 0, 120);
+            var kilowatts = AcEstimatedKilowatts();
+            var dutyCycle = TrailingCoolingDutyCycleLocked(now);
+            if (deltaSeconds > 0 && kilowatts > 0 && dutyCycle > 0)
+            {
+                var period = AlectraTouSchedule.GetPeriod(lastSample.ToLocalTime().DateTime);
+                var earned = kilowatts * (deltaSeconds / 3600.0)
+                    * BuildRateTable().EffectiveCentsPerKwh(period) / 100.0
+                    * dutyCycle;
+                var cap = Math.Max(0.0, state.Settings.FoodBalanceMaxCad);
+                var credited = Math.Min(earned, Math.Max(0.0, cap - state.FoodBalanceCad));
+                if (credited > 0)
+                {
+                    state.FoodBalanceCad += credited;
+                    state.FoodEarnedTodayCad += credited;
+                    state.FoodEarnedLifetimeCad += credited;
+                    if (state.SiestaUntil is { } activeNap && activeNap > now)
+                    {
+                        state.SiestaFoodEarnedThisSiestaCad += credited;
+                    }
+                }
+            }
+        }
+
+        state.FoodLastAccrualSampleAt = now;
+    }
+
+    /// <summary>
+    /// The AC's usual share of run-time: cooling seconds over the trailing 7 complete Toronto
+    /// days from the daily ledger (needs at least 3 days), falling back to this month's average.
+    /// No data = 0 — food accrual never invents savings. Callers must hold the gate.
+    /// </summary>
+    private double TrailingCoolingDutyCycleLocked(DateTimeOffset now)
+    {
+        var today = TorontoDayKey(now);
+        var recentDays = state.AcDailyLedger.Keys
+            .Where(key => string.Compare(key, today, StringComparison.Ordinal) < 0)
+            .OrderByDescending(key => key, StringComparer.Ordinal)
+            .Take(7)
+            .ToList();
+        if (recentDays.Count >= 3)
+        {
+            var coolingSeconds = recentDays.Sum(key => state.AcDailyLedger[key].CoolingSeconds);
+            return Math.Clamp(coolingSeconds / (recentDays.Count * 86400.0), 0.0, 1.0);
+        }
+
+        var local = now.ToLocalTime().DateTime;
+        var monthElapsedSeconds = (local - new DateTime(local.Year, local.Month, 1)).TotalSeconds;
+        if (monthElapsedSeconds > 3600 && state.AcRuntimeSecondsMonth > 0)
+        {
+            return Math.Clamp(state.AcRuntimeSecondsMonth / monthElapsedSeconds, 0.0, 1.0);
+        }
+
+        return 0.0;
+    }
+
+    /// <summary>
+    /// FOOD SPEND (hot-window release): on a forecast-hot day the pantry pays the AC's bill —
+    /// every dollar the AC actually spends during the hot window comes out of the food balance
+    /// instead of counting against the monthly budget. Only while over pace (before food), only
+    /// up to the per-day release cap, and only with real data (fresh forecast, else the live
+    /// outdoor reading). Callers must hold the gate; called per cooling slice.
+    /// </summary>
+    private void ReleaseFoodIfHotWindowLocked(DateTimeOffset now, double intervalAcCostCad)
+    {
+        var s = state.Settings;
+        if (!s.FoodRationsEnabled || !s.ElectricityBudgetEnabled
+            || intervalAcCostCad <= 0 || state.FoodBalanceCad <= 0 || s.FoodReleaseMaxPerDayCad <= 0)
+        {
+            return;
+        }
+
+        var budget = Math.Max(0.0, s.ElectricityMonthlyBudgetDollars);
+        if (budget <= 0)
+        {
+            return;
+        }
+
+        RollFoodCountersLocked(now);
+        var local = now.ToLocalTime().DateTime;
+        var (_, monthToDate) = ResolveBudgetBasis(now);
+        var rawOverUnder = monthToDate - budget * MonthElapsedFraction(local);
+        if (rawOverUnder <= 0 || !IsFoodHotWindowLocked(now, out _))
+        {
+            return;
+        }
+
+        var dayRoom = Math.Max(0.0, s.FoodReleaseMaxPerDayCad - state.FoodReleasedTodayCad);
+        var release = Math.Min(intervalAcCostCad, Math.Min(state.FoodBalanceCad, dayRoom));
+        if (release <= 0)
+        {
+            return;
+        }
+
+        state.FoodBalanceCad -= release;
+        state.FoodReleasedTodayCad += release;
+        state.FoodReleasedThisMonthCad += release;
+        state.FoodSpentLifetimeCad += release;
+        state.FoodLastReleaseAt = now;
+        state.FoodLastReleaseCad = release;
+    }
+
+    /// <summary>The hot window: fresh forecast max over the lookahead at/above the threshold;
+    /// with no fresh forecast, the LIVE outdoor reading (real data only, never a guess).</summary>
+    private bool IsFoodHotWindowLocked(DateTimeOffset now, out double? forecastMaxCelsius)
+    {
+        var s = state.Settings;
+        forecastMaxCelsius = MaxForecastCelsiusLocked(TimeSpan.FromHours(Math.Max(1, s.FoodReleaseLookaheadHours)), now);
+        if (forecastMaxCelsius is { } forecastMax)
+        {
+            return forecastMax >= s.FoodReleaseHotThresholdCelsius;
+        }
+
+        return state.Weather?.OutdoorTemperatureCelsius is { } outdoor
+            && outdoor >= s.FoodReleaseHotThresholdCelsius;
+    }
+
+    /// <summary>Day/month rollovers for the food counters. The BALANCE is kept across months —
+    /// rolling savings to a hotter day is the point — bounded by the cap. Callers hold the gate.</summary>
+    private void RollFoodCountersLocked(DateTimeOffset now)
+    {
+        var local = now.ToLocalTime();
+        var dayKey = local.ToString("yyyy-MM-dd");
+        var monthKey = local.ToString("yyyy-MM");
+        if (!string.Equals(state.FoodDayKey, dayKey, StringComparison.Ordinal))
+        {
+            state.FoodDayKey = dayKey;
+            state.FoodEarnedTodayCad = 0;
+            state.FoodReleasedTodayCad = 0;
+        }
+
+        if (!string.Equals(state.FoodMonthKey, monthKey, StringComparison.Ordinal))
+        {
+            state.FoodMonthKey = monthKey;
+            state.FoodReleasedThisMonthCad = 0;
+        }
+    }
+
+    /// <summary>
+    /// REACTOR POWER: rations summon the WinForge Web reactor's AI operator — one ration per
+    /// hour. Extends the voucher (stacking) and deducts hours × FoodRationSizeCad from the
+    /// pantry. The voucher is exposed read-only at GET /api/reactor-power for WinForge to poll.
+    /// </summary>
+    public bool TryRedeemReactorPower(int hours, out string message, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            var s = state.Settings;
+            if (!s.ReactorPowerEnabled || !s.FoodRationsEnabled)
+            {
+                message = "Reactor power is turned off in Standing Orders.";
+                return false;
+            }
+
+            var clampedHours = Math.Clamp(hours, 1, 8);
+            var rationSize = Math.Max(0.01, s.FoodRationSizeCad);
+            var cost = Math.Round(clampedHours * rationSize, 2);
+            if (state.FoodBalanceCad + 0.0001 < cost)
+            {
+                message = $"The pantry is too lean: {clampedHours} reactor-hour(s) need {Cad(cost)} of rations but only {Cad(state.FoodBalanceCad)} is banked.";
+                return false;
+            }
+
+            RollFoodCountersLocked(now);
+            state.FoodBalanceCad = Math.Max(0.0, state.FoodBalanceCad - cost);
+            state.FoodSpentLifetimeCad += cost;
+            state.ReactorPowerSpentLifetimeCad += cost;
+            state.ReactorHoursLifetime += clampedHours;
+            var baseTime = state.ReactorPowerUntil is { } existing && existing > now ? existing : now;
+            state.ReactorPowerUntil = baseTime.AddHours(clampedHours);
+            state.ReactorPowerLastRedeemedAt = now;
+            message = $"AI operator summoned: the WinForge reactor is powered until {state.ReactorPowerUntil.Value.ToLocalTime():HH:mm} ({Cad(cost)} of rations spent).";
+            AddEvent("info", $"Field kitchen: {clampedHours} ration-hour(s) sent to the WinForge reactor — powered until {state.ReactorPowerUntil.Value.ToLocalTime():HH:mm}.");
+            state.UpdatedAt = now;
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>The public voucher for WinForge's poller: active flag + expiry, nothing else.</summary>
+    public (bool Active, DateTimeOffset? Until) GetReactorPowerVoucher(DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            var active = state.ReactorPowerUntil is { } until && until > now;
+            return (active, active ? state.ReactorPowerUntil : null);
+        }
+    }
+
+    private SiestaSnapshot CreateSiestaSnapshot(DateTimeOffset now)
+    {
+        var active = state.SiestaUntil is { } until && until > now;
+        return new SiestaSnapshot(
+            state.Settings.SiestaEnabled,
+            active,
+            active ? (state.SiestaReason ?? "manual") : "none",
+            active && state.SiestaUntil is { } remaining ? (int)Math.Max(0, (remaining - now).TotalSeconds) : 0,
+            state.SiestaStartedAt,
+            active ? state.SiestaUntil : null,
+            Math.Round(state.SiestaFoodEarnedThisSiestaCad, 2),
+            string.Equals(state.Settings.SiestaThermostatAction, "off", StringComparison.OrdinalIgnoreCase) ? "off" : "park",
+            string.IsNullOrWhiteSpace(state.SiestaStatus)
+                ? (state.Settings.SiestaEnabled ? "The mess hall is closed; guards on duty." : "Siesta is off.")
+                : state.SiestaStatus!);
+    }
+
+    private FoodRationsSnapshot CreateFoodRationsSnapshot(DateTimeOffset now)
+    {
+        var s = state.Settings;
+        var hotWindow = IsFoodHotWindowLocked(now, out var forecastMax);
+        var rationSize = Math.Max(0.01, s.FoodRationSizeCad);
+        var reactorActive = state.ReactorPowerUntil is { } reactorUntil && reactorUntil > now;
+        var status = !s.FoodRationsEnabled
+            ? "Food rations are off."
+            : hotWindow && state.FoodBalanceCad > 0 && s.ElectricityBudgetEnabled
+                ? "Hot window: the pantry pays the AC's bill while it cools."
+                : state.FoodBalanceCad <= 0
+                    ? "The pantry is empty — siestas and cool-outdoor shutdowns bank rations."
+                    : !s.ElectricityBudgetEnabled
+                        ? "Rations accrue, but they only ease the (currently disabled) monthly budget on hot days."
+                        : "Rations banked; waiting for a hot window to spend them.";
+
+        return new FoodRationsSnapshot(
+            s.FoodRationsEnabled,
+            Math.Round(state.FoodBalanceCad, 2),
+            Math.Round(Math.Max(0.0, s.FoodBalanceMaxCad), 2),
+            Math.Round(state.FoodEarnedTodayCad, 2),
+            Math.Round(state.FoodEarnedLifetimeCad, 2),
+            Math.Round(state.FoodSpentLifetimeCad, 2),
+            Math.Round(state.FoodReleasedThisMonthCad, 2),
+            Math.Round(state.FoodReleasedTodayCad, 2),
+            hotWindow,
+            forecastMax is { } roundedMax ? Math.Round(roundedMax, 1) : null,
+            s.FoodReleaseHotThresholdCelsius,
+            state.FoodLastReleaseAt,
+            Math.Round(state.FoodLastReleaseCad, 2),
+            Math.Round(TrailingCoolingDutyCycleLocked(now) * 100.0, 1),
+            status,
+            Math.Round(rationSize, 2),
+            (int)Math.Floor(state.FoodBalanceCad / rationSize + 0.0001),
+            reactorActive,
+            reactorActive ? state.ReactorPowerUntil : null,
+            Math.Round(state.ReactorHoursLifetime, 1));
     }
 
     /// <summary>
@@ -1446,6 +2360,10 @@ public sealed class DefenderStateStore
             // Per-day ledger for the Energy calendar, bucketed to the day the slice STARTED on
             // (same key convention as the interval pricing above).
             AddToDailyLedger(lastSample.ToLocalTime().ToString("yyyy-MM-dd"), deltaSeconds, costCad);
+
+            // Hot-window rations release: the pantry pays this cooling slice's estimated bill
+            // instead of counting it against the monthly budget (field kitchen, see the guard).
+            ReleaseFoodIfHotWindowLocked(now, costCad);
         }
 
         state.AcRuntimeLastSampleAt = now;
@@ -1699,7 +2617,10 @@ public sealed class DefenderStateStore
         var proRatedTarget = budget * fraction;
         var (effectiveBasis, monthToDate) = ResolveBudgetBasis(now);
         var projected = fraction > 0.001 ? monthToDate / fraction : 0.0;
-        var overUnder = monthToDate - proRatedTarget;
+        // Released rations are extra budget headroom: dollars the AC spent during a hot window
+        // that the pantry already paid for. They can only SOFTEN easing, never cool below the
+        // user's floor, because the budget offset path only ever raises the effective target.
+        var overUnder = monthToDate - proRatedTarget - state.FoodReleasedThisMonthCad;
 
         if (!settings.ElectricityBudgetEnabled || budget <= 0)
         {
@@ -1748,7 +2669,10 @@ public sealed class DefenderStateStore
     {
         var settings = state.Settings;
         var evaluation = EvaluateBudget(roomTemperature, now);
-        var basisNote = $" (pacing on {evaluation.EffectiveBasis})";
+        var rationsNote = state.FoodReleasedThisMonthCad > 0.005
+            ? $" — rations are paying {Cad(state.FoodReleasedThisMonthCad)} of the overage"
+            : "";
+        var basisNote = $" (pacing on {evaluation.EffectiveBasis}{rationsNote})";
         var status = !settings.ElectricityBudgetEnabled
             ? "Budget-preferring control is off."
             : evaluation.SafetyOverride
@@ -2041,6 +2965,11 @@ public sealed class DefenderStateStore
             var now = nowOverride ?? DateTimeOffset.UtcNow;
             var previousHvacAction = state.HomeAssistantThermostat?.HvacAction;
             var previousHvacMode = state.HomeAssistantThermostat?.HvacMode;
+            // Accrual runs BEFORE the runtime accounting on purpose: it reads
+            // AcRuntimeLastWasCooling as "was the compressor cooling at the START of this
+            // slice", which AccumulateAcRuntime overwrites with the current reading. The other
+            // order would bank food for a cooling→idle transition slice the compressor ran.
+            AccrueSiestaFood(reading, now);
             AccumulateAcRuntime(reading, now);
             DetectExternalModeOff(reading, previousHvacMode, now);
             DetectExternalSetPointChange(reading, now);
@@ -2339,6 +3268,11 @@ public sealed class DefenderStateStore
             state.EmergencyProtocol = cleanProtocol;
             state.EmergencyQuietUntil = now.Add(duration <= TimeSpan.Zero ? TimeSpan.FromMinutes(30) : duration);
             state.EmergencyStatus = status;
+            if (state.SiestaUntil is { } siestaNap && siestaNap > now)
+            {
+                // Emergencies outrank naps: the guards are needed awake (rations earned are kept).
+                ClearSiestaLocked($"Emergency quiet ({cleanProtocol}) woke the guards early; the siesta ended.");
+            }
             if (pauseDefender)
             {
                 state.DefenderEnabled = false;
@@ -8546,6 +9480,37 @@ public sealed class DefenderStateStore
         saved.ElectricityCostLastSampleAt = null; // downtime must not accrue electricity cost
         saved.ElectricityCostLastPowerKilowatts = null;
 
+        // Cool-Outdoor episode flags PERSIST (a restart must never re-send OFF over a deliberate
+        // manual re-enable); only the command-grace timestamp restarts cleanly.
+        saved.CoolOutdoorOffCommandedAt = null;
+        saved.CoolOutdoorShutdownAccruing = false; // the guard re-opens it within one cycle
+
+        // Food pantry hygiene: downtime must not accrue food; a stale siesta clears; the balance
+        // and counters are clamped so a hand-edited or corrupted state file cannot mint dollars.
+        saved.FoodLastAccrualSampleAt = null;
+        saved.FoodBalanceCad = Math.Clamp(saved.FoodBalanceCad, 0.0, Math.Max(0.0, saved.Settings?.FoodBalanceMaxCad ?? 20.0));
+        saved.FoodEarnedTodayCad = Math.Max(0.0, saved.FoodEarnedTodayCad);
+        saved.FoodReleasedTodayCad = Math.Max(0.0, saved.FoodReleasedTodayCad);
+        saved.FoodReleasedThisMonthCad = Math.Max(0.0, saved.FoodReleasedThisMonthCad);
+        saved.FoodEarnedLifetimeCad = Math.Max(0.0, saved.FoodEarnedLifetimeCad);
+        saved.FoodSpentLifetimeCad = Math.Max(0.0, saved.FoodSpentLifetimeCad);
+        saved.SiestaFoodEarnedThisSiestaCad = Math.Max(0.0, saved.SiestaFoodEarnedThisSiestaCad);
+        if (saved.SiestaUntil is { } siestaUntil && siestaUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.SiestaStartedAt = null;
+            saved.SiestaUntil = null;
+            saved.SiestaReason = null;
+            saved.SiestaStatus = "Siesta expired while the app was down; guards resumed on load.";
+        }
+
+        // A past-due reactor voucher is cleared; lifetime counters can never be negative.
+        if (saved.ReactorPowerUntil is { } reactorUntil && reactorUntil <= DateTimeOffset.UtcNow)
+        {
+            saved.ReactorPowerUntil = null;
+        }
+        saved.ReactorPowerSpentLifetimeCad = Math.Max(0.0, saved.ReactorPowerSpentLifetimeCad);
+        saved.ReactorHoursLifetime = Math.Max(0.0, saved.ReactorHoursLifetime);
+
         saved.Settings ??= new DefenderSettings();
         saved.Settings.MaximumNaturalDelaySeconds = Math.Max(
             saved.Settings.MinimumNaturalDelaySeconds,
@@ -9871,7 +10836,66 @@ public sealed class DefenderStateStore
                 Math.Round(AcEstimatedKilowatts(), 2)),
             CreateElectricityCostSnapshot(),
             CreateElectricityBudgetSnapshot(),
-            CreateRivalScheduleSnapshot(now));
+            CreateRivalScheduleSnapshot(now),
+            CreateForecastSnapshot(now),
+            CreateCoolOutdoorShutdownSnapshot(now),
+            CreateSiestaSnapshot(now),
+            CreateFoodRationsSnapshot(now));
+    }
+
+    private CoolOutdoorShutdownSnapshot CreateCoolOutdoorShutdownSnapshot(DateTimeOffset now)
+    {
+        var s = state.Settings;
+        var restoreAt = Math.Round(s.CoolOutdoorShutdownBelowCelsius + s.CoolOutdoorRestoreMarginCelsius, 1);
+        var projection = GetForecastProjectionLocked(now, s.CoolOutdoorForecastGateHours);
+        var forecastFresh = projection.Available && !projection.Stale && projection.MaxCelsius is not null;
+        var gatePassed = !s.CoolOutdoorForecastGateEnabled
+            || (forecastFresh && projection.MaxCelsius is { } gateMax && gateMax < restoreAt);
+        var offSince = state.CoolOutdoorOffCommandedAt ?? state.CoolOutdoorEpisodeStartedAt;
+        var dwellRemaining = state.CoolOutdoorEpisodeActive && offSince is { } since
+            ? (int)Math.Max(0, (since.AddMinutes(Math.Max(1, s.CoolOutdoorMinimumOffMinutes)) - now).TotalSeconds)
+            : 0;
+
+        return new CoolOutdoorShutdownSnapshot(
+            s.CoolOutdoorShutdownEnabled,
+            state.CoolOutdoorEpisodeActive && !state.CoolOutdoorHumanOverrideThisEpisode,
+            state.CoolOutdoorOffSentThisEpisode,
+            state.CoolOutdoorHumanOverrideThisEpisode,
+            s.CoolOutdoorShutdownBelowCelsius,
+            restoreAt,
+            state.Weather?.OutdoorTemperatureCelsius,
+            s.CoolOutdoorForecastGateEnabled,
+            gatePassed,
+            projection.MaxCelsius is { } max ? Math.Round(max, 1) : null,
+            dwellRemaining,
+            string.IsNullOrWhiteSpace(state.CoolOutdoorStatus)
+                ? (s.CoolOutdoorShutdownEnabled ? "Watching the outdoor temperature." : "Cool-Outdoor Shutdown is off.")
+                : state.CoolOutdoorStatus!,
+            state.CoolOutdoorEpisodeActive && offSince is { } activeSince
+                ? activeSince.AddMinutes(Math.Max(1, s.CoolOutdoorMinimumOffMinutes))
+                : null);
+    }
+
+    private ForecastSnapshot CreateForecastSnapshot(DateTimeOffset now)
+    {
+        var projection = GetForecastProjectionLocked(now, state.Settings.CoolOutdoorForecastGateHours);
+        var status = forecastStatus;
+        if (projection.Available && projection.Stale)
+        {
+            status = $"Forecast is stale (last update {projection.UpdatedAt:HH:mm}); waiting for a fresh fetch.";
+        }
+
+        return new ForecastSnapshot(
+            projection.Available && !projection.Stale,
+            forecast?.EntityId ?? "",
+            forecast?.ForecastType ?? "none",
+            forecast?.Entries.Count ?? 0,
+            forecastUpdatedAt,
+            projection.MaxCelsius is { } max ? Math.Round(max, 1) : null,
+            projection.PeakAt,
+            projection.MaxTodayCelsius is { } today ? Math.Round(today, 1) : null,
+            projection.MaxTomorrowCelsius is { } tomorrow ? Math.Round(tomorrow, 1) : null,
+            status);
     }
 
     private RivalScheduleSnapshot CreateRivalScheduleSnapshot(DateTimeOffset now)
@@ -10538,245 +11562,13 @@ public sealed class DefenderStateStore
 
     private static DefenderSettings CloneSettings(DefenderSettings settings)
     {
-        return new DefenderSettings
-        {
-            ScheduleEnabled = settings.ScheduleEnabled,
-            WeatherActivationMode = settings.WeatherActivationMode,
-            BaseCooldownSeconds = settings.BaseCooldownSeconds,
-            MaxCooldownSeconds = settings.MaxCooldownSeconds,
-            TouchFrequencyWindowMinutes = settings.TouchFrequencyWindowMinutes,
-            CoolModeRestoreDelayEnabled = settings.CoolModeRestoreDelayEnabled,
-            CoolModeRestoreMinimumDelaySeconds = settings.CoolModeRestoreMinimumDelaySeconds,
-            CoolModeRestoreMaximumDelaySeconds = settings.CoolModeRestoreMaximumDelaySeconds,
-            CoolModeRestoreComfortBandCelsius = settings.CoolModeRestoreComfortBandCelsius,
-            ConflictQuietModeEnabled = settings.ConflictQuietModeEnabled,
-            ConflictQuietTouchThreshold = settings.ConflictQuietTouchThreshold,
-            ConflictQuietMinutes = settings.ConflictQuietMinutes,
-            ConflictQuietComfortBandCelsius = settings.ConflictQuietComfortBandCelsius,
-            WallSettlingGuardEnabled = settings.WallSettlingGuardEnabled,
-            WallSettlingMinimumTouches = settings.WallSettlingMinimumTouches,
-            WallSettlingWindowMinutes = settings.WallSettlingWindowMinutes,
-            WallSettlingBaseSeconds = settings.WallSettlingBaseSeconds,
-            WallSettlingPressureExtraSeconds = settings.WallSettlingPressureExtraSeconds,
-            WallSettlingSafetyBandCelsius = settings.WallSettlingSafetyBandCelsius,
-            NaturalRecoveryEnabled = settings.NaturalRecoveryEnabled,
-            AdaptiveQuietnessEnabled = settings.AdaptiveQuietnessEnabled,
-            AdaptiveQuietTouchThreshold = settings.AdaptiveQuietTouchThreshold,
-            MaximumAdaptiveDelaySeconds = settings.MaximumAdaptiveDelaySeconds,
-            MinimumAdaptiveStepCelsius = settings.MinimumAdaptiveStepCelsius,
-            MaximumAdaptiveHoldChancePercent = settings.MaximumAdaptiveHoldChancePercent,
-            MaximumAdaptiveCommandGapSeconds = settings.MaximumAdaptiveCommandGapSeconds,
-            MinimumNaturalDelaySeconds = settings.MinimumNaturalDelaySeconds,
-            MaximumNaturalDelaySeconds = settings.MaximumNaturalDelaySeconds,
-            NaturalStepCelsius = settings.NaturalStepCelsius,
-            NaturalHoldChancePercent = settings.NaturalHoldChancePercent,
-            MaxNaturalHolds = settings.MaxNaturalHolds,
-            MinimumCommandGapSeconds = settings.MinimumCommandGapSeconds,
-            NaturalSafetyOverrideCelsius = settings.NaturalSafetyOverrideCelsius,
-            NaturalWalkbackEnabled = settings.NaturalWalkbackEnabled,
-            NaturalWalkbackTriggerTouches = settings.NaturalWalkbackTriggerTouches,
-            NaturalWalkbackStepCelsius = settings.NaturalWalkbackStepCelsius,
-            NaturalWalkbackJitterCelsius = settings.NaturalWalkbackJitterCelsius,
-            NaturalWalkbackSafetyBandCelsius = settings.NaturalWalkbackSafetyBandCelsius,
-            TouchSignatureEnabled = settings.TouchSignatureEnabled,
-            TouchSignatureTriggerTouches = settings.TouchSignatureTriggerTouches,
-            TouchSignatureRetentionMinutes = settings.TouchSignatureRetentionMinutes,
-            TouchSignatureMinimumStepCelsius = settings.TouchSignatureMinimumStepCelsius,
-            TouchSignatureMaximumStepCelsius = settings.TouchSignatureMaximumStepCelsius,
-            TouchSignatureSafetyBandCelsius = settings.TouchSignatureSafetyBandCelsius,
-            HumanNudgeEnabled = settings.HumanNudgeEnabled,
-            HumanNudgeTriggerTouches = settings.HumanNudgeTriggerTouches,
-            HumanNudgeStepCelsius = settings.HumanNudgeStepCelsius,
-            HumanNudgeSafetyBandCelsius = settings.HumanNudgeSafetyBandCelsius,
-            VisibilityGuardEnabled = settings.VisibilityGuardEnabled,
-            VisibilityGuardTriggerNotices = settings.VisibilityGuardTriggerNotices,
-            VisibilityGuardNoticeWindowMinutes = settings.VisibilityGuardNoticeWindowMinutes,
-            VisibilityGuardAfterCommandSeconds = settings.VisibilityGuardAfterCommandSeconds,
-            VisibilityGuardMinimumHoldMinutes = settings.VisibilityGuardMinimumHoldMinutes,
-            VisibilityGuardMaximumHoldMinutes = settings.VisibilityGuardMaximumHoldMinutes,
-            VisibilityGuardSafetyBandCelsius = settings.VisibilityGuardSafetyBandCelsius,
-            RoutineTimingEnabled = settings.RoutineTimingEnabled,
-            RoutineTimingTriggerTouches = settings.RoutineTimingTriggerTouches,
-            RoutineTimingIntervalMinutes = settings.RoutineTimingIntervalMinutes,
-            RoutineTimingJitterMinutes = settings.RoutineTimingJitterMinutes,
-            RoutineTimingMaxDelayMinutes = settings.RoutineTimingMaxDelayMinutes,
-            RoutineTimingSafetyBandCelsius = settings.RoutineTimingSafetyBandCelsius,
-            ComfortBudgetEnabled = settings.ComfortBudgetEnabled,
-            ComfortBudgetWindowMinutes = settings.ComfortBudgetWindowMinutes,
-            ComfortBudgetMaxCommands = settings.ComfortBudgetMaxCommands,
-            ComfortBudgetSafetyBandCelsius = settings.ComfortBudgetSafetyBandCelsius,
-            CommandCamouflageEnabled = settings.CommandCamouflageEnabled,
-            CommandCamouflageMinimumGapSeconds = settings.CommandCamouflageMinimumGapSeconds,
-            CommandCamouflagePressureExtraSeconds = settings.CommandCamouflagePressureExtraSeconds,
-            CommandCamouflageSafetyBandCelsius = settings.CommandCamouflageSafetyBandCelsius,
-            StealthGovernorEnabled = settings.StealthGovernorEnabled,
-            StealthGovernorTriggerScore = settings.StealthGovernorTriggerScore,
-            StealthGovernorMinimumHoldMinutes = settings.StealthGovernorMinimumHoldMinutes,
-            StealthGovernorMaximumHoldMinutes = settings.StealthGovernorMaximumHoldMinutes,
-            StealthGovernorSafetyBandCelsius = settings.StealthGovernorSafetyBandCelsius,
-            NaturalCadenceEnabled = settings.NaturalCadenceEnabled,
-            NaturalCadenceTriggerTouches = settings.NaturalCadenceTriggerTouches,
-            NaturalCadenceMinimumMinutes = settings.NaturalCadenceMinimumMinutes,
-            NaturalCadenceMaximumMinutes = settings.NaturalCadenceMaximumMinutes,
-            NaturalCadenceJitterMinutes = settings.NaturalCadenceJitterMinutes,
-            NaturalCadenceSafetyBandCelsius = settings.NaturalCadenceSafetyBandCelsius,
-            NaturalChangePlannerEnabled = settings.NaturalChangePlannerEnabled,
-            NaturalChangePlannerTriggerTouches = settings.NaturalChangePlannerTriggerTouches,
-            NaturalChangePlannerMinimumMinutes = settings.NaturalChangePlannerMinimumMinutes,
-            NaturalChangePlannerMaximumMinutes = settings.NaturalChangePlannerMaximumMinutes,
-            NaturalChangePlannerJitterMinutes = settings.NaturalChangePlannerJitterMinutes,
-            NaturalChangePlannerSafetyBandCelsius = settings.NaturalChangePlannerSafetyBandCelsius,
-            NaturalChangePlannerPreferWeatherSlots = settings.NaturalChangePlannerPreferWeatherSlots,
-            NaturalChangePlannerPreferSensorBeat = settings.NaturalChangePlannerPreferSensorBeat,
-            TelemetryAlibiEnabled = settings.TelemetryAlibiEnabled,
-            TelemetryAlibiTriggerTouches = settings.TelemetryAlibiTriggerTouches,
-            TelemetryAlibiMinimumHoldSeconds = settings.TelemetryAlibiMinimumHoldSeconds,
-            TelemetryAlibiMaxHoldMinutes = settings.TelemetryAlibiMaxHoldMinutes,
-            TelemetryAlibiSafetyBandCelsius = settings.TelemetryAlibiSafetyBandCelsius,
-            TelemetryAlibiUseWeather = settings.TelemetryAlibiUseWeather,
-            TelemetryAlibiUseSensorBeat = settings.TelemetryAlibiUseSensorBeat,
-            TelemetryAlibiUsePeakPower = settings.TelemetryAlibiUsePeakPower,
-            TugOfWarTruceEnabled = settings.TugOfWarTruceEnabled,
-            TugOfWarTruceMinimumFlips = settings.TugOfWarTruceMinimumFlips,
-            TugOfWarTruceWindowMinutes = settings.TugOfWarTruceWindowMinutes,
-            TugOfWarTruceHoldMinutes = settings.TugOfWarTruceHoldMinutes,
-            TugOfWarTruceSafetyBandCelsius = settings.TugOfWarTruceSafetyBandCelsius,
-            ComfortEnvelopeEnabled = settings.ComfortEnvelopeEnabled,
-            ComfortEnvelopeTriggerTouches = settings.ComfortEnvelopeTriggerTouches,
-            ComfortEnvelopeHoldMinutes = settings.ComfortEnvelopeHoldMinutes,
-            ComfortEnvelopeMaxOffsetCelsius = settings.ComfortEnvelopeMaxOffsetCelsius,
-            ComfortEnvelopeSafetyBandCelsius = settings.ComfortEnvelopeSafetyBandCelsius,
-            ComfortCompromiseEnabled = settings.ComfortCompromiseEnabled,
-            ComfortCompromiseTriggerTouches = settings.ComfortCompromiseTriggerTouches,
-            ComfortCompromiseHoldMinutes = settings.ComfortCompromiseHoldMinutes,
-            ComfortCompromiseDecayMinutes = settings.ComfortCompromiseDecayMinutes,
-            ComfortCompromiseMaxOffsetCelsius = settings.ComfortCompromiseMaxOffsetCelsius,
-            ComfortCompromiseSafetyBandCelsius = settings.ComfortCompromiseSafetyBandCelsius,
-            ComfortMemoryEnabled = settings.ComfortMemoryEnabled,
-            ComfortMemoryLearningTouches = settings.ComfortMemoryLearningTouches,
-            ComfortMemoryRetentionHours = settings.ComfortMemoryRetentionHours,
-            ComfortMemoryMaxOffsetCelsius = settings.ComfortMemoryMaxOffsetCelsius,
-            ComfortMemorySafetyBandCelsius = settings.ComfortMemorySafetyBandCelsius,
-            ManualComfortGraceEnabled = settings.ManualComfortGraceEnabled,
-            ManualComfortGraceMinutes = settings.ManualComfortGraceMinutes,
-            ManualComfortGraceBandCelsius = settings.ManualComfortGraceBandCelsius,
-            TouchIntentEnabled = settings.TouchIntentEnabled,
-            TouchIntentMinimumTouches = settings.TouchIntentMinimumTouches,
-            TouchIntentWindowMinutes = settings.TouchIntentWindowMinutes,
-            TouchIntentNetWarmThresholdCelsius = settings.TouchIntentNetWarmThresholdCelsius,
-            TouchIntentExtraGraceMinutes = settings.TouchIntentExtraGraceMinutes,
-            TouchIntentSafetyBandCelsius = settings.TouchIntentSafetyBandCelsius,
-            CoolerIntentFastLaneEnabled = settings.CoolerIntentFastLaneEnabled,
-            CoolerIntentMinimumTouches = settings.CoolerIntentMinimumTouches,
-            CoolerIntentWindowMinutes = settings.CoolerIntentWindowMinutes,
-            CoolerIntentHoldMinutes = settings.CoolerIntentHoldMinutes,
-            CoolerIntentNetCoolThresholdCelsius = settings.CoolerIntentNetCoolThresholdCelsius,
-            CoolerIntentSafetyBandCelsius = settings.CoolerIntentSafetyBandCelsius,
-            SetpointEchoGuardEnabled = settings.SetpointEchoGuardEnabled,
-            SetpointEchoGraceSeconds = settings.SetpointEchoGraceSeconds,
-            SetpointEchoSafetyBandCelsius = settings.SetpointEchoSafetyBandCelsius,
-            RepeatCommandGuardEnabled = settings.RepeatCommandGuardEnabled,
-            RepeatCommandMinimumWaitSeconds = settings.RepeatCommandMinimumWaitSeconds,
-            RepeatCommandPressureExtraSeconds = settings.RepeatCommandPressureExtraSeconds,
-            RepeatCommandSafetyBandCelsius = settings.RepeatCommandSafetyBandCelsius,
-            SetpointStillnessGuardEnabled = settings.SetpointStillnessGuardEnabled,
-            SetpointStillnessTriggerTouches = settings.SetpointStillnessTriggerTouches,
-            SetpointStillnessRequiredSamples = settings.SetpointStillnessRequiredSamples,
-            SetpointStillnessMaxHoldSeconds = settings.SetpointStillnessMaxHoldSeconds,
-            SetpointStillnessToleranceCelsius = settings.SetpointStillnessToleranceCelsius,
-            SetpointStillnessSafetyBandCelsius = settings.SetpointStillnessSafetyBandCelsius,
-            SensorRhythmGuardEnabled = settings.SensorRhythmGuardEnabled,
-            SensorRhythmMinimumSamples = settings.SensorRhythmMinimumSamples,
-            SensorRhythmWindowMinutes = settings.SensorRhythmWindowMinutes,
-            SensorRhythmJitterSeconds = settings.SensorRhythmJitterSeconds,
-            SensorRhythmSafetyBandCelsius = settings.SensorRhythmSafetyBandCelsius,
-            HvacActionAlibiEnabled = settings.HvacActionAlibiEnabled,
-            HvacActionAlibiTriggerTouches = settings.HvacActionAlibiTriggerTouches,
-            HvacActionAlibiTransitionWindowSeconds = settings.HvacActionAlibiTransitionWindowSeconds,
-            HvacActionAlibiMaxHoldMinutes = settings.HvacActionAlibiMaxHoldMinutes,
-            HvacActionAlibiSafetyBandCelsius = settings.HvacActionAlibiSafetyBandCelsius,
-            CoolingRunwayGuardEnabled = settings.CoolingRunwayGuardEnabled,
-            CoolingRunwayMinimumSeconds = settings.CoolingRunwayMinimumSeconds,
-            CoolingRunwayPressureExtraSeconds = settings.CoolingRunwayPressureExtraSeconds,
-            CoolingRunwaySafetyBandCelsius = settings.CoolingRunwaySafetyBandCelsius,
-            RoomTrendGuardEnabled = settings.RoomTrendGuardEnabled,
-            RoomTrendWindowMinutes = settings.RoomTrendWindowMinutes,
-            RoomTrendStableToleranceCelsius = settings.RoomTrendStableToleranceCelsius,
-            RoomTrendHoldMinutes = settings.RoomTrendHoldMinutes,
-            ThermalMomentumGuardEnabled = settings.ThermalMomentumGuardEnabled,
-            ThermalMomentumMinimumCoolingRateCelsiusPerHour = settings.ThermalMomentumMinimumCoolingRateCelsiusPerHour,
-            ThermalMomentumLookAheadMinutes = settings.ThermalMomentumLookAheadMinutes,
-            ThermalMomentumHoldMinutes = settings.ThermalMomentumHoldMinutes,
-            WeatherDriftGuardEnabled = settings.WeatherDriftGuardEnabled,
-            WeatherDriftWindowMinutes = settings.WeatherDriftWindowMinutes,
-            WeatherDriftMinimumChangeCelsius = settings.WeatherDriftMinimumChangeCelsius,
-            WeatherDriftHoldMinutes = settings.WeatherDriftHoldMinutes,
-            WeatherDriftSafetyBandCelsius = settings.WeatherDriftSafetyBandCelsius,
-            PeakPowerSaverEnabled = settings.PeakPowerSaverEnabled,
-            PeakPowerSaverOnPeakEnabled = settings.PeakPowerSaverOnPeakEnabled,
-            PeakPowerSaverHighPowerEnabled = settings.PeakPowerSaverHighPowerEnabled,
-            PeakPowerSaverPowerThresholdKilowatts = settings.PeakPowerSaverPowerThresholdKilowatts,
-            PeakPowerSaverPriceThresholdCentsPerKwh = settings.PeakPowerSaverPriceThresholdCentsPerKwh,
-            PeakPowerSaverHoldMinutes = settings.PeakPowerSaverHoldMinutes,
-            PeakPowerSaverRefreshSeconds = settings.PeakPowerSaverRefreshSeconds,
-            PeakPowerSaverSafetyBandCelsius = settings.PeakPowerSaverSafetyBandCelsius,
-            PeakPowerSaverFanSaverEnabled = settings.PeakPowerSaverFanSaverEnabled,
-            PeakPowerSaverFanMode = settings.PeakPowerSaverFanMode,
-            FrontDoorKillSwitchEnabled = settings.FrontDoorKillSwitchEnabled,
-            FrontDoorPersonEntityIds = settings.FrontDoorPersonEntityIds,
-            FrontDoorKillSwitchHoldMinutes = settings.FrontDoorKillSwitchHoldMinutes,
-            FrontDoorKillSwitchRefreshSeconds = settings.FrontDoorKillSwitchRefreshSeconds,
-            FrontDoorKillSwitchTurnsThermostatOff = settings.FrontDoorKillSwitchTurnsThermostatOff,
-            SuperDefenderModeEnabled = settings.SuperDefenderModeEnabled,
-            SuperDefenderRemoteChangeThreshold = settings.SuperDefenderRemoteChangeThreshold,
-            SuperDefenderWindowMinutes = settings.SuperDefenderWindowMinutes,
-            SuperDefenderHoldMinutes = settings.SuperDefenderHoldMinutes,
-            SuperDefenderSafetyBandCelsius = settings.SuperDefenderSafetyBandCelsius,
-            SuperDefenderBypassQuietTiming = settings.SuperDefenderBypassQuietTiming,
-            RemoteSettlingGuardEnabled = settings.RemoteSettlingGuardEnabled,
-            RemoteSettlingTriggerChanges = settings.RemoteSettlingTriggerChanges,
-            RemoteSettlingWindowMinutes = settings.RemoteSettlingWindowMinutes,
-            RemoteSettlingHoldMinutes = settings.RemoteSettlingHoldMinutes,
-            RemoteSettlingSafetyBandCelsius = settings.RemoteSettlingSafetyBandCelsius,
-            FanEnergySaverEnabled = settings.FanEnergySaverEnabled,
-            FanEnergySaverThresholdCelsius = settings.FanEnergySaverThresholdCelsius,
-            FanEnergySaverMode = settings.FanEnergySaverMode,
-            UpstairsComfortEnabled = settings.UpstairsComfortEnabled,
-            UpstairsTemperatureEntityIds = settings.UpstairsTemperatureEntityIds,
-            UpstairsMaxComfortCelsius = settings.UpstairsMaxComfortCelsius,
-            UpstairsComfortTargetCelsius = settings.UpstairsComfortTargetCelsius,
-            UpstairsComfortBoostCelsius = settings.UpstairsComfortBoostCelsius,
-            HomePresenceRequired = settings.HomePresenceRequired,
-            PresenceEntityIds = settings.PresenceEntityIds,
-            DefenderRunsContinuously = true,
-            EnforcerModeEnabled = settings.EnforcerModeEnabled,
-            EnforcerTargetTemperatureCelsius = settings.EnforcerTargetTemperatureCelsius,
-            EnforcerEnforceMode = settings.EnforcerEnforceMode,
-            EnforcerEnforceSetpoint = settings.EnforcerEnforceSetpoint,
-            EnforcerStealthShaping = settings.EnforcerStealthShaping,
-            EnforcerRespectOwner = settings.EnforcerRespectOwner,
-            EnforcerOwnerUserIds = settings.EnforcerOwnerUserIds,
-            EnforcerDebounceSeconds = settings.EnforcerDebounceSeconds,
-            EnforcerCooldownSeconds = settings.EnforcerCooldownSeconds,
-            EnforcerRateWindowMinutes = settings.EnforcerRateWindowMinutes,
-            EnforcerMaxAssertsPerWindow = settings.EnforcerMaxAssertsPerWindow,
-            EnforcerEscalateAfterOverrides = settings.EnforcerEscalateAfterOverrides,
-            EnforcerBackoffBaseSeconds = settings.EnforcerBackoffBaseSeconds,
-            EnforcerBackoffMaxSeconds = settings.EnforcerBackoffMaxSeconds,
-            EnforcerScheduleEnabled = settings.EnforcerScheduleEnabled,
-            EnforcerStartTime = settings.EnforcerStartTime,
-            EnforcerEndTime = settings.EnforcerEndTime,
-            EnforcerRequirePresence = settings.EnforcerRequirePresence,
-            EnforcerNotifyEnabled = settings.EnforcerNotifyEnabled,
-            EnforcerUseLearning = settings.EnforcerUseLearning,
-            ElectricityBudgetEnabled = settings.ElectricityBudgetEnabled,
-            ElectricityMonthlyBudgetDollars = settings.ElectricityMonthlyBudgetDollars,
-            ElectricityBudgetAggressiveness = settings.ElectricityBudgetAggressiveness,
-            ElectricityBudgetMaxSetpointOffsetCelsius = settings.ElectricityBudgetMaxSetpointOffsetCelsius,
-            ElectricityBudgetSafetyMaxCelsius = settings.ElectricityBudgetSafetyMaxCelsius,
-            ElectricityBudgetBasis = settings.ElectricityBudgetBasis,
-            ElectricityBudgetSettingsInitialized = settings.ElectricityBudgetSettingsInitialized
-        };
+        // Full MemberwiseClone-backed copy (DefenderSettings.Clone). The old hand-written member
+        // list silently dropped newer settings (night shutdown, peace offering, stand-down park,
+        // cooling rest, auto brother-mad), resetting them to defaults in every snapshot - and the
+        // Settings page saved those defaults back. A complete clone cannot miss a member.
+        var clone = settings.Clone();
+        clone.DefenderRunsContinuously = true;
+        return clone;
     }
 
     private string BuildComfortStatus()
@@ -10877,6 +11669,71 @@ public sealed class DefenderStateStore
 
         // The night window (keyed by its end date) whose one-and-only OFF command was already sent.
         public string? NightShutdownLastOffWindowKey { get; set; }
+
+        // Cool-Outdoor Shutdown episode: a contiguous run of cycles where outdoor is below the
+        // threshold and the forecast gate passes. One OFF per episode; a human turning the AC
+        // back on mid-episode is respected for the rest of the episode. Unlike the night flags,
+        // these persist across restarts so a reboot never re-sends OFF over a manual re-enable
+        // (only the command-grace timestamp is nulled on load).
+        public bool CoolOutdoorEpisodeActive { get; set; }
+
+        public DateTimeOffset? CoolOutdoorEpisodeStartedAt { get; set; }
+
+        public bool CoolOutdoorOffSentThisEpisode { get; set; }
+
+        public DateTimeOffset? CoolOutdoorOffCommandedAt { get; set; }
+
+        public bool CoolOutdoorHumanOverrideThisEpisode { get; set; }
+
+        public string? CoolOutdoorStatus { get; set; }
+
+        // Siesta (mess hall): the guards nap until SiestaUntil; food accrues meanwhile.
+        public DateTimeOffset? SiestaStartedAt { get; set; }
+
+        public DateTimeOffset? SiestaUntil { get; set; }
+
+        public string? SiestaReason { get; set; }
+
+        public string? SiestaStatus { get; set; }
+
+        public double SiestaFoodEarnedThisSiestaCad { get; set; }
+
+        // Food rations (field kitchen): dollars banked while the guards sleep, spent on hot days.
+        public double FoodBalanceCad { get; set; }
+
+        public double FoodEarnedTodayCad { get; set; }
+
+        public double FoodReleasedTodayCad { get; set; }
+
+        public string? FoodDayKey { get; set; }
+
+        public double FoodReleasedThisMonthCad { get; set; }
+
+        public string? FoodMonthKey { get; set; }
+
+        public double FoodEarnedLifetimeCad { get; set; }
+
+        public double FoodSpentLifetimeCad { get; set; }
+
+        // Point-in-time accrual sample — nulled on load so app downtime never earns dollars.
+        public DateTimeOffset? FoodLastAccrualSampleAt { get; set; }
+
+        public DateTimeOffset? FoodLastReleaseAt { get; set; }
+
+        public double FoodLastReleaseCad { get; set; }
+
+        // Opened by the Cool-Outdoor Shutdown guard while it holds the AC off: a pure accrual
+        // gate (no timed siesta). Forced false on load; the guard re-opens it within one cycle.
+        public bool CoolOutdoorShutdownAccruing { get; set; }
+
+        // Reactor power voucher: rations summon the WinForge reactor's AI operator (1 ration/h).
+        public DateTimeOffset? ReactorPowerUntil { get; set; }
+
+        public DateTimeOffset? ReactorPowerLastRedeemedAt { get; set; }
+
+        public double ReactorPowerSpentLifetimeCad { get; set; }
+
+        public double ReactorHoursLifetime { get; set; }
 
         // AC runtime accounting (hvac_action == cooling), Toronto-local day/month rollover.
         public double AcRuntimeSecondsToday { get; set; }

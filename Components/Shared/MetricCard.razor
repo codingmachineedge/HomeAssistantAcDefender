@@ -1,11 +1,11 @@
 @* Small reading tile rendered as a responsive grid item. *@
 <MudItem xs="@Xs" sm="@Sm" md="@Md" lg="@Lg">
     <MudPaper Class="metric-tile" Elevation="0">
-        <MudText Typo="Typo.overline" Class="metric-tile__label">@Label</MudText>
+        <MudText Typo="Typo.overline" Class="metric-tile__label">@Lang.T(LangMode, Label)</MudText>
         <MudText Typo="Typo.subtitle1" Class="metric-tile__value">@Value</MudText>
         @if (!string.IsNullOrWhiteSpace(Help))
         {
-            <MudText Typo="Typo.caption" Class="helper-text">@Help</MudText>
+            <MudText Typo="Typo.caption" Class="helper-text">@Lang.T(LangMode, Help)</MudText>
         }
     </MudPaper>
 </MudItem>
@@ -14,6 +14,7 @@
     [Parameter] public string Label { get; set; } = "";
     [Parameter] public string Value { get; set; } = "--";
     [Parameter] public string Help { get; set; } = "";
+    [CascadingParameter(Name = "LangMode")] public string? LangMode { get; set; }
     [Parameter] public int Xs { get; set; } = 6;
     [Parameter] public int Sm { get; set; } = 4;
     [Parameter] public int Md { get; set; } = 3;

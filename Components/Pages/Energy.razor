@@ -4,6 +4,7 @@
 @inject DefenderStateProvider State
 @inject HomeAssistantClient HomeAssistant
 @inject DefenderStateStore Store
+@inject ISnackbar Snackbar
 
 <PageTitle>Energy - AC Defender</PageTitle>
 
@@ -91,6 +92,47 @@
                     else if (!Budget.Enabled)
                     {
                         <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">Budget-preferring control is off — turn it on under Settings → Electricity budget.</MudAlert>
+                    }
+                </SectionCard>
+
+                <SectionCard Title="Field kitchen — rations"
+                             Subtitle="@(Pantry?.Status ?? "Warming up…")"
+                             Help="The pantry banks the dollars the AC would probably have spent while the guards napped (siestas and cool-outdoor shutdowns). On a forecast-hot day it pays the AC's real bill so the monthly budget eases exactly when cooling matters most — and rations can summon the WinForge reactor's AI operator, one ration per hour.">
+                    @if (Pantry is { } pantry)
+                    {
+                        <MudGrid Spacing="2" Class="mt-1">
+                            <MetricCard Label="Pantry balance" Value="@($"${pantry.BalanceCad:0.00} / ${pantry.BalanceMaxCad:0.00}")" Help="Banked ration dollars against the cap. Kept across months." />
+                            <MetricCard Label="Earned today" Value="@($"${pantry.EarnedTodayCad:0.00}")" Help="Rations banked so far today." />
+                            <MetricCard Label="Released this month" Value="@($"${pantry.ReleasedThisMonthCad:0.00}")" Help="Hot-window dollars the pantry already paid off the budget." />
+                            <MetricCard Label="Hot window" Value="@(pantry.HotWindowActive ? (pantry.ForecastMaxCelsius is { } hotMax ? $"Yes ({hotMax:0.0} C)" : "Yes") : "No")" Help="@($"Releases run when the forecast peaks at or above {pantry.HotThresholdCelsius:0.0} C.")" />
+                            <MetricCard Label="Duty cycle" Value="@($"{pantry.DutyCyclePercent:0.0}%")" Help="The AC's usual share of run-time from the last week — the accrual honesty factor." />
+                            <MetricCard Label="Rations" Value="@pantry.RationsAvailable.ToString()" Help="@($"Spendable units of ${pantry.RationSizeCad:0.00} — one ration powers the WinForge reactor for an hour.")" />
+                        </MudGrid>
+                        @if (pantry.ReactorPowerActive && pantry.ReactorPowerUntil is { } poweredUntil)
+                        {
+                            <MudAlert Class="mt-3" Severity="Severity.Success" Variant="Variant.Outlined">
+                                ☢ REACTOR POWERED — the AI operator runs the WinForge reactor until @poweredUntil.ToLocalTime().ToString("HH:mm") (@pantry.ReactorHoursLifetime.ToString("0.#") lifetime reactor-hours).
+                            </MudAlert>
+                        }
+                        @if (pantry.Enabled && pantry.ReactorPowerActive == false)
+                        {
+                            <MudStack Row="true" Spacing="2" Class="mt-3" AlignItems="AlignItems.Center">
+                                <MudButton Variant="Variant.Filled" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Bolt"
+                                           Disabled="@(pantry.RationsAvailable < 1)" OnClick="@(() => SummonReactorOperator(1))">
+                                    SUMMON AI REACTOR OPERATOR — 1 ration / hour
+                                </MudButton>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Disabled="@(pantry.RationsAvailable < 2)" OnClick="@(() => SummonReactorOperator(2))">2 h</MudButton>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Disabled="@(pantry.RationsAvailable < 4)" OnClick="@(() => SummonReactorOperator(4))">4 h</MudButton>
+                            </MudStack>
+                        }
+                        @if (!Budget.Enabled && pantry.Enabled)
+                        {
+                            <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">Rations accrue, but they only ease the monthly budget once it is turned on under Settings → Electricity budget.</MudAlert>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Class="helper-text">The field kitchen has not reported yet.</MudText>
                     }
                 </SectionCard>
 
@@ -388,6 +430,24 @@
 
     private ElectricityBudgetSnapshot Budget => State.Snapshot.ElectricityBudget
         ?? new ElectricityBudgetSnapshot(false, 0, 0, 0, 0, false, 0, 0, 0.5, 26, false, "Budget-preferring control is off.");
+
+    private FoodRationsSnapshot? Pantry => State.Snapshot.FoodRations;
+
+    // Reactor redemption moves no money and touches no thermostat → bypasses the debounce,
+    // same as target/settings saves.
+    private void SummonReactorOperator(int hours)
+    {
+        var gate = Store.TryBeginWebsiteCommand("summon reactor operator", bypassDebounce: true);
+        if (!gate.Accepted)
+        {
+            Snackbar.Add(gate.Message, Severity.Warning);
+            return;
+        }
+
+        var ok = Store.TryRedeemReactorPower(hours, out var message);
+        State.Refresh();
+        Snackbar.Add(message, ok ? Severity.Success : Severity.Warning);
+    }
 
     private string CostSubtitle => Cost.TrackingSince is { } since
         ? $"Since {Format.ToToronto(since):yyyy-MM-dd} · now {Cost.CurrentPeriod} @ {Cost.CurrentRateCentsPerKwh:0.###} c/kWh"

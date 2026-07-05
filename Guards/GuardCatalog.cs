@@ -661,6 +661,119 @@ public static class GuardCatalog
             }),
 
         new GuardInfo(
+            "Cool-Outdoor Shutdown (Open-Window Armistice)", GuardCategory.System,
+            "When it is genuinely cool outside and the forecast says it stays cool, the defender turns the AC fully off — and turns it back on by itself when the weather or the room demands it.",
+            "The real outdoor temperature, the hourly Home Assistant forecast over the gate hours, the room temperature, the thermostat mode, and the minimum-off dwell clock.",
+            "Below the shutdown threshold, and only when the forecast peak over the gate hours stays under threshold+margin (no off/on flapping before a hot afternoon), it sends ONE off command per cool episode and stands guard. It restores cool mode on its own once outdoor warms past threshold+margin (after the minimum off dwell) — or immediately, dwell ignored, if the room crosses the safety band. Someone turning the AC back on mid-episode wins for the rest of that episode; an AC already off by hand is adopted without a command. Unknown outdoor or a missing forecast means it does nothing new; safety bands always win. While it holds the AC off, the quiet minutes bank food rations.",
+            "Sends climate.set_hvac_mode = off once per cool episode, then a tagged automatic restore.",
+            ["CoolOutdoorShutdownEnabled", "CoolOutdoorShutdownBelowCelsius", "CoolOutdoorRestoreMarginCelsius", "CoolOutdoorMinimumOffMinutes", "CoolOutdoorForecastGateEnabled", "CoolOutdoorForecastGateHours", "ForecastRefreshMinutes"],
+            s =>
+            {
+                if (s.CoolOutdoorShutdown is not { } c)
+                {
+                    return GuardLiveView.Standard(false, false, "Off", "Cool-Outdoor Shutdown is not available yet.",
+                    [
+                        new("Outdoor now", "--", "The live outdoor temperature."),
+                    ]);
+                }
+
+                var coolOutdoorTone = !c.Enabled ? GuardTone.Off
+                    : c.HumanOverride ? GuardTone.Calm
+                    : c.Holding ? GuardTone.Holding
+                    : GuardTone.Info;
+                var coolOutdoorLabel = !c.Enabled ? "Off"
+                    : c.HumanOverride ? "Human override"
+                    : c.Holding ? "AC OFF"
+                    : "Watching";
+                return new GuardLiveView(c.Enabled, c.Holding, coolOutdoorLabel, coolOutdoorTone, c.Status,
+                [
+                    new("Outdoor now", c.OutdoorCelsius is { } outdoorNow ? $"{outdoorNow:0.0} C" : "--", "The live outdoor temperature."),
+                    new("Shutdown below", $"{c.ThresholdCelsius:0.0} C", "Outdoor temperatures under this may turn the AC fully off."),
+                    new("Restores at", $"{c.RestoreAtCelsius:0.0} C", "Outdoor warming past this brings cool mode back (after the off dwell)."),
+                    new("Forecast peak", c.ForecastMaxCelsius is { } forecastPeak ? $"{forecastPeak:0.0} C" : "no forecast", "The hottest forecast temperature inside the gate hours."),
+                    new("Forecast gate", !c.ForecastGateEnabled ? "Off" : c.ForecastGatePassed ? "Pass" : "Blocking", "The forecast must agree it stays cool before a shutdown."),
+                    new("Off dwell", c.Holding && c.OffDwellSecondsRemaining > 0
+                        ? $"{c.OffDwellSecondsRemaining / 60}m {c.OffDwellSecondsRemaining % 60}s"
+                        : "—", "Minimum time the AC stays off before a weather restore."),
+                ]);
+            }),
+
+        new GuardInfo(
+            "Siesta Watch (mess hall)", GuardCategory.System,
+            "Lets the whole guard force nap on command; while they sleep the AC eases off and the money it would have spent is banked as food rations.",
+            "The siesta timer, the room temperature against the wake band, the budget safety maximum, and the thermostat mode.",
+            "A siesta starts from the dashboard (1h/2h/4h) and parks the thermostat — or turns it off — exactly once; a human changing it back mid-nap is respected, the accrual just pauses while the unit cools. The guards wake on the timer, immediately when the room passes target + wake band or the budget safety maximum, on cancel, or when an emergency fires or the master switch pauses the defender. Rations already earned are always kept.",
+            "Holds the whole correction pipeline while the nap timer runs; sends one park/off command at the start.",
+            ["SiestaEnabled", "SiestaThermostatAction", "SiestaWakeBandCelsius", "SiestaMaxMinutes"],
+            s =>
+            {
+                if (s.Siesta is not { } nap)
+                {
+                    return GuardLiveView.Standard(false, false, "Off", "Siesta Watch is not available yet.",
+                    [
+                        new("Nap ends", "—", "When the guards wake up."),
+                    ]);
+                }
+
+                var siestaTone = !nap.Enabled ? GuardTone.Off
+                    : nap.Active ? GuardTone.Info
+                    : GuardTone.Calm;
+                var siestaLabel = !nap.Enabled ? "Off"
+                    : nap.Active ? "Sleeping"
+                    : "On duty";
+                return new GuardLiveView(nap.Enabled, nap.Active, siestaLabel, siestaTone, nap.Status,
+                [
+                    new("Nap ends", nap.Active && nap.Until is { } wake
+                        ? $"{wake.ToLocalTime():HH:mm} ({nap.SecondsRemaining / 60} min left)"
+                        : "—", "When the guards wake up."),
+                    new("Reason", nap.Active ? nap.Reason : "—", "Manual button or the cool-outdoor shutdown."),
+                    new("Rations this nap", $"${nap.FoodEarnedThisSiestaCad:0.00}", "Dollars banked so far during this siesta."),
+                    new("Start action", nap.ThermostatAction, "What happens to the AC when a nap starts: park the setpoint or turn it off."),
+                ]);
+            }),
+
+        new GuardInfo(
+            "Field Kitchen (food rations)", GuardCategory.System,
+            "Banks unspent AC dollars during siestas and cool-outdoor shutdowns, and spends them on forecast-hot days so the monthly budget eases exactly when cooling matters most.",
+            "The pantry balance and cap, the trailing-week compressor duty cycle, the Alectra TOU rate in force, the hourly forecast over the release lookahead, and the AC's real per-slice estimated cost.",
+            "While the guards nap, every quiet minute banks the money the AC would probably have spent — its usual share of run-time from the last week × its assumed power draw × the Alectra rate right now. On a forecast-hot day the pantry pays the AC's bill: every dollar the AC actually spends during the hot window comes out of the food balance instead of counting against the monthly budget (up to the per-day cap, only while over pace). A slice where the compressor actually cools earns nothing, and no usage history means no accrual — the pantry never invents savings. Rations can also summon the WinForge reactor's AI operator — one ration per hour.",
+            "Adjusts the monthly budget's over/under bookkeeping; moves no real money and sends no thermostat commands.",
+            ["FoodRationsEnabled", "FoodBalanceMaxCad", "FoodReleaseHotThresholdCelsius", "FoodReleaseLookaheadHours", "FoodReleaseMaxPerDayCad", "ReactorPowerEnabled", "FoodRationSizeCad"],
+            s =>
+            {
+                if (s.FoodRations is not { } pantry)
+                {
+                    return GuardLiveView.Standard(false, false, "Off", "The field kitchen is not available yet.",
+                    [
+                        new("Pantry", "$0.00", "Banked ration dollars."),
+                    ]);
+                }
+
+                var pantryTone = !pantry.Enabled ? GuardTone.Off
+                    : pantry.HotWindowActive && pantry.BalanceCad > 0 ? GuardTone.Success
+                    : pantry.BalanceCad > 0 ? GuardTone.Info
+                    : GuardTone.Calm;
+                var pantryLabel = !pantry.Enabled ? "Off"
+                    : pantry.HotWindowActive && pantry.BalanceCad > 0 ? "Paying the bill"
+                    : pantry.BalanceCad > 0 ? "Stocked"
+                    : "Empty";
+                return new GuardLiveView(pantry.Enabled, pantry.HotWindowActive && pantry.BalanceCad > 0, pantryLabel, pantryTone, pantry.Status,
+                [
+                    new("Pantry", $"${pantry.BalanceCad:0.00} / ${pantry.BalanceMaxCad:0.00}", "Banked ration dollars against the cap."),
+                    new("Earned today", $"${pantry.EarnedTodayCad:0.00}", "Rations banked so far today."),
+                    new("Released this month", $"${pantry.ReleasedThisMonthCad:0.00}", "Hot-window dollars the pantry already paid off the budget."),
+                    new("Hot window", pantry.HotWindowActive
+                        ? (pantry.ForecastMaxCelsius is { } hotMax ? $"Yes ({hotMax:0.0} C peak)" : "Yes (live outdoor)")
+                        : "No", $"Releases run when the forecast peaks at or above {pantry.HotThresholdCelsius:0.0} C."),
+                    new("Duty cycle", $"{pantry.DutyCyclePercent:0.0}%", "The AC's usual share of run-time from the last week — the accrual honesty factor."),
+                    new("Rations", pantry.RationsAvailable.ToString(), $"Spendable units of ${pantry.RationSizeCad:0.00}; one ration powers the WinForge reactor for an hour."),
+                    new("Reactor", pantry.ReactorPowerActive && pantry.ReactorPowerUntil is { } poweredUntil
+                        ? $"Powered until {poweredUntil.ToLocalTime():HH:mm}"
+                        : "Unpowered", "The WinForge Web reactor's AI-operator voucher."),
+                ]);
+            }),
+
+        new GuardInfo(
             "Desired-State Enforcer", GuardCategory.System,
             "Makes the owner's chosen AC state win automatically: if someone else turns the unit off or moves the setpoint, it restores the exact desired state and keeps it there.",
             "Home Assistant HVAC mode, the live setpoint vs the owner's target, context.user_id attribution, recent override/assert counts, and the learned interference probability.",

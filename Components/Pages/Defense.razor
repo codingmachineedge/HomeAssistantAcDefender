@@ -13,6 +13,15 @@
     <a class="ops-chip" href="/guide">✦ GUIDE</a>
 </div>
 
+@if (Snapshot?.Siesta is { Active: true } siestaBanner)
+{
+    <div class="ops-alert-row" style="margin-bottom: 14px;">
+        <span class="ops-alert-row__glyph" aria-hidden="true">☾</span>
+        <span class="ops-alert-row__tag">GUARDS ASLEEP — MESS HALL OPEN</span>
+        <span class="ops-alert-row__text">Wake at @(siestaBanner.Until?.ToLocalTime().ToString("HH:mm") ?? "--") · rations earned $@siestaBanner.FoodEarnedThisSiestaCad.ToString("0.00") · the room passing the wake band ends the nap early.</span>
+    </div>
+}
+
 @if (BusyCount > 0)
 {
     <div class="ops-alert-row ops-alert-row--warn" style="margin-bottom: 14px;">

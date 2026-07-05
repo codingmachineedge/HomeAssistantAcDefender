@@ -59,6 +59,13 @@
   .backhome { display: inline-block; margin-bottom: 26px; font-size: 14px; font-weight: 600; text-decoration: none; color: var(--sub); }
   .backhome:hover { color: var(--clay-dark); }
 
+  /* Language switcher (EN / 粵) */
+  .langbar { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .langbar a { padding: 4px 10px; font-size: 13px; font-weight: 700; text-decoration: none; color: var(--sub); }
+  .langbar a + a { border-left: 1px solid var(--line); }
+  .langbar a.active { background: var(--clay); color: var(--paper); }
+  .langbar a:hover:not(.active) { color: var(--clay-dark); }
+
   footer { border-top: 1px solid var(--line); background: var(--paper); }
   footer .inner { max-width: 820px; margin: 0 auto; padding: 28px 24px 40px; color: var(--sub); font-size: 13px; }
   footer a { color: var(--ink); }
@@ -69,15 +76,19 @@
 <div class="topbar">
   <div class="inner">
     <a class="brand" href="../index.html">🛡️ AC Defender</a>
-    <nav>
-      <a href="Website-Tour.html">Tour</a>
-      <a href="Every-Guard-Explained.html">Guards</a>
-      <a href="Energy-and-Costs.html">Energy</a>
-      <a href="Defender-Logic.html">Logic</a>
-      <a href="Settings.html">Settings</a>
-      <a href="API.html">API</a>
-      <a href="Deployment.html">Deploy</a>
+    <nav id="docnav">
+      <a href="Website-Tour.html" data-en="Tour" data-yue="導覽">Tour</a>
+      <a href="Every-Guard-Explained.html" data-en="Guards" data-yue="衛兵">Guards</a>
+      <a href="Energy-and-Costs.html" data-en="Energy" data-yue="能源">Energy</a>
+      <a href="Defender-Logic.html" data-en="Logic" data-yue="邏輯">Logic</a>
+      <a href="Settings.html" data-en="Settings" data-yue="設定">Settings</a>
+      <a href="API.html" data-en="API" data-yue="API">API</a>
+      <a href="Deployment.html" data-en="Deploy" data-yue="部署">Deploy</a>
     </nav>
+    <div class="langbar" role="group" aria-label="Language">
+      <a id="lang-en" href="#">EN</a>
+      <a id="lang-yue" href="#">粵</a>
+    </div>
   </div>
 </div>
 
@@ -93,6 +104,42 @@
     <a href="https://github.com/cafepromenade/ac-defender">GitHub</a>
   </div>
 </footer>
+
+<script>
+(function () {
+  // Every wiki page has an EN version (Foo.html) and a Cantonese sibling (Foo.yue.html).
+  // The choice persists per browser and auto-follows across pages.
+  var KEY = "acdef-docs-lang";
+  var path = location.pathname;
+  var isYue = /\.yue\.html$/.test(path) || /\.yue\/?$/.test(path);
+  var enHref = isYue ? path.replace(/\.yue(\.html)?$/, "$1").replace(/\.yue\/$/, "/") : path;
+  var yueHref = isYue ? path : path.replace(/(\.html)$/, ".yue$1");
+  if (!/\.html$/.test(path) && !isYue) { yueHref = path.replace(/\/?$/, ".yue.html"); }
+
+  var en = document.getElementById("lang-en");
+  var yue = document.getElementById("lang-yue");
+  en.href = enHref; yue.href = yueHref;
+  (isYue ? yue : en).classList.add("active");
+  en.addEventListener("click", function () { try { localStorage.setItem(KEY, "en"); } catch (e) {} });
+  yue.addEventListener("click", function () { try { localStorage.setItem(KEY, "yue"); } catch (e) {} });
+
+  // Keep nav links inside the chosen language.
+  if (isYue) {
+    document.querySelectorAll("#docnav a").forEach(function (a) {
+      a.setAttribute("href", a.getAttribute("href").replace(/(\.html)$/, ".yue$1"));
+      if (a.dataset.yue) { a.textContent = a.dataset.yue; }
+    });
+    document.documentElement.lang = "yue";
+  }
+
+  // Auto-follow the saved preference when landing on the other variant.
+  try {
+    var saved = localStorage.getItem(KEY);
+    if (saved === "yue" && !isYue) { location.replace(yueHref); }
+    else if (saved === "en" && isYue) { location.replace(enHref); }
+  } catch (e) {}
+})();
+</script>
 
 </body>
 </html>

@@ -6,15 +6,15 @@
             <div class="section-card__heading">
                 @if (!string.IsNullOrWhiteSpace(Title))
                 {
-                    <MudText Typo="Typo.overline">@Title</MudText>
+                    <MudText Typo="Typo.overline" Class="i18n-both">@Lang.T(LangMode, Title)</MudText>
                 }
                 @if (!string.IsNullOrWhiteSpace(Subtitle))
                 {
-                    <MudText Typo="Typo.h6">@Subtitle</MudText>
+                    <MudText Typo="Typo.h6" Class="i18n-both">@Lang.T(LangMode, Subtitle)</MudText>
                 }
                 @if (!string.IsNullOrWhiteSpace(Help))
                 {
-                    <MudText Typo="Typo.body2" Class="helper-text">@Help</MudText>
+                    <MudText Typo="Typo.body2" Class="helper-text">@Lang.T(LangMode, Help)</MudText>
                 }
             </div>
             @if (Actions is not null)
@@ -33,4 +33,5 @@
     [Parameter] public string? Class { get; set; }
     [Parameter] public RenderFragment? Actions { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
+    [CascadingParameter(Name = "LangMode")] public string? LangMode { get; set; }
 }

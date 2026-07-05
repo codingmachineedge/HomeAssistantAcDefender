@@ -10,6 +10,12 @@ public sealed record EmergencyProtocolRequest(string Protocol);
 
 public sealed record CameraWebRtcRequest(string? OfferSdp);
 
+/// <summary>Start or cancel a siesta: {"action":"start","minutes":120} or {"action":"cancel"}.</summary>
+public sealed record SiestaRequest(string Action, int? Minutes = null);
+
+/// <summary>Spend rations on reactor power: one ration summons the AI operator for one hour.</summary>
+public sealed record ReactorPowerRequest(int Hours = 1);
+
 public sealed record SettingsRequest(
     bool ScheduleEnabled,
     string WeatherActivationMode,
@@ -268,4 +274,22 @@ public sealed record SettingsRequest(
     double? ElectricityBudgetAggressiveness = null,
     double? ElectricityBudgetMaxSetpointOffsetCelsius = null,
     double? ElectricityBudgetSafetyMaxCelsius = null,
-    string? ElectricityBudgetBasis = null);
+    string? ElectricityBudgetBasis = null,
+    bool? CoolOutdoorShutdownEnabled = null,
+    double? CoolOutdoorShutdownBelowCelsius = null,
+    double? CoolOutdoorRestoreMarginCelsius = null,
+    int? CoolOutdoorMinimumOffMinutes = null,
+    bool? CoolOutdoorForecastGateEnabled = null,
+    int? CoolOutdoorForecastGateHours = null,
+    int? ForecastRefreshMinutes = null,
+    bool? SiestaEnabled = null,
+    string? SiestaThermostatAction = null,
+    double? SiestaWakeBandCelsius = null,
+    int? SiestaMaxMinutes = null,
+    bool? FoodRationsEnabled = null,
+    double? FoodBalanceMaxCad = null,
+    double? FoodReleaseHotThresholdCelsius = null,
+    int? FoodReleaseLookaheadHours = null,
+    double? FoodReleaseMaxPerDayCad = null,
+    bool? ReactorPowerEnabled = null,
+    double? FoodRationSizeCad = null);

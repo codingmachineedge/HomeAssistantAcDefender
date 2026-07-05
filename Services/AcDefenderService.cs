@@ -45,6 +45,7 @@ public sealed class AcDefenderService
                 return;
             }
             await AccumulateElectricityCostAsync(cancellationToken);
+            await RefreshForecastIfDueAsync(cancellationToken);
             await RefreshPeakPowerStatusIfDueAsync(cancellationToken);
             await RefreshFrontDoorKillSwitchIfDueAsync(cancellationToken);
             await RefreshLearningIfDueAsync(cancellationToken);
@@ -97,6 +98,17 @@ public sealed class AcDefenderService
                 return;
             }
 
+            // Siesta (mess hall): a nap of an ENABLED defender. Front-door kill, peace offering,
+            // and emergency quiet outrank it (they run earlier); it short-circuits the cycle
+            // itself instead of toggling the master switch, so "keep reading HA 24/7" stays
+            // trivially true and there is no auto-resume flag to owe. Wake-on-hot-room is
+            // checked inside every cycle — comfort and safety always win.
+            if (stateStore.TryRespectSiesta(reading, DateTimeOffset.UtcNow, out var siestaUntil, out var siestaMessage))
+            {
+                stateStore.SetNextAction(siestaMessage, siestaUntil ?? nextCheck);
+                return;
+            }
+
             // On-forever protection runs BEFORE the night gates: the run clock must keep counting
             // through night passive watch, otherwise a warm night could hide 7+ hours of
             // continuous cooling from the limit. During a rest, ease up and wait.
@@ -128,6 +140,36 @@ public sealed class AcDefenderService
                 }
 
                 stateStore.SetNextAction(nightMessage, nightUntil);
+                return;
+            }
+
+            // Cool-Outdoor Shutdown: genuinely cool outside + forecast staying cool = AC fully
+            // off; auto-restores by weather or room comfort. Runs after night shutdown (which
+            // owns the night window — no double-off) and before the enforcer and the cool-mode
+            // restore so nothing turns the unit back on while this hold is deliberate.
+            if (stateStore.TryBeginCoolOutdoorShutdown(reading, DateTimeOffset.UtcNow, out var coolOutUntil, out var coolOutMessage, out var coolOutOff, out var coolOutRestore, out var coolOutSetPoint))
+            {
+                if (coolOutOff)
+                {
+                    await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
+                }
+
+                stateStore.SetNextAction(coolOutMessage, coolOutUntil);
+                return;
+            }
+            else if (coolOutRestore)
+            {
+                if (coolOutSetPoint is { } restoreTo)
+                {
+                    await homeAssistantClient.SetCoolingAsync(reading.EntityId, restoreTo, cancellationToken);
+                }
+                else
+                {
+                    await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "cool", cancellationToken);
+                }
+
+                stateStore.RecordCoolModeRestoreCommand(reading.HvacMode);
+                stateStore.SetNextAction(coolOutMessage, coolOutUntil);
                 return;
             }
 
@@ -498,6 +540,35 @@ public sealed class AcDefenderService
         }
     }
 
+    // Weather forecast refresh: throttled to ForecastRefreshMinutes (5-min backoff on failure).
+    // Runs AFTER RefreshReadingAsync so Weather.EntityId exists on first boot. A sensor-only
+    // outdoor source has no forecast service — recorded as unavailable, never treated as an error.
+    private async Task RefreshForecastIfDueAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (!stateStore.ShouldRefreshForecast(now))
+        {
+            return;
+        }
+
+        var entityId = stateStore.GetSnapshot().Weather?.EntityId;
+        if (string.IsNullOrWhiteSpace(entityId) || !entityId.StartsWith("weather.", StringComparison.OrdinalIgnoreCase))
+        {
+            stateStore.RecordForecastReading(null, now);
+            return;
+        }
+
+        try
+        {
+            stateStore.RecordForecastReading(await homeAssistantClient.GetWeatherForecastAsync(entityId, cancellationToken), now);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Weather forecast refresh failed");
+            stateStore.RecordForecastReading(null, now);
+        }
+    }
+
     private async Task RefreshPeakPowerStatusIfDueAsync(CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
@@ -689,6 +760,34 @@ public sealed class AcDefenderService
             commandSourceLabel: "Stand-down parking",
             commandSourceDetail: "The defender was turned off; the setpoint was raised to the stand-down park value to save power while unguarded.");
         return $"Thermostat parked at {parkSetPoint:0.0} °C while the defender is off.";
+    }
+
+    /// <summary>
+    /// The one-shot thermostat action for a freshly started siesta: park (raise-only, cool-mode
+    /// only) or off, per the SiestaThermostatAction setting. The store records the tagged
+    /// command; this just sends it. Returns a human sentence, or null when nothing was needed.
+    /// </summary>
+    public async Task<string?> ApplySiestaThermostatActionAsync(CancellationToken cancellationToken)
+    {
+        var reading = await RequireReadingAsync(cancellationToken);
+        if (!stateStore.TryGetSiestaThermostatAction(reading, out var turnOff, out var parkSetPoint))
+        {
+            return null;
+        }
+
+        if (turnOff)
+        {
+            await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
+            return "AC turned off while the guards nap.";
+        }
+
+        if (parkSetPoint is { } park)
+        {
+            await homeAssistantClient.SetCoolingAsync(reading.EntityId, park, cancellationToken);
+            return $"Thermostat parked at {park:0.0} °C while the guards nap.";
+        }
+
+        return null;
     }
 
     private DateTimeOffset _lastRuntimeBackfillAttemptAt = DateTimeOffset.MinValue;

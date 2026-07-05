@@ -198,6 +198,41 @@
         }
     </SectionCard>
 
+    <SectionCard Title="Mess hall (siesta)"
+                 Subtitle="@SiestaSubtitle"
+                 Help="Tell the guards to sleep for a while: the AC eases off (parked or off, per Settings) and the money it would probably have spent banks as food rations. The room passing the wake band always wakes them early.">
+        @if (Snapshot?.Siesta is { Active: true } activeNap)
+        {
+            <MudStack Spacing="2">
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+                    GUARDS ASLEEP — wakes @(activeNap.Until?.ToLocalTime().ToString("HH:mm") ?? "soon")
+                    (@(activeNap.SecondsRemaining / 60) min left) · rations this nap $@activeNap.FoodEarnedThisSiestaCad.ToString("0.00")
+                </MudAlert>
+                <MudButton Variant="Variant.Filled" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Alarm" OnClick="CancelSiesta">Wake the guards now</MudButton>
+            </MudStack>
+        }
+        else
+        {
+            <MudGrid Spacing="2">
+                <MudItem xs="4">
+                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Bedtime" OnClick="@(() => StartSiesta(60))">1 hour</MudButton>
+                </MudItem>
+                <MudItem xs="4">
+                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Bedtime" OnClick="@(() => StartSiesta(120))">2 hours</MudButton>
+                </MudItem>
+                <MudItem xs="4">
+                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Bedtime" OnClick="@(() => StartSiesta(240))">4 hours</MudButton>
+                </MudItem>
+            </MudGrid>
+        }
+        @if (Snapshot?.FoodRations is { } pantryChip)
+        {
+            <MudText Typo="Typo.caption" Class="helper-text mt-2">
+                Pantry: $@pantryChip.BalanceCad.ToString("0.00") / $@pantryChip.BalanceMaxCad.ToString("0.00") · earned today $@pantryChip.EarnedTodayCad.ToString("0.00")
+            </MudText>
+        }
+    </SectionCard>
+
     <SectionCard Title="Learning" Help="A machine-learning trainer learns automatically from the someone-upset button and your real Home Assistant thermostat history (retrains in the background; no action needed).">
         <MudStack Spacing="2">
             <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="LearnFromHistory" Disabled="_learningHistory" StartIcon="@Icons.Material.Filled.ModelTraining">
@@ -379,6 +414,54 @@
         {
             // Parking is best-effort; a Home Assistant hiccup must not block standing down.
         }
+    }
+
+    private string SiestaSubtitle => Snapshot?.Siesta switch
+    {
+        { Active: true } => "Guards asleep",
+        { Enabled: true } => "Guards on duty",
+        _ => "Off",
+    };
+
+    // Start = thermostat-affecting (parks or turns the unit off once) → non-bypass gate, same
+    // rule as "turn thermostat off". Cancel only clears a hold.
+    private async Task StartSiesta(int minutes)
+    {
+        if (!TryBeginWebsiteCommand("start siesta"))
+        {
+            return;
+        }
+
+        if (!StateStore.TryStartSiesta(minutes, "manual", out var message))
+        {
+            Snackbar.Add(message, Severity.Warning);
+            State.Refresh();
+            return;
+        }
+
+        try
+        {
+            await Defender.ApplySiestaThermostatActionAsync(CancellationToken.None);
+        }
+        catch
+        {
+            // The park/off command is best-effort; the nap itself is already on.
+        }
+
+        State.Refresh();
+        Snackbar.Add(message, Severity.Success);
+    }
+
+    private void CancelSiesta()
+    {
+        if (!TryBeginWebsiteCommand("cancel siesta", bypassDebounce: true))
+        {
+            return;
+        }
+
+        var ok = StateStore.TryCancelSiesta(out var message);
+        State.Refresh();
+        Snackbar.Add(message, ok ? Severity.Info : Severity.Warning);
     }
 
     private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat", bypassDebounce: true);

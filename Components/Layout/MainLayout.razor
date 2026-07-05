@@ -12,6 +12,7 @@
 <MudDialogProvider />
 <MudSnackbarProvider />
 
+<CascadingValue Value="_langMode" Name="LangMode">
 <div class="@RootClass">
 
     @* ═════════ COMMAND BAR ═════════ *@
@@ -36,12 +37,18 @@
 
         <div class="ops-mood" role="status">
             <span class="ops-mood__dot"></span>
-            <span class="ops-mood__label">@MoodLabel</span>
+            <span class="ops-mood__label">@L(MoodLabel)</span>
         </div>
 
         <div class="ops-clock">
             <div class="ops-clock__time">@_clockText</div>
             <div class="ops-clock__label">MISSION CLOCK · TORONTO</div>
+        </div>
+
+        <div class="ops-lang" role="group" aria-label="Language">
+            <button class="@LangBtnClass(Lang.English)" @onclick="@(() => SetLangMode(Lang.English))" title="English">EN</button>
+            <button class="@LangBtnClass(Lang.Cantonese)" @onclick="@(() => SetLangMode(Lang.Cantonese))" title="口語廣東話">粵</button>
+            <button class="@LangBtnClass(Lang.Both)" @onclick="@(() => SetLangMode(Lang.Both))" title="English + 廣東話">EN+粵</button>
         </div>
 
         <button class="ops-icon-btn" @onclick="SignOut" aria-label="Sign out" title="Sign out">⏻</button>
@@ -52,13 +59,13 @@
 
         @* ═════════ NAV RAIL ═════════ *@
         <nav class="ops-rail" aria-label="Primary">
-            <div class="ops-rail__title">STATIONS</div>
+            <div class="ops-rail__title">@L("STATIONS")</div>
             @foreach (var item in Stations)
             {
                 var tag = StationTag(item);
                 <a href="@item.Href" class="@RailClass(item)">
                     <span class="ops-rail__glyph" aria-hidden="true">@item.Glyph</span>
-                    <span>@item.Label</span>
+                    <span class="i18n-both">@L(item.Label)</span>
                     <span class="ops-rail__spacer"></span>
                     <span class="@(tag.EndsWith('!') ? "ops-rail__tag ops-rail__tag--hot" : "ops-rail__tag")">@tag</span>
                 </a>
@@ -67,9 +74,9 @@
             <div class="ops-rail__flex"></div>
 
             <div class="ops-master">
-                <div class="ops-master__label">MASTER SWITCH</div>
-                <button class="@MasterBtnClass" @onclick="ToggleDefender">@MasterText</button>
-                <div class="ops-master__help">@MasterHelp</div>
+                <div class="ops-master__label">@L("MASTER SWITCH")</div>
+                <button class="@MasterBtnClass" @onclick="ToggleDefender">@L(MasterText)</button>
+                <div class="ops-master__help i18n-both">@L(MasterHelp)</div>
             </div>
         </nav>
 
@@ -99,7 +106,7 @@
 
             <div class="ops-page-head">
                 <span class="ops-page-head__caret" aria-hidden="true">▸</span>
-                <h1>@PageTitle</h1>
+                <h1 class="i18n-both">@L(PageTitle)</h1>
                 <span class="ops-page-head__code">@PageCode</span>
             </div>
 
@@ -113,7 +120,7 @@
         {
             <a href="@item.Href" class="@MobileClass(item)">
                 <div class="ops-mobile-nav__glyph" aria-hidden="true">@item.Glyph</div>
-                <div class="ops-mobile-nav__label">@item.Label</div>
+                <div class="ops-mobile-nav__label">@(_langMode == Lang.Cantonese ? L(item.Label) : item.Label)</div>
             </a>
         }
     </nav>
@@ -148,6 +155,7 @@
         </div>
     }
 </div>
+</CascadingValue>
 
 @code {
     private bool _isDarkMode = true;
@@ -155,6 +163,27 @@
     private System.Threading.Timer? _clock;
     private int _bootStep;
     private bool _bootStarted;
+    private string _langMode = Lang.English;
+
+    // ---------- language (EN / 粵 / EN+粵) ----------
+
+    private string L(string? english) => Lang.T(_langMode, english);
+
+    private string LangBtnClass(string mode) =>
+        _langMode == mode ? "ops-lang__btn ops-lang__btn--active" : "ops-lang__btn";
+
+    private async Task SetLangMode(string mode)
+    {
+        _langMode = Lang.NormalizeMode(mode);
+        StateHasChanged();
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", "ac-defender-lang", _langMode);
+        }
+        catch
+        {
+        }
+    }
 
     private const int BootDoneStep = 14;
 
@@ -424,6 +453,14 @@
             {
                 _isDarkMode = string.Equals(savedTheme, "dark", StringComparison.OrdinalIgnoreCase);
             }
+
+            var savedLang = await JS.InvokeAsync<string?>("localStorage.getItem", "ac-defender-lang");
+            if (!string.IsNullOrWhiteSpace(savedLang))
+            {
+                _langMode = Lang.NormalizeMode(savedLang);
+            }
+
+            StateHasChanged();
         }
         catch
         {

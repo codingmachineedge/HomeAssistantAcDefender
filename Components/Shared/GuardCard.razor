@@ -4,11 +4,11 @@
         <div class="guard-card__title">
             <span class="@($"guard-avatar guard-avatar--{Tone.Css()}")" aria-hidden="true">@Initials</span>
             <div class="guard-card__id">
-                <MudText Typo="Typo.subtitle1">@Info.Name</MudText>
+                <MudText Typo="Typo.subtitle1" Class="i18n-both">@L(Info.Name)</MudText>
                 <span class="guard-card__rank">@RankText</span>
             </div>
         </div>
-        <span class="@($"guard-badge guard-badge--{Tone.Css()}")">@view.StateLabel</span>
+        <span class="@($"guard-badge guard-badge--{Tone.Css()}")">@LInline(view.StateLabel)</span>
     </div>
 
     <MudText Typo="Typo.body2" Class="guard-card__status">@view.StatusText</MudText>
@@ -18,9 +18,9 @@
         <div class="guard-card__metrics">
             @foreach (var metric in view.Metrics)
             {
-                <MudTooltip Text="@metric.Help" Disabled="@string.IsNullOrWhiteSpace(metric.Help)">
+                <MudTooltip Text="@LInline(metric.Help)" Disabled="@string.IsNullOrWhiteSpace(metric.Help)">
                     <div class="guard-metric">
-                        <span class="guard-metric__label">@metric.Label</span>
+                        <span class="guard-metric__label i18n-both">@L(metric.Label)</span>
                         <span class="guard-metric__value">@metric.Value</span>
                     </div>
                 </MudTooltip>
@@ -34,7 +34,7 @@
                    Size="Size.Small"
                    OnClick="@(() => _open = !_open)"
                    EndIcon="@(_open ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
-            How this works
+            @LInline("How this works")
         </MudButton>
 
         <MudButton Class="guard-card__more"
@@ -44,19 +44,19 @@
                    OnClick="@(() => _detailOpen = !_detailOpen)"
                    StartIcon="@Icons.Material.Filled.FactCheck"
                    EndIcon="@(_detailOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
-            More extra-specific info
+            @LInline("More extra-specific info")
         </MudButton>
     </div>
 
     <MudCollapse Expanded="_open">
         <div class="guard-help">
-            <p class="guard-help__summary">@Info.Summary</p>
-            <p><span class="guard-help__tag">Watches</span> @Info.Watches</p>
-            <p><span class="guard-help__tag">Logic</span> @Info.Logic</p>
-            <p><span class="guard-help__tag">Does</span> @Info.Output</p>
+            <p class="guard-help__summary i18n-both">@L(Info.Summary)</p>
+            <p class="i18n-both"><span class="guard-help__tag">@LInline("Watches")</span> @L(Info.Watches)</p>
+            <p class="i18n-both"><span class="guard-help__tag">@LInline("Logic")</span> @L(Info.Logic)</p>
+            <p class="i18n-both"><span class="guard-help__tag">@LInline("Does")</span> @L(Info.Output)</p>
             @if (Info.Settings.Count > 0)
             {
-                <p class="helper-text"><span class="guard-help__tag">Settings</span> @string.Join(", ", Info.Settings)</p>
+                <p class="helper-text"><span class="guard-help__tag">@LInline("Settings")</span> @string.Join(", ", Info.Settings)</p>
             }
         </div>
     </MudCollapse>
@@ -188,9 +188,15 @@
 @code {
     [Parameter, EditorRequired] public GuardInfo Info { get; set; } = default!;
     [Parameter, EditorRequired] public DefenderSnapshot Snapshot { get; set; } = default!;
+    [CascadingParameter(Name = "LangMode")] public string? LangMode { get; set; }
 
     private bool _open;
     private bool _detailOpen;
+
+    // Static catalog text is translated; the composed live-evidence narratives below stay
+    // English (they interpolate live server data, which is data — not chrome).
+    private string L(string? english) => Lang.T(LangMode, english);
+    private string LInline(string? english) => Lang.TInline(LangMode, english);
 
     private string Initials => string.Concat(
         Info.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => char.ToUpperInvariant(w[0])));

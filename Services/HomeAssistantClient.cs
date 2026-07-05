@@ -86,6 +86,86 @@ public sealed class HomeAssistantClient
         return await TryGetWeatherStateAsync(entityId, cancellationToken);
     }
 
+    /// <summary>
+    /// Fetches the hourly forecast (daily fallback) for a weather entity via the
+    /// weather.get_forecasts service. Returns null on any failure — the store schedules a
+    /// retry; a broken forecast must never break the five-second cycle.
+    /// </summary>
+    public async Task<WeatherForecastReading?> GetWeatherForecastAsync(string entityId, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured || string.IsNullOrWhiteSpace(entityId))
+        {
+            return null;
+        }
+
+        var trimmed = entityId.Trim();
+        var hourly = await TryGetForecastAsync(trimmed, "hourly", cancellationToken);
+        if (hourly is { Entries.Count: > 0 })
+        {
+            return hourly;
+        }
+
+        return await TryGetForecastAsync(trimmed, "daily", cancellationToken);
+    }
+
+    private async Task<WeatherForecastReading?> TryGetForecastAsync(string entityId, string forecastType, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(new Dictionary<string, string>
+            {
+                ["entity_id"] = entityId,
+                ["type"] = forecastType,
+            });
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var response = await SendAsync(HttpMethod.Post, "api/services/weather/get_forecasts?return_response", content, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogWarning("Forecast fetch ({ForecastType}) for {EntityId} returned HTTP {StatusCode}.", forecastType, entityId, (int)response.StatusCode);
+                return null;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (!document.RootElement.TryGetProperty("service_response", out var serviceResponse)
+                || !serviceResponse.TryGetProperty(entityId, out var entityResponse)
+                || !entityResponse.TryGetProperty("forecast", out var forecastElement)
+                || forecastElement.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var entries = new List<ForecastEntry>();
+            foreach (var item in forecastElement.EnumerateArray())
+            {
+                if (!item.TryGetProperty("datetime", out var datetimeElement)
+                    || datetimeElement.ValueKind != JsonValueKind.String
+                    || !DateTimeOffset.TryParse(datetimeElement.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var timestamp))
+                {
+                    continue;
+                }
+
+                double? temperature = item.TryGetProperty("temperature", out var temperatureElement)
+                    && temperatureElement.ValueKind == JsonValueKind.Number
+                        ? temperatureElement.GetDouble()
+                        : null;
+                var condition = item.TryGetProperty("condition", out var conditionElement)
+                    && conditionElement.ValueKind == JsonValueKind.String
+                        ? conditionElement.GetString()
+                        : null;
+
+                entries.Add(new ForecastEntry(timestamp, temperature, condition));
+            }
+
+            return entries.Count > 0 ? new WeatherForecastReading(entityId, forecastType, entries) : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Forecast fetch ({ForecastType}) for {EntityId} failed.", forecastType, entityId);
+            return null;
+        }
+    }
+
     public async Task<IReadOnlyList<TemperatureSensorReading>> GetUpstairsTemperatureSensorsAsync(string configuredEntityIds, CancellationToken cancellationToken)
     {
         if (!IsConfigured)

@@ -216,6 +216,45 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 
 .ops-icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+/* ---------- language switcher (EN / 粵 / EN+粵) ---------- */
+
+.ops-lang {
+    display: flex;
+    border: 1px solid var(--line2);
+    border-radius: 4px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.ops-lang__btn {
+    border: 0;
+    background: transparent;
+    color: var(--sub);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 8px 10px;
+    letter-spacing: 0.06em;
+}
+
+.ops-lang__btn + .ops-lang__btn { border-left: 1px solid var(--line2); }
+
+.ops-lang__btn:hover { color: var(--accent); }
+
+.ops-lang__btn--active {
+    background: var(--accent);
+    color: #07090c;
+    font-weight: 700;
+}
+
+/* Bilingual (EN+粵) text stacks the Cantonese under the English via \n. */
+.i18n-both,
+.helper-text,
+.metric-tile__label,
+.ops-master__help {
+    white-space: pre-line;
+}
+
 /* ---------- 5. Shell body: rail + main ---------- */
 
 .ops-body { display: flex; flex: 1; min-height: 0; }

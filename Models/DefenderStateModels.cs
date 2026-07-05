@@ -67,7 +67,11 @@ public sealed record DefenderSnapshot(
     AcRuntimeSnapshot? AcRuntime = null,
     ElectricityCostSnapshot? ElectricityCost = null,
     ElectricityBudgetSnapshot? ElectricityBudget = null,
-    RivalScheduleSnapshot? RivalSchedule = null);
+    RivalScheduleSnapshot? RivalSchedule = null,
+    ForecastSnapshot? Forecast = null,
+    CoolOutdoorShutdownSnapshot? CoolOutdoorShutdown = null,
+    SiestaSnapshot? Siesta = null,
+    FoodRationsSnapshot? FoodRations = null);
 
 /// <summary>
 /// Live view of Rival Schedule Watch: the AC vendor app's own temperature schedule (the other
@@ -187,6 +191,104 @@ public sealed record WeatherReading(
     string EntityId,
     double? OutdoorTemperatureCelsius,
     string? Condition);
+
+/// <summary>One forecast point from Home Assistant's weather.get_forecasts service.</summary>
+public sealed record ForecastEntry(
+    DateTimeOffset Timestamp,
+    double? TemperatureCelsius,
+    string? Condition);
+
+/// <summary>A full forecast fetch: hourly when the integration supports it, daily otherwise.</summary>
+public sealed record WeatherForecastReading(
+    string EntityId,
+    string ForecastType,
+    IReadOnlyList<ForecastEntry> Entries);
+
+/// <summary>
+/// Reusable forecast projection consumed by the Cool-Outdoor Shutdown gate and the
+/// food-rations hot-window release: the hottest temperature coming up, and when.
+/// </summary>
+public sealed record ForecastProjection(
+    bool Available,
+    bool Stale,
+    DateTimeOffset? UpdatedAt,
+    double? MaxCelsius,
+    DateTimeOffset? PeakAt,
+    double? MaxTodayCelsius,
+    double? MaxTomorrowCelsius);
+
+/// <summary>Live view of the forecast feed for the snapshot stream and UI.</summary>
+public sealed record ForecastSnapshot(
+    bool Available,
+    string EntityId,
+    string ForecastType,
+    int EntryCount,
+    DateTimeOffset? UpdatedAt,
+    double? MaxNextGateHoursCelsius,
+    DateTimeOffset? PeakAt,
+    double? MaxTodayCelsius,
+    double? MaxTomorrowCelsius,
+    string Status);
+
+/// <summary>
+/// Live view of Cool-Outdoor Shutdown: cool outside + forecast staying cool = the AC is turned
+/// fully off once per cool episode, and restored automatically by weather or room comfort.
+/// </summary>
+public sealed record CoolOutdoorShutdownSnapshot(
+    bool Enabled,
+    bool Holding,
+    bool OffSentThisEpisode,
+    bool HumanOverride,
+    double ThresholdCelsius,
+    double RestoreAtCelsius,
+    double? OutdoorCelsius,
+    bool ForecastGateEnabled,
+    bool ForecastGatePassed,
+    double? ForecastMaxCelsius,
+    int OffDwellSecondsRemaining,
+    string Status,
+    DateTimeOffset? Until);
+
+/// <summary>
+/// Live view of the Siesta: the guards nap on command while the AC eases off; the money the AC
+/// would probably have spent is banked as food rations.
+/// </summary>
+public sealed record SiestaSnapshot(
+    bool Enabled,
+    bool Active,
+    string Reason,
+    int SecondsRemaining,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? Until,
+    double FoodEarnedThisSiestaCad,
+    string ThermostatAction,
+    string Status);
+
+/// <summary>
+/// Live view of the Field Kitchen: the pantry of banked ration dollars, today's earnings, the
+/// hot-window releases that pay the AC's bill on hot days, and the reactor-power voucher.
+/// </summary>
+public sealed record FoodRationsSnapshot(
+    bool Enabled,
+    double BalanceCad,
+    double BalanceMaxCad,
+    double EarnedTodayCad,
+    double EarnedLifetimeCad,
+    double SpentLifetimeCad,
+    double ReleasedThisMonthCad,
+    double ReleasedTodayCad,
+    bool HotWindowActive,
+    double? ForecastMaxCelsius,
+    double HotThresholdCelsius,
+    DateTimeOffset? LastReleaseAt,
+    double LastReleaseCad,
+    double DutyCyclePercent,
+    string Status,
+    double RationSizeCad,
+    int RationsAvailable,
+    bool ReactorPowerActive,
+    DateTimeOffset? ReactorPowerUntil,
+    double ReactorHoursLifetime);
 
 public sealed record TemperatureSensorReading(
     string EntityId,
@@ -796,6 +898,13 @@ public sealed record ThermostatChangeAudit(
 
 public sealed class DefenderSettings
 {
+    /// <summary>
+    /// Full shallow copy. All properties are scalars/strings, so this is a complete clone —
+    /// unlike a hand-written member list, a newly added setting can never be forgotten here
+    /// (a missed member used to reset night shutdown and friends to defaults in every snapshot).
+    /// </summary>
+    public DefenderSettings Clone() => (DefenderSettings)MemberwiseClone();
+
     // Off by default: the website debounce blocked normal adjust-then-save flows. Users who want
     // the 120s rest between website thermostat commands can switch it on in Standing Orders.
     public bool WebsiteCommandDebounceEnabled { get; set; }
@@ -818,6 +927,56 @@ public sealed class DefenderSettings
     // Even on warm nights, the AC may cool at most this many minutes inside the night window;
     // then it is eased to a stop once and the rest of the night is observe-only. 0 disables.
     public int NightCoolingBudgetMinutes { get; set; } = 90;
+
+    // Cool-Outdoor Shutdown (Open-Window Armistice): when it is genuinely cool outside — below
+    // the threshold — AND the hourly forecast says it stays cool for the gate hours, the defender
+    // turns the AC fully OFF once per cool episode and restores it by itself when outdoor warms
+    // past threshold+margin (after the minimum off dwell) or immediately when the room crosses
+    // the safety band. A human turning the AC back on mid-episode is respected.
+    public bool CoolOutdoorShutdownEnabled { get; set; }
+
+    public double CoolOutdoorShutdownBelowCelsius { get; set; } = 20.0;
+
+    public double CoolOutdoorRestoreMarginCelsius { get; set; } = 1.5;
+
+    public int CoolOutdoorMinimumOffMinutes { get; set; } = 30;
+
+    public bool CoolOutdoorForecastGateEnabled { get; set; } = true;
+
+    public int CoolOutdoorForecastGateHours { get; set; } = 4;
+
+    // How often the Home Assistant hourly forecast is refreshed (weather.get_forecasts).
+    public int ForecastRefreshMinutes { get; set; } = 30;
+
+    // Siesta (mess hall): the whole guard force naps on command for a chosen duration; the AC is
+    // parked (or turned off) once at the start, and the money it would probably have spent is
+    // banked as food rations. The room crossing the wake band always wakes the guards early.
+    public bool SiestaEnabled { get; set; } = true;
+
+    public string SiestaThermostatAction { get; set; } = "park";
+
+    public double SiestaWakeBandCelsius { get; set; } = 1.0;
+
+    public int SiestaMaxMinutes { get; set; } = 480;
+
+    // Food rations (field kitchen): dollars banked during siestas and cool-outdoor shutdowns,
+    // spent automatically on forecast-hot days so the monthly budget eases exactly when cooling
+    // matters most. The pantry is kept across months, bounded by the cap.
+    public bool FoodRationsEnabled { get; set; } = true;
+
+    public double FoodBalanceMaxCad { get; set; } = 20.0;
+
+    public double FoodReleaseHotThresholdCelsius { get; set; } = 30.0;
+
+    public int FoodReleaseLookaheadHours { get; set; } = 12;
+
+    public double FoodReleaseMaxPerDayCad { get; set; } = 5.0;
+
+    // Reactor power: rations can summon the WinForge Web reactor's AI operator — one ration per
+    // hour. The voucher is exposed read-only at GET /api/reactor-power for WinForge to poll.
+    public bool ReactorPowerEnabled { get; set; } = true;
+
+    public double FoodRationSizeCad { get; set; } = 0.25;
 
     // Peace offering: when someone raises the setpoint from the phone/Home Assistant app, the
     // defender immediately concedes a small extra step UP (their number + step) and stands down
