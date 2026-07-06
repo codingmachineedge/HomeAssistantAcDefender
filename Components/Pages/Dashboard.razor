@@ -161,6 +161,17 @@
         @* ── RIGHT COLUMN ── *@
         <div class="ops-dash-col">
 
+            @* defender master switch — prominent on/off *@
+            <button class="@DefenderSwitchClass" @onclick="ToggleDefender" aria-pressed="@DefenderIsEnabled">
+                <span class="ops-defender-switch__glyph" aria-hidden="true">⏻</span>
+                <span class="ops-defender-switch__body">
+                    <span class="ops-defender-switch__label">DEFENDER</span>
+                    <span class="ops-defender-switch__state">@(DefenderIsEnabled ? "ON DUTY" : "STOOD DOWN")</span>
+                    <span class="ops-defender-switch__hint">@(DefenderIsEnabled ? "Tap to stand the guards down" : "Tap to wake the guard shift")</span>
+                </span>
+                <span class="ops-defender-switch__pill" aria-hidden="true"><span class="ops-defender-switch__knob"></span></span>
+            </button>
+
             @* wall thermostat *@
             <div class="ops-panel ops-panel--pad">
                 <div class="ops-dial-head">
@@ -257,8 +268,8 @@
             </div>
 
             @* defender's last moves *@
-            <div class="ops-panel ops-panel--pad">
-                <div class="ops-panel__label">DEFENDER'S LAST MOVES — THERMOSTAT</div>
+            <div class="ops-panel ops-panel--pad ops-panel--flag">
+                <div class="ops-panel__label">DEFENDER'S LAST MOVES — THERMOSTAT <span class="ops-tag-new">NEW</span></div>
                 @if (RecentDefenderCommands.Count > 0)
                 {
                     <div class="ops-moves">
@@ -274,7 +285,10 @@
                 }
                 else
                 {
-                    <div class="helper-text">No thermostat commands from the defender yet.</div>
+                    <div class="ops-moves-empty">
+                        <span class="ops-moves-empty__glyph" aria-hidden="true">◦</span>
+                        <span>Waiting for the defender's first move. Every setpoint, mode, or fan command it sends lands here — press <strong>STEP TOWARD MY TEMP</strong> or <strong>FORCE COOLING</strong> to log one now.</span>
+                    </div>
                 }
             </div>
 
@@ -282,11 +296,6 @@
             <div class="ops-panel ops-panel--pad">
                 <div class="ops-panel__label">DIRECT ORDERS</div>
                 <div class="ops-orders">
-                    <button class="@DefenderToggleClass" @onclick="ToggleDefender">
-                        <span aria-hidden="true">@(DefenderIsEnabled ? "⏻" : "☾")</span>
-                        <span class="ops-order-btn__label">@(DefenderIsEnabled ? "DEFENDER ON" : "DEFENDER OFF")</span>
-                        <span class="ops-order-btn__hint">@(DefenderIsEnabled ? "tap to stand down" : "tap to wake the crew")</span>
-                    </button>
                     <button class="ops-order-btn" @onclick="RefreshReal">
                         <span aria-hidden="true">⟳</span>
                         <span class="ops-order-btn__label">REFRESH READING</span>
@@ -639,7 +648,7 @@
 
     // ---------- defender on/off ----------
 
-    private string DefenderToggleClass => DefenderIsEnabled ? "ops-order-btn ops-order-btn--solid" : "ops-order-btn";
+    private string DefenderSwitchClass => DefenderIsEnabled ? "ops-defender-switch ops-defender-switch--on" : "ops-defender-switch ops-defender-switch--off";
 
     private async Task ToggleDefender()
     {

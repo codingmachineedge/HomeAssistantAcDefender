@@ -1849,6 +1849,92 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 
 .ops-move__time { margin-left: auto; color: var(--sub); font-size: 10px; }
 
+/* highlighted panel + "NEW" badge + empty state for the last-moves panel */
+.ops-panel--flag { border-left: 3px solid var(--accent); }
+
+.ops-tag-new {
+    display: inline-block;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    padding: 1px 5px;
+    margin-left: 6px;
+    border-radius: 2px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    vertical-align: middle;
+}
+
+.ops-moves-empty {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 12px;
+    background: var(--panel2);
+    border: 1px dashed var(--line2);
+    color: var(--sub);
+    font-size: 11px;
+    line-height: 1.55;
+}
+
+.ops-moves-empty__glyph { color: var(--accent); font-size: 16px; line-height: 1.2; }
+.ops-moves-empty strong { color: var(--ink); font-weight: 800; }
+
+/* prominent defender on/off switch (top of the dashboard right column) */
+.ops-defender-switch {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 14px 16px;
+    text-align: left;
+    cursor: pointer;
+    background: var(--panel);
+    border: 1px solid var(--line2);
+    border-left: 4px solid var(--accent);
+    color: var(--ink);
+    font-family: 'JetBrains Mono', monospace;
+    transition: filter 0.15s ease, border-color 0.15s ease;
+}
+
+.ops-defender-switch:hover { filter: brightness(1.08); }
+.ops-defender-switch--off { border-left-color: var(--sub); }
+
+.ops-defender-switch__glyph { font-size: 26px; line-height: 1; color: var(--accent); }
+.ops-defender-switch--off .ops-defender-switch__glyph { color: var(--sub); }
+
+.ops-defender-switch__body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.ops-defender-switch__label { font-size: 9px; letter-spacing: 0.24em; color: var(--sub); }
+.ops-defender-switch__state { font-size: 20px; font-weight: 800; letter-spacing: 0.03em; }
+.ops-defender-switch--on .ops-defender-switch__state { color: var(--accent); }
+.ops-defender-switch__hint { font-size: 10px; color: var(--sub); }
+
+.ops-defender-switch__pill {
+    position: relative;
+    flex: none;
+    width: 46px;
+    height: 24px;
+    border-radius: 12px;
+    background: var(--line);
+    border: 1px solid var(--line2);
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.ops-defender-switch--on .ops-defender-switch__pill { background: var(--accent); border-color: var(--accent); }
+
+.ops-defender-switch__knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--sub);
+    transition: left 0.15s ease, background 0.15s ease;
+}
+
+.ops-defender-switch--on .ops-defender-switch__knob { left: 24px; background: var(--accent-ink); }
+
 /* ---------- 17. Logs ---------- */
 
 .ops-log-row {
