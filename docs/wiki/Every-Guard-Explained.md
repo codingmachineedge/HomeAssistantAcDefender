@@ -240,7 +240,10 @@ button, the rest wait two minutes.
 
 **Cooling Failure Watch (MEGA → OMEGA).** If the AC *says* it's cooling but the room
 isn't moving — maybe a dead breaker or a broken compressor — sound the MEGA alarm. If the
-room is actually getting *warmer*, that's OMEGA: the loudest alarm there is.
+room is actually getting *warmer*, that's OMEGA: the loudest alarm there is. After about
+half an hour of the AC not really cooling, the robot also switches the unit **off** — no
+point running a broken AC — and leaves it off until the room warms up half a degree, then
+turns cooling back on. If someone turns the AC back on by hand, the robot lets them.
 
 ---
 

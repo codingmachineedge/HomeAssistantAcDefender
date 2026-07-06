@@ -57,6 +57,7 @@ The status snapshot includes:
 - `remoteSettling`: quiet hold status after repeated Home Assistant-side changes, recent remote-change count, trigger count, last source, remaining seconds, and expiry time.
 - `coolingFailure`: mega-alert status, active seconds, alert count, suspected time, next repeat alert time, and status message.
 - `thermostatChanges`: external thermostat touch audit log, including previous/new setpoint, room/outdoor/weather context, source label, Home Assistant context ID, parent ID, user ID, and the raw JSON details shown by the Logs page.
+- `defenderCommands`: the defender's *own* thermostat commands (newest-first), each with timestamp, source guard label, commanded setpoint/mode/fan, and detail. Distinct from `thermostatChanges` (which is external touches); the dashboard's "last moves" panel shows the top 3.
 - `comfort`: upstairs comfort and presence status.
 
 ## Usage
