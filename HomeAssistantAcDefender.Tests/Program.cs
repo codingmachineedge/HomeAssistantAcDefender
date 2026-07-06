@@ -1124,13 +1124,26 @@ internal sealed class DefenderSetPointRegressionTests
         var store = fixture.Store;
         store.SetTarget(23.0);
 
-        // One big angry raise (>= 2.0 C) triggers the auto-apology on its own.
+        // A normal +2 C adjustment — exactly what the defender exists to counter — must NOT be mistaken
+        // for anger. A lone brother-mad now needs a genuinely large slam (>= 4 C).
         store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "idle", null, []));
-        store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 26.5, "cool", "idle", null, []));
-        var snapshot = store.GetSnapshot();
+        store.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 25.0, "cool", "idle", null, []));
+        var mild = store.GetSnapshot();
+        if (mild.Emergency.Active && mild.Emergency.Protocol.Contains("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("A normal +2 C adjustment must NOT trigger the auto brother-mad apology.");
+        }
+
+        // One big angry slam (>= 4.0 C) still triggers the auto-apology on its own.
+        using var fixtureSlam = DefenderStoreFixture.Create();
+        var slamStore = fixtureSlam.Store;
+        slamStore.SetTarget(23.0);
+        slamStore.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "idle", null, []));
+        slamStore.RecordHomeAssistantReading(new ThermostatReading("climate.dining_room", 24.0, 28.0, "cool", "idle", null, []));
+        var snapshot = slamStore.GetSnapshot();
         if (!snapshot.Emergency.Active || !snapshot.Emergency.Protocol.Contains("auto", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("A single big raise must trigger the automatic brother-mad apology.");
+            throw new InvalidOperationException("A single big slam (>= 4 C) must trigger the automatic brother-mad apology.");
         }
 
         if (!snapshot.DefenderEnabled)

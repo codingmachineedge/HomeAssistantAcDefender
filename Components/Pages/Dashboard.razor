@@ -41,6 +41,27 @@
         <span class="ops-alert-row__text">@NextActionText</span>
     </div>
 
+    @* bill watch — brother will yell when this bill lands *@
+    @if (BillWarningActive)
+    {
+        <div class="ops-bill-warn">
+            <div class="ops-bill-warn__head">
+                <span class="ops-bill-warn__glyph" aria-hidden="true">💸</span>
+                <span class="ops-bill-warn__title">BILL WATCH — BROTHER WILL YELL</span>
+                <span class="ops-bill-warn__amount">projected @BillProjectedText</span>
+            </div>
+            <div class="ops-bill-warn__body">
+                The projected power bill is <strong>@BillProjectedText</strong> — past the $@BillThresholdText line. When this lands, brother is going to yell and get mad. Get ahead of it:
+                <ul class="ops-bill-warn__tips">
+                    <li><strong>Break the news first.</strong> Mention the heat wave and time-of-use rates before he opens the bill — surprise is what sets him off.</li>
+                    <li><strong>Lead with the save.</strong> Pull up the Energy page: show the AC runtime, the cost breakdown, and what the guards already trimmed this month.</li>
+                    <li><strong>Tighten the rest of the month now.</strong> Nudge the target up ~1 °C and let the $@BudgetText budget guard ease cooling harder so the projection drops before month-end.</li>
+                    <li><strong>Offer a peace gesture.</strong> Bump the AC up a touch tonight so the next bill trends down and you can say you're already on it.</li>
+                </ul>
+            </div>
+        </div>
+    }
+
     <div class="ops-dash-grid">
 
         @* ── TACTICAL FLOOR ── *@
@@ -347,6 +368,17 @@
     private bool _thermoOpen;
 
     private DefenderSnapshot? Snapshot => State.Snapshot;
+
+    // Bill watch: warn when the projected month-end power bill runs past this line — brother yells
+    // when the real bill lands, so surface it early with prep tips.
+    private const double BillYellThresholdDollars = 180.0;
+    private double? BillProjectedCad => Snapshot?.ElectricityBudget?.ProjectedMonthEndCad;
+    private bool BillWarningActive => BillProjectedCad is { } p && p > BillYellThresholdDollars;
+    private string BillProjectedText => BillProjectedCad is { } p ? $"${p:0.00}" : "--";
+    private string BillThresholdText => BillYellThresholdDollars.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+    private string BudgetText => Snapshot?.ElectricityBudget?.MonthlyBudgetCad is { } b and > 0
+        ? b.ToString("0", System.Globalization.CultureInfo.InvariantCulture)
+        : "100";
 
     private bool DefenderIsEnabled => Snapshot?.DefenderEnabled == true;
     private bool IsAlert => Snapshot?.CoolingFailure.Alerting == true || Snapshot?.CoolingFailure.OmegaAlerting == true

@@ -927,13 +927,13 @@ public sealed class DefenderSettings
     // Night shutdown: during the window (Toronto time) the defender turns the AC OFF and stands
     // down completely, as long as the outdoor temperature is below the threshold. If someone turns
     // the AC back on mid-window the defender respects it (the off command is sent once, on entry).
-    public bool NightShutdownEnabled { get; set; }
+    public bool NightShutdownEnabled { get; set; } = true;
 
     public string NightShutdownStartTime { get; set; } = "01:00";
 
     public string NightShutdownEndTime { get; set; } = "08:00";
 
-    public double NightShutdownOutdoorBelowCelsius { get; set; } = 24.0;
+    public double NightShutdownOutdoorBelowCelsius { get; set; } = 23.0;
 
     // During the night window (same hours as the shutdown), the defender never commands a
     // setpoint below this — cheap nights beat cold nights. 0 disables the night floor.
@@ -1009,9 +1009,13 @@ public sealed class DefenderSettings
 
     public int AutoBrotherMadTouches { get; set; } = 3;
 
-    public int AutoBrotherMadWindowMinutes { get; set; } = 10;
+    // Widened so the burst (real-anger) signal catches repeated insistence over a longer stretch.
+    public int AutoBrotherMadWindowMinutes { get; set; } = 15;
 
-    public double AutoBrotherMadBigRaiseCelsius { get; set; } = 2.0;
+    // A SINGLE raise only reads as anger past this jump. A normal +2 C (even +3 C) adjustment is the
+    // ordinary thing the defender exists to counter, not an apology trigger — so a lone brother-mad
+    // needs a genuinely large slam (>= 4 C). Repeated smaller raises still fire via the burst window.
+    public double AutoBrotherMadBigRaiseCelsius { get; set; } = 4.0;
 
     // Stand-down parking: when the defender is turned OFF, park the thermostat at this setpoint
     // (raise only, cool mode only) so the unguarded AC barely runs instead of cooling hard.
@@ -1534,17 +1538,17 @@ public sealed class DefenderSettings
     // ---- Budget-preferring control (editable from the Settings page; seeded from DefenderOptions
     // the first time this settings object is created so existing appsettings values carry over). ----
 
-    /// <summary>Master switch for budget-preferring cooling. Off by default.</summary>
-    public bool ElectricityBudgetEnabled { get; set; }
+    /// <summary>Master switch for budget-preferring cooling. On by default (seeded from DefenderOptions).</summary>
+    public bool ElectricityBudgetEnabled { get; set; } = true;
 
     /// <summary>Preferred monthly spend, interpreted against <see cref="ElectricityBudgetBasis"/>.</summary>
-    public double ElectricityMonthlyBudgetDollars { get; set; } = 150.0;
+    public double ElectricityMonthlyBudgetDollars { get; set; } = 100.0;
 
     /// <summary>0 = no biasing, 1 = full biasing up to the max offset.</summary>
-    public double ElectricityBudgetAggressiveness { get; set; } = 0.5;
+    public double ElectricityBudgetAggressiveness { get; set; } = 0.7;
 
     /// <summary>Cap on how much warmer the room may be allowed to run to stay on budget.</summary>
-    public double ElectricityBudgetMaxSetpointOffsetCelsius { get; set; } = 1.5;
+    public double ElectricityBudgetMaxSetpointOffsetCelsius { get; set; } = 2.0;
 
     /// <summary>Hard guardrail: at/above this room temperature the budget offset is dropped so heat is cooled.</summary>
     public double ElectricityBudgetSafetyMaxCelsius { get; set; } = 26.0;

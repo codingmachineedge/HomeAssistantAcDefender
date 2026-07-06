@@ -101,14 +101,14 @@ public sealed class DefenderOptions
     /// <see cref="ElectricityBudgetSafetyMaxCelsius"/> (at or above that room temperature the budget
     /// offset is dropped so dangerous heat is always cooled).
     /// </summary>
-    public bool ElectricityBudgetEnabled { get; set; } = false;
+    public bool ElectricityBudgetEnabled { get; set; } = true;
 
-    public double ElectricityMonthlyBudgetDollars { get; set; } = 150.0;
+    public double ElectricityMonthlyBudgetDollars { get; set; } = 100.0;
 
     // 0 = no biasing, 1 = full biasing up to the max offset.
-    public double ElectricityBudgetAggressiveness { get; set; } = 0.5;
+    public double ElectricityBudgetAggressiveness { get; set; } = 0.7;
 
-    public double ElectricityBudgetMaxSetpointOffsetCelsius { get; set; } = 1.5;
+    public double ElectricityBudgetMaxSetpointOffsetCelsius { get; set; } = 2.0;
 
     public double ElectricityBudgetSafetyMaxCelsius { get; set; } = 26.0;
 
