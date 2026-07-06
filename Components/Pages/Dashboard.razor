@@ -256,10 +256,37 @@
                 <div class="helper-text" style="margin-top: 8px;">Real compressor time (hvac_action = cooling)@(Snapshot?.AcRuntime?.TrackingSince is { } since ? $", counted since {Format.ToToronto(since):yyyy-MM-dd}" : "").@(Snapshot?.AcRuntime?.EstimatedCostEnabled == true ? $" Cost estimated at {Snapshot?.AcRuntime?.AssumedKilowatts:0.0} kW assumed AC load × the Alectra time-of-use rate at each moment — no Alectra sensor needed." : "")</div>
             </div>
 
+            @* defender's last moves *@
+            <div class="ops-panel ops-panel--pad">
+                <div class="ops-panel__label">DEFENDER'S LAST MOVES — THERMOSTAT</div>
+                @if (RecentDefenderCommands.Count > 0)
+                {
+                    <div class="ops-moves">
+                        @foreach (var move in RecentDefenderCommands)
+                        {
+                            <div class="ops-move" title="@move.Detail">
+                                <span class="ops-move__change">@CommandDescription(move)</span>
+                                <span class="ops-move__source">@move.SourceLabel</span>
+                                <span class="ops-move__time">@Format.ShortTime(move.Timestamp)</span>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="helper-text">No thermostat commands from the defender yet.</div>
+                }
+            </div>
+
             @* direct orders *@
             <div class="ops-panel ops-panel--pad">
                 <div class="ops-panel__label">DIRECT ORDERS</div>
                 <div class="ops-orders">
+                    <button class="@DefenderToggleClass" @onclick="ToggleDefender">
+                        <span aria-hidden="true">@(DefenderIsEnabled ? "⏻" : "☾")</span>
+                        <span class="ops-order-btn__label">@(DefenderIsEnabled ? "DEFENDER ON" : "DEFENDER OFF")</span>
+                        <span class="ops-order-btn__hint">@(DefenderIsEnabled ? "tap to stand down" : "tap to wake the crew")</span>
+                    </button>
                     <button class="ops-order-btn" @onclick="RefreshReal">
                         <span aria-hidden="true">⟳</span>
                         <span class="ops-order-btn__label">REFRESH READING</span>
@@ -608,6 +635,67 @@
         await Task.Delay(9000);
         _apologyVisible = false;
         await InvokeAsync(StateHasChanged);
+    }
+
+    // ---------- defender on/off ----------
+
+    private string DefenderToggleClass => DefenderIsEnabled ? "ops-order-btn ops-order-btn--solid" : "ops-order-btn";
+
+    private async Task ToggleDefender()
+    {
+        var enable = !DefenderIsEnabled;
+        if (!TryBeginWebsiteCommand(enable ? "turn defender on" : "pause defender", bypassDebounce: true))
+        {
+            return;
+        }
+
+        StateStore.SetDefenderEnabled(enable);
+        State.Refresh();
+        Snackbar.Add(enable ? "Defender turned on." : "Defender paused.", Severity.Info);
+
+        if (enable)
+        {
+            return;
+        }
+
+        // Paused: park the unguarded unit at the stand-down setpoint so it barely runs (same as the
+        // header master switch). A Home Assistant hiccup here must not throw out of the click handler.
+        try
+        {
+            if (await Defender.ParkThermostatForStandDownAsync(CancellationToken.None) is { } parked)
+            {
+                State.Refresh();
+                Snackbar.Add(parked, Severity.Info);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Warning);
+        }
+    }
+
+    // ---------- defender's last moves ----------
+
+    private IReadOnlyList<DefenderCommandLogEntry> RecentDefenderCommands =>
+        (Snapshot?.DefenderCommands ?? Array.Empty<DefenderCommandLogEntry>()).Take(3).ToArray();
+
+    private static string CommandDescription(DefenderCommandLogEntry move)
+    {
+        var parts = new List<string>();
+        if (move.SetPointCelsius is { } sp)
+        {
+            parts.Add($"{sp:0.0}°C");
+        }
+        if (!string.IsNullOrWhiteSpace(move.HvacMode))
+        {
+            parts.Add(move.HvacMode.ToUpperInvariant());
+        }
+        if (!string.IsNullOrWhiteSpace(move.FanMode))
+        {
+            parts.Add($"FAN {move.FanMode.ToUpperInvariant()}");
+        }
+
+        return parts.Count > 0 ? string.Join(" · ", parts) : "COMMAND";
     }
 
     private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat", bypassDebounce: true);

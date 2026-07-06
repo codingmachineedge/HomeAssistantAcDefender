@@ -173,6 +173,36 @@ public sealed class AcDefenderService
                 return;
             }
 
+            // Cooling-Failure Shutdown: while a MEGA/OMEGA cooling-failure alert is up, turn the AC
+            // fully off (a failing unit is not cooling anyway) and hold it off until the room warms by
+            // the release margin (0.5 C), then restore cool. Runs before the enforcer and cool-mode
+            // restore so nothing turns the unit back on while the hold is deliberate.
+            if (stateStore.TryRespectCoolingFailureShutdown(reading, DateTimeOffset.UtcNow, out var coolFailUntil, out var coolFailMessage, out var coolFailOff, out var coolFailRestore, out var coolFailSetPoint))
+            {
+                if (coolFailOff)
+                {
+                    await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "off", cancellationToken);
+                }
+
+                stateStore.SetNextAction(coolFailMessage, coolFailUntil);
+                return;
+            }
+            else if (coolFailRestore)
+            {
+                if (coolFailSetPoint is { } restoreTo)
+                {
+                    await homeAssistantClient.SetCoolingAsync(reading.EntityId, restoreTo, cancellationToken);
+                }
+                else
+                {
+                    await homeAssistantClient.SetHvacModeAsync(reading.EntityId, "cool", cancellationToken);
+                }
+
+                stateStore.RecordCoolModeRestoreCommand(reading.HvacMode);
+                stateStore.SetNextAction(coolFailMessage, coolFailUntil);
+                return;
+            }
+
             // Desired-State Enforcer: the assertive layer that makes the owner's chosen state win. When it
             // acts (or holds), it short-circuits the cycle; when Inactive it falls through to the stealth
             // pipeline unchanged.

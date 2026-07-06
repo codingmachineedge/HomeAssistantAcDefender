@@ -10,8 +10,8 @@ public sealed class DefenderStateStore
 {
     private const int WebsiteCommandDebounceSeconds = 120;
     // A normal AC rests its compressor for several minutes between cycles (anti-short-cycle / minimum
-    // off-time), so 10 min of "not cooling" must pass before the mega alert can even arm.
-    private const int CoolingFailureIdleSeconds = 600;
+    // off-time), so 30 min of "not cooling" must pass before the mega alert can even arm.
+    private const int CoolingFailureIdleSeconds = 1800;
     private const int CoolingFailureNoDropSeconds = 1200;
     private const int CoolingFailureRepeatAlertSeconds = 60;
     // Cooling "demand" for failure detection is measured against BOTH the wall setpoint AND the user's
@@ -31,6 +31,12 @@ public sealed class DefenderStateStore
     // tends to hold the room steady, so requiring a real rise sharply cuts false positives.
     private const int OmegaRiseWindowSeconds = 300;
     private const double OmegaMinimumRiseCelsius = 0.4;
+
+    // When a MEGA/OMEGA cooling-failure alert fires, the defender turns the AC fully off (a unit that
+    // is not really cooling is only wasting power) and holds it off until the real room temperature
+    // climbs this far above the reading captured at shutdown, then restores cool. A human turning the
+    // AC back on is always respected.
+    private const double CoolingFailureShutdownReleaseRiseCelsius = 0.5;
 
     private readonly object gate = new();
     private readonly LearningTrainer learningTrainer = new();
@@ -8530,6 +8536,144 @@ public sealed class DefenderStateStore
         }
     }
 
+    /// <summary>
+    /// Cooling-Failure Shutdown: while a MEGA/OMEGA cooling-failure alert is up, turn the AC fully off
+    /// (a failing unit is not cooling anyway) and hold it off until the real room temperature rises
+    /// <see cref="CoolingFailureShutdownReleaseRiseCelsius"/> above the reading captured at shutdown,
+    /// then restore cool. The hold latches on its own state, so it survives the mega alert clearing the
+    /// moment the mode reads "off" (an off unit is no longer "cooling demanded"). Mirrors the
+    /// out-parameter shape of <see cref="TryBeginCoolOutdoorShutdown"/>: returns true to hold the cycle
+    /// (AC off), returns false with <paramref name="restoreCool"/> to restore, false otherwise.
+    /// </summary>
+    public bool TryRespectCoolingFailureShutdown(
+        ThermostatReading reading,
+        DateTimeOffset now,
+        out DateTimeOffset? until,
+        out string message,
+        out bool turnOff,
+        out bool restoreCool,
+        out double? restoreSetPoint)
+    {
+        lock (gate)
+        {
+            until = null;
+            message = string.Empty;
+            turnOff = false;
+            restoreCool = false;
+            restoreSetPoint = null;
+
+            var nextCheck = now.AddSeconds(Math.Max(15, options.PollIntervalSeconds));
+            var modeOff = string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase);
+
+            if (state.CoolingFailureShutdownActive)
+            {
+                if (state.CoolingFailureShutdownBaselineCelsius is not { } baseline)
+                {
+                    // Defensive: an active shutdown with no baseline can never release. End it cleanly.
+                    ClearCoolingFailureShutdownLocked("Cooling-failure shutdown ended (no baseline).");
+                    SaveState();
+                    return false;
+                }
+
+                // HUMAN OVERRIDE: we sent OFF, the command grace passed, and the mode reads not-off
+                // again — someone turned the AC back on. Respect them and end the shutdown.
+                if (state.CoolingFailureShutdownOffSent
+                    && !modeOff
+                    && state.CoolingFailureShutdownOffCommandedAt is { } commandedAt
+                    && now - commandedAt > TimeSpan.FromSeconds(Math.Max(15, options.CommandGraceSeconds)))
+                {
+                    ClearCoolingFailureShutdownLocked("Someone turned the AC back on — the cooling-failure shutdown stood aside.");
+                    AddEvent("info", "Cooling-failure shutdown: the AC was turned back on by hand; standing aside.");
+                    SaveState();
+                    return false;
+                }
+
+                var rise = Math.Round(reading.CurrentTemperatureCelsius - baseline, 2);
+                if (rise >= CoolingFailureShutdownReleaseRiseCelsius)
+                {
+                    var reason = $"Room rose {rise:0.0} C to {reading.CurrentTemperatureCelsius:0.0} C since the cooling-failure shutdown — restoring cool.";
+                    // Only command a restore for an off WE sent and that is genuinely still off; an
+                    // adopted/human off falls through to the normal pipeline (cool-mode restore).
+                    if (state.CoolingFailureShutdownOffSent && modeOff)
+                    {
+                        // Mode-only restore: the next cycle's normal pipeline computes the setpoint.
+                        restoreCool = true;
+                        RecordPendingThermostatCommand(
+                            commandedSetPointCelsius: null,
+                            commandedHvacMode: "cool",
+                            commandedFanMode: null,
+                            commandSourceKind: "cooling-failure-restore",
+                            commandSourceLabel: "Cooling-Failure Shutdown",
+                            commandSourceDetail: "The room warmed by the release margin after a cooling-failure shutdown; AC Defender restored cool mode.");
+                        state.LastCommand = $"Home Assistant {reading.EntityId} cool mode restored (room rose {rise:0.0} C after cooling-failure shutdown).";
+                        until = nextCheck;
+                        message = reason;
+                    }
+
+                    ClearCoolingFailureShutdownLocked(reason);
+                    AddEvent("info", reason);
+                    SaveState();
+                    return false;
+                }
+
+                // STILL HOLDING: the AC stays off until the room warms the release margin. Do not
+                // re-command off (the entry command already did); just hold the cycle.
+                var remaining = Math.Round(Math.Max(0.0, CoolingFailureShutdownReleaseRiseCelsius - rise), 2);
+                message = $"Cooling-failure shutdown: AC off until the room rises {CoolingFailureShutdownReleaseRiseCelsius:0.0} C from {baseline:0.0} C "
+                    + $"(now {reading.CurrentTemperatureCelsius:0.0} C, {remaining:0.0} C to go). Turning it back on manually is respected.";
+                state.CoolingFailureShutdownStatus = message;
+                until = nextCheck;
+                return true;
+            }
+
+            // ── No active shutdown: open one only while a real MEGA/OMEGA alert is up. ──
+            if (!state.CoolingFailureMegaActive)
+            {
+                return false;
+            }
+
+            state.CoolingFailureShutdownActive = true;
+            state.CoolingFailureShutdownBaselineCelsius = Math.Round(reading.CurrentTemperatureCelsius, 2);
+            state.CoolingFailureShutdownStartedAt = now;
+            state.CoolingFailureShutdownOffSent = false;
+            state.CoolingFailureShutdownOffCommandedAt = null;
+            if (!modeOff)
+            {
+                turnOff = true;
+                state.CoolingFailureShutdownOffSent = true;
+                state.CoolingFailureShutdownOffCommandedAt = now;
+                RecordPendingThermostatCommand(
+                    commandedSetPointCelsius: null,
+                    commandedHvacMode: "off",
+                    commandedFanMode: null,
+                    commandSourceKind: "cooling-failure-shutdown",
+                    commandSourceLabel: "Cooling-Failure Shutdown",
+                    commandSourceDetail: "A cooling-failure MEGA/OMEGA alert fired; AC Defender turned the AC off until the room warms by the release margin.");
+                state.LastCommand = $"Home Assistant {reading.EntityId} thermostat turned off (cooling-failure shutdown at {reading.CurrentTemperatureCelsius:0.0} C).";
+            }
+
+            until = nextCheck;
+            message = $"Cooling-failure shutdown: MEGA/OMEGA alert active — AC off until the room rises "
+                + $"{CoolingFailureShutdownReleaseRiseCelsius:0.0} C from {state.CoolingFailureShutdownBaselineCelsius:0.0} C.";
+            state.CoolingFailureShutdownStatus = message;
+            AddEvent("warning", $"Cooling-failure shutdown: turned the AC off (room {reading.CurrentTemperatureCelsius:0.0} C); holding until it rises {CoolingFailureShutdownReleaseRiseCelsius:0.0} C.");
+            state.UpdatedAt = now;
+            SaveState();
+            return true;
+        }
+    }
+
+    /// <summary>Ends the cooling-failure shutdown hold (does not SaveState — callers do).</summary>
+    private void ClearCoolingFailureShutdownLocked(string reason)
+    {
+        state.CoolingFailureShutdownActive = false;
+        state.CoolingFailureShutdownBaselineCelsius = null;
+        state.CoolingFailureShutdownStartedAt = null;
+        state.CoolingFailureShutdownOffSent = false;
+        state.CoolingFailureShutdownOffCommandedAt = null;
+        state.CoolingFailureShutdownStatus = reason;
+    }
+
     private static bool IsCoolingAction(string? hvacAction)
     {
         return (hvacAction ?? string.Empty).Trim().ToLowerInvariant() is "cooling" or "cool";
@@ -9722,6 +9866,7 @@ public sealed class DefenderStateStore
         saved.Schedule ??= [];
         saved.Events ??= [];
         saved.ThermostatChanges ??= [];
+        saved.DefenderCommandLog ??= [];
         saved.ExternalTouchTimes ??= [];
         saved.UpstairsSensors ??= [];
         saved.Presence ??= [];
@@ -10840,7 +10985,8 @@ public sealed class DefenderStateStore
             CreateForecastSnapshot(now),
             CreateCoolOutdoorShutdownSnapshot(now),
             CreateSiestaSnapshot(now),
-            CreateFoodRationsSnapshot(now));
+            CreateFoodRationsSnapshot(now),
+            state.DefenderCommandLog.ToArray());
     }
 
     private CoolOutdoorShutdownSnapshot CreateCoolOutdoorShutdownSnapshot(DateTimeOffset now)
@@ -11207,6 +11353,20 @@ public sealed class DefenderStateStore
             state.SetpointEchoStatus = string.IsNullOrWhiteSpace(expected)
                 ? "Thermostat command echo is waiting for Home Assistant."
                 : $"Thermostat command echo is waiting for Home Assistant to report {expected} from {state.PendingCommandSourceLabel}.";
+        }
+
+        // Defender command log: one newest-first entry per command the defender issued, for the
+        // dashboard's "last moves" panel. Uses the normalized pending fields set just above.
+        state.DefenderCommandLog.Insert(0, new DefenderCommandLogEntry(
+            now,
+            state.PendingCommandSourceLabel ?? "AC Defender",
+            state.PendingCommandSetPointCelsius,
+            state.PendingCommandHvacMode,
+            state.PendingCommandFanMode,
+            state.PendingCommandSourceDetail ?? string.Empty));
+        if (state.DefenderCommandLog.Count > 50)
+        {
+            state.DefenderCommandLog.RemoveRange(50, state.DefenderCommandLog.Count - 50);
         }
     }
 
@@ -12123,6 +12283,21 @@ public sealed class DefenderStateStore
 
         public double? OmegaRoomRiseCelsius { get; set; }
 
+        // Cooling-Failure Shutdown: latched hold that turns the AC off while a MEGA/OMEGA alert is up
+        // and keeps it off until the room warms CoolingFailureShutdownReleaseRiseCelsius above the
+        // baseline captured at shutdown. Persisted so the hold survives a restart.
+        public bool CoolingFailureShutdownActive { get; set; }
+
+        public double? CoolingFailureShutdownBaselineCelsius { get; set; }
+
+        public DateTimeOffset? CoolingFailureShutdownStartedAt { get; set; }
+
+        public bool CoolingFailureShutdownOffSent { get; set; }
+
+        public DateTimeOffset? CoolingFailureShutdownOffCommandedAt { get; set; }
+
+        public string CoolingFailureShutdownStatus { get; set; } = "Cooling-failure shutdown is watching.";
+
         public DateTimeOffset? RoomTrendHoldUntil { get; set; }
 
         public string RoomTrendStatus { get; set; } = "Room trend guard is watching.";
@@ -12232,6 +12407,11 @@ public sealed class DefenderStateStore
         public List<ScheduleEntry> Schedule { get; set; } = [];
 
         public List<ThermostatChangeAudit> ThermostatChanges { get; set; } = [];
+
+        // The defender's OWN thermostat commands (setpoint/mode/fan), newest-first, capped for the UI.
+        // Populated in RecordPendingThermostatCommand (the single choke point every command funnels
+        // through) so it captures every guard, not just the setpoint-only ones.
+        public List<DefenderCommandLogEntry> DefenderCommandLog { get; set; } = [];
 
         public List<DateTimeOffset> ExternalTouchTimes { get; set; } = [];
 

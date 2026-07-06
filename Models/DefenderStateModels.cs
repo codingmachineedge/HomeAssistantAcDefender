@@ -71,7 +71,8 @@ public sealed record DefenderSnapshot(
     ForecastSnapshot? Forecast = null,
     CoolOutdoorShutdownSnapshot? CoolOutdoorShutdown = null,
     SiestaSnapshot? Siesta = null,
-    FoodRationsSnapshot? FoodRations = null);
+    FoodRationsSnapshot? FoodRations = null,
+    IReadOnlyList<DefenderCommandLogEntry>? DefenderCommands = null);
 
 /// <summary>
 /// Live view of Rival Schedule Watch: the AC vendor app's own temperature schedule (the other
@@ -895,6 +896,20 @@ public sealed record ThermostatChangeAudit(
     string? ContextId = null,
     string? ContextParentId = null,
     string? ContextUserId = null);
+
+/// <summary>
+/// One thermostat command the defender itself issued (setpoint, mode, and/or fan), tagged with the
+/// guard that sent it. Distinct from <see cref="ThermostatChangeAudit"/>, which records changes
+/// observed on the wall (human/device/rival) — the defender's own commands are recognized as echoes
+/// and deliberately excluded from that list.
+/// </summary>
+public sealed record DefenderCommandLogEntry(
+    DateTimeOffset Timestamp,
+    string SourceLabel,
+    double? SetPointCelsius,
+    string? HvacMode,
+    string? FanMode,
+    string Detail);
 
 public sealed class DefenderSettings
 {

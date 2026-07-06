@@ -30,6 +30,8 @@ tests.CoolingFailureStaysQuietWhenActionInconclusiveAndRoomNotRising();
 tests.CoolingFailureMegaAndOmegaWhenBreakerOffAndRoomRising();
 tests.CoolingFailureMegaWhenFarAboveTargetEvenIfRoomDrifsDown();
 tests.CoolingFailureMegaWhenCoolingActionButRoomNotDropping();
+tests.CoolingFailureShutdownTurnsAcOffUntilRoomRisesHalfDegree();
+tests.CoolingFailureShutdownRespectsAManualTurnBackOn();
 tests.AngerButtonLearnsUpsetAndRaisesThisHourSensitivity();
 tests.HistoryLearningBuildsHumanComfortProfileAndCadence();
 tests.MachineLearningTrainerLearnsAngerAndComfortPatterns();
@@ -2279,7 +2281,7 @@ internal sealed class DefenderSetPointRegressionTests
             []);
 
         store.RecordHomeAssistantReading(reading);
-        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
         var snapshot = store.RecordHomeAssistantReading(reading);
         if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
         {
@@ -2303,7 +2305,7 @@ internal sealed class DefenderSetPointRegressionTests
             var store = fixture.Store;
             store.SetTarget(22.0);
             SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 23.4);
-            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
 
             var snapshot = store.RecordHomeAssistantReading(idleWarm);
             if (!snapshot.CoolingFailure.Alerting)
@@ -2324,7 +2326,7 @@ internal sealed class DefenderSetPointRegressionTests
             var store = fixture.Store;
             store.SetTarget(22.0);
             SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 24.0);
-            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
 
             var snapshot = store.RecordHomeAssistantReading(idleWarm);
             if (!snapshot.CoolingFailure.Alerting)
@@ -2352,7 +2354,7 @@ internal sealed class DefenderSetPointRegressionTests
         // current-setPoint = 1.3 (old demand TRUE) but current-target = 0.3 < 0.6 (new demand FALSE).
         var reading = new ThermostatReading("climate.dining_room", 22.3, 21.0, "cool", "idle", null, []);
         store.RecordHomeAssistantReading(reading);
-        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
         var snapshot = store.RecordHomeAssistantReading(reading);
 
         if (snapshot.CoolingFailure.Alerting || snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
@@ -2371,7 +2373,7 @@ internal sealed class DefenderSetPointRegressionTests
         SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 24.0);
 
         var reading = new ThermostatReading("climate.dining_room", 23.0, 22.0, "cool", "idle", null, []);
-        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
         var snapshot = store.RecordHomeAssistantReading(reading); // rise = 23.0-24.0 = -1.0 (improving), 23.0 < 22+2.0
 
         if (snapshot.CoolingFailure.Alerting)
@@ -2390,7 +2392,7 @@ internal sealed class DefenderSetPointRegressionTests
         SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 23.0);
 
         var reading = new ThermostatReading("climate.dining_room", 23.0, 22.0, "cool", "unknown", null, []);
-        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
         var snapshot = store.RecordHomeAssistantReading(reading); // rise = 0.0, action inconclusive, 23.0 < 24.0
 
         if (snapshot.CoolingFailure.Alerting)
@@ -2408,7 +2410,7 @@ internal sealed class DefenderSetPointRegressionTests
         SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 24.0);
 
         var reading = new ThermostatReading("climate.dining_room", 24.8, 23.8, "cool", "idle", null, []);
-        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
         var snapshot = store.RecordHomeAssistantReading(reading); // rise = +0.8 >= 0.4
 
         if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
@@ -2432,7 +2434,7 @@ internal sealed class DefenderSetPointRegressionTests
         SeedRoomSample(store, DateTimeOffset.UtcNow.AddMinutes(-6), 25.8);
 
         var reading = new ThermostatReading("climate.dining_room", 25.5, 24.5, "cool", "idle", null, []);
-        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-12));
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
         var snapshot = store.RecordHomeAssistantReading(reading); // rise = -0.3 (improving) BUT 25.5 >= 22+2.0
 
         if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
@@ -2460,6 +2462,80 @@ internal sealed class DefenderSetPointRegressionTests
         if (!snapshot.CoolingFailure.Alerting || !snapshot.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Cooling action with no real room drop over 20 min must still mega-alert (frozen coil).");
+        }
+    }
+
+    public void CoolingFailureShutdownTurnsAcOffUntilRoomRisesHalfDegree()
+    {
+        // When the MEGA/OMEGA cooling-failure alert is up, the defender turns the AC off and holds it
+        // off until the real room temperature rises 0.5 C above the reading captured at shutdown, then
+        // restores cool.
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        // Arm an idle cooling-failure MEGA alert (30-min idle threshold).
+        var coolIdle = new ThermostatReading("climate.dining_room", 25.0, 23.0, "cool", "idle", null, []);
+        store.RecordHomeAssistantReading(coolIdle);
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
+        if (!store.RecordHomeAssistantReading(coolIdle).CoolingFailure.Alerting)
+        {
+            throw new InvalidOperationException("Cooling failure should mega-alert before the shutdown can act.");
+        }
+
+        var t0 = DateTimeOffset.UtcNow;
+
+        // Shutdown opens: it turns the AC off and holds, capturing 25.0 C as the release baseline.
+        if (!store.TryRespectCoolingFailureShutdown(coolIdle, t0, out _, out _, out var turnOff, out var restore, out _)
+            || !turnOff || restore)
+        {
+            throw new InvalidOperationException("The cooling-failure shutdown should turn the AC off and hold while the alert is up.");
+        }
+
+        // AC now off; still below baseline + 0.5 -> keep holding, no re-command, no restore. (Mode is
+        // off, so this is not read as a human override even after the command grace has passed.)
+        var offBelow = coolIdle with { HvacMode = "off", HvacAction = "off", CurrentTemperatureCelsius = 25.3 };
+        if (!store.TryRespectCoolingFailureShutdown(offBelow, t0.AddMinutes(5), out _, out _, out var holdOff, out var holdRestore, out _)
+            || holdOff || holdRestore)
+        {
+            throw new InvalidOperationException("Below the 0.5 C release margin the shutdown must keep the AC off without re-commanding or restoring.");
+        }
+
+        // Room reaches baseline + 0.5 (25.5) -> restore cool (returns false with restoreCool set).
+        var offReleased = offBelow with { CurrentTemperatureCelsius = 25.5 };
+        if (store.TryRespectCoolingFailureShutdown(offReleased, t0.AddMinutes(6), out _, out _, out var finalOff, out var finalRestore, out _)
+            || finalOff || !finalRestore)
+        {
+            throw new InvalidOperationException("Once the room rises 0.5 C the shutdown must restore cool (return false with restoreCool=true).");
+        }
+    }
+
+    public void CoolingFailureShutdownRespectsAManualTurnBackOn()
+    {
+        // If a human turns the AC back on during the hold (mode reads not-off after the command grace),
+        // the shutdown stands aside instead of forcing it back off.
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+
+        var coolIdle = new ThermostatReading("climate.dining_room", 25.0, 23.0, "cool", "idle", null, []);
+        store.RecordHomeAssistantReading(coolIdle);
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
+        store.RecordHomeAssistantReading(coolIdle);
+
+        var t0 = DateTimeOffset.UtcNow;
+        if (!store.TryRespectCoolingFailureShutdown(coolIdle, t0, out _, out _, out var turnOff, out _, out _) || !turnOff)
+        {
+            throw new InvalidOperationException("The shutdown should turn the AC off first.");
+        }
+
+        // Human turns it back on: mode reads cool again, well past the command grace, below the release
+        // margin. The guard must release (return false, no restore command) rather than re-command off.
+        var humanBackOn = coolIdle with { CurrentTemperatureCelsius = 25.2 };
+        if (store.TryRespectCoolingFailureShutdown(humanBackOn, t0.AddMinutes(10), out _, out _, out var reOff, out var reRestore, out _)
+            || reOff || reRestore)
+        {
+            throw new InvalidOperationException("A manual turn-back-on during the hold must be respected (guard stands aside, no re-command).");
         }
     }
 
