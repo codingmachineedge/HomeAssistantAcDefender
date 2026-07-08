@@ -172,6 +172,7 @@ public sealed record SettingsRequest(
     int HvacActionAlibiTransitionWindowSeconds,
     int HvacActionAlibiMaxHoldMinutes,
     double HvacActionAlibiSafetyBandCelsius,
+    bool CoolingFailureWatchEnabled,
     bool CoolingRunwayGuardEnabled,
     int CoolingRunwayMinimumSeconds,
     int CoolingRunwayPressureExtraSeconds,

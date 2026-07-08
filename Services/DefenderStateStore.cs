@@ -395,6 +395,12 @@ public sealed class DefenderStateStore
             {
                 ClearHvacActionAlibi("HVAC alibi is off.");
             }
+            state.Settings.CoolingFailureWatchEnabled = request.CoolingFailureWatchEnabled;
+            if (!state.Settings.CoolingFailureWatchEnabled)
+            {
+                ClearCoolingFailure("Cooling failure watch is off.");
+                ClearCoolingFailureShutdownLocked("Cooling-failure shutdown is off.");
+            }
             state.Settings.CoolingRunwayGuardEnabled = request.CoolingRunwayGuardEnabled;
             state.Settings.CoolingRunwayMinimumSeconds = Math.Clamp(request.CoolingRunwayMinimumSeconds, 0, 1800);
             state.Settings.CoolingRunwayPressureExtraSeconds = Math.Clamp(request.CoolingRunwayPressureExtraSeconds, 0, 3600);
@@ -8424,6 +8430,12 @@ public sealed class DefenderStateStore
 
     private void UpdateCoolingFailureDetection(ThermostatReading reading, DateTimeOffset now)
     {
+        if (!state.Settings.CoolingFailureWatchEnabled)
+        {
+            ClearCoolingFailure("Cooling failure watch is off.");
+            return;
+        }
+
         if (!CoolingIsDemanded(reading))
         {
             ClearCoolingFailure("Cooling failure watch is ready.");
@@ -8562,6 +8574,12 @@ public sealed class DefenderStateStore
             turnOff = false;
             restoreCool = false;
             restoreSetPoint = null;
+
+            if (!state.Settings.CoolingFailureWatchEnabled)
+            {
+                ClearCoolingFailureShutdownLocked("Cooling-failure shutdown is off.");
+                return false;
+            }
 
             var nextCheck = now.AddSeconds(Math.Max(15, options.PollIntervalSeconds));
             var modeOff = string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase);
@@ -10927,7 +10945,7 @@ public sealed class DefenderStateStore
                     : state.RemoteSettlingStatus,
                 remoteSettlingSeconds > 0 ? state.RemoteSettlingUntil : null),
             new CoolingFailureSnapshot(
-                true,
+                state.Settings.CoolingFailureWatchEnabled,
                 coolingFailureAlerting,
                 coolingFailureSeconds,
                 state.CoolingFailureAlertCount,

@@ -888,7 +888,7 @@ public static class GuardCatalog
             "Real Home Assistant data only: hvac_mode, hvac_action, the setpoint, and room-temperature history.",
             "MEGA: it alerts if the entity is in cool, the room is clearly above the setpoint, and the action stays idle for about 30 minutes (possible breaker/equipment), or if the action says cooling but the room does not drop over the retained window (possible compressor/airflow). OMEGA: while the idle/breaker mega alert is up, if the room has also risen at least 0.4 C over the last 5 minutes — what a dead breaker looks like — it escalates to a full-site OMEGA alert. Requiring a real, sustained rise (and only on the idle branch) keeps false positives down. Alerts repeat about once a minute.",
             "Surfaces a red alert, an event log entry, and (on OMEGA) a site-wide overlay. It also turns the AC fully off (a failing unit is only wasting power) and holds it off until the real room temperature rises 0.5 C above the reading captured at shutdown, then restores cool. A human turning the AC back on is always respected.",
-            ["(automatic monitoring)"],
+            ["CoolingFailureWatchEnabled"],
             s =>
             {
                 var c = s.CoolingFailure;

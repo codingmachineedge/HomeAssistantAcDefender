@@ -24,6 +24,7 @@ tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
 tests.WebsiteCommandDebounceCanBypassNonThermostatButtons();
 tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
 tests.CoolingFailureExternalAcChangeGetsFreshThirtyMinuteWindow();
+tests.CoolingFailureSettingDisablesAlertAndShutdown();
 tests.OmegaAlertEscalatesOnlyWhenRoomRisesDuringIdleCoolingFailure();
 tests.CoolingFailureStaysQuietWhenRoomIsAtUserTarget();
 tests.CoolingFailureStaysQuietWhileRoomStillCoolingDown();
@@ -2321,8 +2322,9 @@ internal sealed class DefenderSetPointRegressionTests
             22.0,
             "cool",
             "idle",
-            new HomeAssistantStateContext("ctx-before", null, null),
-            []);
+            null,
+            [],
+            Context: new HomeAssistantStateContext("ctx-before", null, null));
 
         store.RecordHomeAssistantReading(original, now.AddMinutes(-31));
         SetRuntimeProperty(store, "CoolingFailureSuspectedAt", now.AddMinutes(-31));
@@ -2353,6 +2355,40 @@ internal sealed class DefenderSetPointRegressionTests
         if (!reactivated.CoolingFailure.Alerting || !reactivated.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Cooling failure should reactivate after the fresh 30-minute window if cooling is still demanded and idle.");
+        }
+    }
+
+    public void CoolingFailureSettingDisablesAlertAndShutdown()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.CoolingFailureWatchEnabled = false;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var reading = new ThermostatReading(
+            "climate.dining_room",
+            24.0,
+            22.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", DateTimeOffset.UtcNow.AddMinutes(-31));
+        SetRuntimeProperty(store, "CoolingFailureMegaActive", true);
+
+        var snapshot = store.RecordHomeAssistantReading(reading);
+        if (snapshot.CoolingFailure.Enabled || snapshot.CoolingFailure.Alerting)
+        {
+            throw new InvalidOperationException("Cooling failure watch setting should disable and clear MEGA/OMEGA alerts.");
+        }
+
+        if (store.TryRespectCoolingFailureShutdown(reading, DateTimeOffset.UtcNow, out _, out _, out var turnOff, out var restoreCool, out _)
+            || turnOff
+            || restoreCool)
+        {
+            throw new InvalidOperationException("Cooling failure shutdown must not act while the cooling failure watch is off.");
         }
     }
 

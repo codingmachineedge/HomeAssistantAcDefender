@@ -1036,6 +1036,8 @@ public sealed class DefenderSettings
     // actually moving (never by a schedule); this only stops command bursts and short-cycling.
     public int CoolingStepMinimumGapSeconds { get; set; } = 60;
 
+    public bool CoolingFailureWatchEnabled { get; set; } = true;
+
     public bool ScheduleEnabled { get; set; }
 
     public string WeatherActivationMode { get; set; } = "always";
