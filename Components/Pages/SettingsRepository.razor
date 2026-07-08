@@ -1,0 +1,219 @@
+@page "/settings/repository"
+@page "/repository"
+@inject DefenderStateStore StateStore
+@inject ISnackbar Snackbar
+
+<PageTitle>Settings Repository - AC Defender</PageTitle>
+
+<MudStack Spacing="3" Class="settings-shell">
+    <SectionCard Title="Settings repository"
+                 Subtitle="Local git history"
+                 Help="Website target, defender switch, schedule, and Settings page values are committed here. Secrets and raw runtime telemetry stay out.">
+        <Actions>
+            <MudChip T="string" Size="Size.Small" Color="@RepoColor" Variant="Variant.Outlined">@RepoStatus</MudChip>
+            <MudButton Variant="Variant.Outlined" Color="Color.Default" OnClick="Refresh" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CommitNow" StartIcon="@Icons.Material.Filled.Save">Commit snapshot</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Warning" Disabled="@(!CanUndo)" OnClick="UndoLast" StartIcon="@Icons.Material.Filled.Undo">Undo last</MudButton>
+        </Actions>
+        <ChildContent>
+            @if (_repo?.Error is { Length: > 0 } error)
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true">@error</MudAlert>
+            }
+            <MudGrid Spacing="2" Class="mt-1">
+                <MetricCard Xs="12" Sm="6" Lg="3" Label="Repository" Value="@RepoInitializedText" Help="@(_repo?.RepositoryPath ?? "--")" />
+                <MetricCard Xs="12" Sm="6" Lg="3" Label="Branch" Value="@BranchText" Help="Current local branch" />
+                <MetricCard Xs="12" Sm="6" Lg="3" Label="Head" Value="@HeadText" Help="Latest settings commit" />
+                <MetricCard Xs="12" Sm="6" Lg="3" Label="Worktree" Value="@WorktreeText" Help="Pending local file state" />
+            </MudGrid>
+        </ChildContent>
+    </SectionCard>
+
+    <MudGrid Spacing="3">
+        <MudItem xs="12" lg="8">
+            <SectionCard Title="History"
+                         Subtitle="@HistorySubtitle"
+                         Help="Each row is a real git commit. Restore creates a new commit from the selected snapshot.">
+                <Actions>
+                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">@FilteredHistory.Count</MudChip>
+                </Actions>
+                <ChildContent>
+                    <MudTextField @bind-Value="_historySearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
+                                  Placeholder="Search commits"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Variant="Variant.Outlined" Class="mb-2" />
+                    <MudStack Spacing="1" Class="scroll-list tall-list">
+                        @if (FilteredHistory.Count > 0)
+                        {
+                            @foreach (var commit in FilteredHistory)
+                            {
+                                <div class="@HistoryRowClass(commit)" @onclick="@(() => SelectCommit(commit))">
+                                    <span class="ops-log-row__change">@commit.ShortHash</span>
+                                    <span class="ops-log-row__source">@CommitTime(commit)</span>
+                                    <span class="ops-log-row__context">@commit.Message</span>
+                                    <span class="ops-log-row__time">
+                                        <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary"
+                                                   Disabled="@(!CanRestore)" OnClick="@(() => Restore(commit))"
+                                                   StartIcon="@Icons.Material.Filled.Restore">Restore</MudButton>
+                                    </span>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <MudText Class="helper-text">No settings commits match.</MudText>
+                        }
+                    </MudStack>
+                </ChildContent>
+            </SectionCard>
+        </MudItem>
+
+        <MudItem xs="12" lg="4">
+            <SectionCard Title="Files"
+                         Subtitle="@FileSubtitle"
+                         Help="Only the app-managed settings snapshot and repository README are staged by AC Defender.">
+                <ChildContent>
+                    @if (_repo?.Files.Count > 0)
+                    {
+                        <MudStack Spacing="1" Class="scroll-list">
+                            @foreach (var file in _repo.Files)
+                            {
+                                <div class="ops-log-row" style="cursor: default;">
+                                    <span class="ops-log-row__change">@file.Code</span>
+                                    <span class="ops-log-row__context">@file.Path</span>
+                                </div>
+                            }
+                        </MudStack>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true">No pending file changes.</MudAlert>
+                    }
+
+                    @if (_selectedCommit is not null)
+                    {
+                        <MudDivider Class="my-3" />
+                        <div class="ops-panel__label">SELECTED COMMIT</div>
+                        <pre class="json-detail">@SelectedCommitText</pre>
+                    }
+                </ChildContent>
+            </SectionCard>
+        </MudItem>
+    </MudGrid>
+</MudStack>
+
+@code {
+    private SettingsRepositoryState? _repo;
+    private SettingsRepositoryCommit? _selectedCommit;
+    private string _historySearch = "";
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+    }
+
+    private void Refresh()
+    {
+        _repo = StateStore.GetSettingsRepositoryState();
+        if (_selectedCommit is not null && _repo.History.All(commit => commit.Hash != _selectedCommit.Hash))
+        {
+            _selectedCommit = null;
+        }
+    }
+
+    private void CommitNow()
+    {
+        ShowResult(StateStore.CommitSettingsRepositorySnapshot("Manual settings repository snapshot"));
+        Refresh();
+    }
+
+    private void UndoLast()
+    {
+        ShowResult(StateStore.UndoLastSettingsRepositoryCommit());
+        Refresh();
+    }
+
+    private void Restore(SettingsRepositoryCommit commit)
+    {
+        ShowResult(StateStore.RestoreSettingsRepositoryCommit(commit.Hash));
+        Refresh();
+    }
+
+    private void ShowResult(SettingsRepositoryActionResult result)
+    {
+        Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Warning);
+    }
+
+    private void SelectCommit(SettingsRepositoryCommit commit)
+    {
+        _selectedCommit = commit;
+    }
+
+    private IReadOnlyList<SettingsRepositoryCommit> FilteredHistory
+    {
+        get
+        {
+            var history = _repo?.History ?? [];
+            if (string.IsNullOrWhiteSpace(_historySearch))
+            {
+                return history;
+            }
+
+            var terms = _historySearch.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            return history
+                .Where(commit => terms.All(term =>
+                    commit.Hash.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || commit.ShortHash.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || commit.Timestamp.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || commit.Message.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+        }
+    }
+
+    private bool CanUndo => _repo is { Available: true, Initialized: true, Clean: true, History.Count: > 1 };
+
+    private bool CanRestore => _repo is { Available: true, Initialized: true, Clean: true };
+
+    private Color RepoColor => _repo switch
+    {
+        null => Color.Default,
+        { Available: false } => Color.Error,
+        { Initialized: false } => Color.Warning,
+        { Clean: false } => Color.Warning,
+        _ => Color.Success
+    };
+
+    private string RepoStatus => _repo?.Status ?? "Loading";
+
+    private string RepoInitializedText => _repo switch
+    {
+        null => "--",
+        { Available: false } => "Unavailable",
+        { Initialized: false } => "Not initialized",
+        _ => "Ready"
+    };
+
+    private string BranchText => string.IsNullOrWhiteSpace(_repo?.Branch) ? "--" : _repo.Branch;
+
+    private string HeadText => string.IsNullOrWhiteSpace(_repo?.Head) ? "--" : _repo.Head;
+
+    private string WorktreeText => _repo is null ? "--" : _repo.Clean ? "Clean" : "Dirty";
+
+    private string HistorySubtitle => _repo?.History.Count is { } count ? $"{count} commits" : "No commits";
+
+    private string FileSubtitle => _repo?.Files.Count is { } count && count > 0 ? $"{count} pending" : "Clean";
+
+    private string SelectedCommitText => _selectedCommit is null
+        ? ""
+        : $"hash: {_selectedCommit.Hash}\nwhen: {_selectedCommit.Timestamp}\nmessage: {_selectedCommit.Message}";
+
+    private string HistoryRowClass(SettingsRepositoryCommit commit) =>
+        _selectedCommit?.Hash == commit.Hash ? "ops-log-row active" : "ops-log-row";
+
+    private static string CommitTime(SettingsRepositoryCommit commit)
+    {
+        return DateTimeOffset.TryParse(commit.Timestamp, out var parsed)
+            ? Format.DateTimeText(parsed)
+            : commit.Timestamp;
+    }
+}

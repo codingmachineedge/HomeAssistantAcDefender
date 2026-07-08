@@ -13,6 +13,7 @@
                  Help="Adjust timing, comfort, and safety. Type to filter controls. Changes apply when you save.">
         <Actions>
             <MudChip T="string" Size="Size.Small" Color="@(_dirty ? Color.Warning : Color.Default)" Variant="Variant.Outlined">@StatusText</MudChip>
+            <MudButton Href="/repository" Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.History">History</MudButton>
             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveSettings" StartIcon="@Icons.Material.Filled.Save">Save</MudButton>
         </Actions>
         <ChildContent>

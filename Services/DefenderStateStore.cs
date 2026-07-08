@@ -42,6 +42,7 @@ public sealed class DefenderStateStore
     private readonly LearningTrainer learningTrainer = new();
     private readonly DefenderOptions options;
     private readonly ILogger<DefenderStateStore> logger;
+    private readonly SettingsGitRepository settingsRepository;
     private readonly string stateFilePath;
     // Append-only, never-capped audit of every thermostat change, one compact JSON object per line,
     // written to the SAME (persisted) directory as the state file. The in-memory ThermostatChanges
@@ -58,16 +59,28 @@ public sealed class DefenderStateStore
     private readonly IReadOnlyList<RivalScheduleBlock> rivalScheduleBlocks;
     private DefenderRuntimeState state;
 
-    public DefenderStateStore(IOptions<DefenderOptions> options, IWebHostEnvironment environment, ILogger<DefenderStateStore> logger)
+    public DefenderStateStore(
+        IOptions<DefenderOptions> options,
+        IWebHostEnvironment environment,
+        ILogger<DefenderStateStore> logger,
+        SettingsGitRepository settingsRepository)
     {
         this.options = options.Value;
         this.logger = logger;
+        this.settingsRepository = settingsRepository;
         rivalScheduleBlocks = RivalScheduleWatch.Parse(this.options.RivalScheduleBlocks);
         stateFilePath = ResolveStatePath(this.options.StateFilePath, environment.ContentRootPath);
         historyFilePath = Path.Combine(Path.GetDirectoryName(stateFilePath) ?? ".", "thermostat-history.jsonl");
-        state = LoadState();
+        state = LoadState(out var loadedFromStateFile);
+        var restoredFromSettingsRepository = !loadedFromStateFile && TryRestoreSettingsFromRepository();
         BackfillHistoryFromStateOnce();
         SeedBudgetSettingsFromOptionsOnce();
+        if (restoredFromSettingsRepository)
+        {
+            SaveState("Restore AC Defender settings from local repository");
+        }
+
+        CommitSettingsSnapshotLocked("Initialize AC Defender settings repository");
     }
 
     // The budget knobs started life in appsettings (DefenderOptions) and moved to the editable
@@ -91,7 +104,7 @@ public sealed class DefenderStateStore
             // Historical default: options-era budgeting paced on the sensor-based all-in line. The
             // stale-sensor fallback below keeps that reliable even when Alectra is down.
             state.Settings.ElectricityBudgetBasis = "all-in";
-            SaveState();
+            SaveState("Seed electricity budget settings");
         }
     }
 
@@ -100,6 +113,48 @@ public sealed class DefenderStateStore
         lock (gate)
         {
             return CreateSnapshot();
+        }
+    }
+
+    public SettingsRepositoryState GetSettingsRepositoryState() => settingsRepository.GetState();
+
+    public SettingsRepositoryActionResult CommitSettingsRepositorySnapshot(string reason)
+    {
+        lock (gate)
+        {
+            return CommitSettingsSnapshotLocked(reason);
+        }
+    }
+
+    public SettingsRepositoryActionResult UndoLastSettingsRepositoryCommit()
+    {
+        lock (gate)
+        {
+            var result = settingsRepository.RevertLastCommit();
+            if (!result.Success || result.Snapshot is null)
+            {
+                return result;
+            }
+
+            ApplySettingsRepositorySnapshotLocked(result.Snapshot, "Undid the latest settings commit.");
+            SaveState("Apply settings undo");
+            return new SettingsRepositoryActionResult(true, "Undid the latest settings commit and applied the reverted settings.", result.Snapshot);
+        }
+    }
+
+    public SettingsRepositoryActionResult RestoreSettingsRepositoryCommit(string hash)
+    {
+        lock (gate)
+        {
+            var result = settingsRepository.RestoreCommit(hash);
+            if (!result.Success || result.Snapshot is null)
+            {
+                return result;
+            }
+
+            ApplySettingsRepositorySnapshotLocked(result.Snapshot, $"Restored settings from commit {hash}.");
+            SaveState("Apply restored settings commit");
+            return new SettingsRepositoryActionResult(true, result.Message, result.Snapshot);
         }
     }
 
@@ -116,7 +171,7 @@ public sealed class DefenderStateStore
             ResetNaturalRecovery("Website generated a target; comfort sync is ready.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", $"Generated target {state.TargetTemperatureCelsius:0.0} C.");
-            SaveState();
+            SaveState("Generate target temperature");
             return CreateSnapshot();
         }
     }
@@ -133,7 +188,7 @@ public sealed class DefenderStateStore
             ResetNaturalRecovery("Website target changed; comfort sync is ready.");
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", $"Target set to {state.TargetTemperatureCelsius:0.0} C.");
-            SaveState();
+            SaveState($"Set target temperature to {state.TargetTemperatureCelsius:0.0} C");
             return CreateSnapshot();
         }
     }
@@ -151,7 +206,7 @@ public sealed class DefenderStateStore
             }
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", enabled ? "Defender enabled." : "Defender paused.");
-            SaveState();
+            SaveState(enabled ? "Enable defender" : "Pause defender");
             return CreateSnapshot();
         }
     }
@@ -838,7 +893,7 @@ public sealed class DefenderStateStore
                 .ToList();
             state.UpdatedAt = DateTimeOffset.UtcNow;
             AddEvent("info", "Settings updated.");
-            SaveState();
+            SaveState("Save Settings page changes");
             return CreateSnapshot();
         }
     }
@@ -9597,8 +9652,9 @@ public sealed class DefenderStateStore
         }
     }
 
-    private DefenderRuntimeState LoadState()
+    private DefenderRuntimeState LoadState(out bool loadedFromStateFile)
     {
+        loadedFromStateFile = false;
         try
         {
             if (File.Exists(stateFilePath))
@@ -9608,6 +9664,7 @@ public sealed class DefenderStateStore
                 {
                     SanitizeLoadedState(saved);
                     saved.TargetTemperatureCelsius = NormalizeTargetTemperature(saved.TargetTemperatureCelsius);
+                    loadedFromStateFile = true;
                     return saved;
                 }
             }
@@ -11591,7 +11648,7 @@ public sealed class DefenderStateStore
         state.ComfortCompromiseStatus = status;
     }
 
-    private void SaveState()
+    private void SaveState(string settingsCommitReason = "Save AC Defender settings")
     {
         try
         {
@@ -11607,11 +11664,57 @@ public sealed class DefenderStateStore
             var tempPath = stateFilePath + ".tmp";
             File.WriteAllText(tempPath, JsonSerializer.Serialize(state, jsonOptions));
             File.Move(tempPath, stateFilePath, overwrite: true);
+
+            var commit = CommitSettingsSnapshotLocked(settingsCommitReason);
+            if (!commit.Success)
+            {
+                logger.LogWarning("Could not commit settings snapshot: {Message}", commit.Message);
+            }
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not save defender state to {StateFilePath}", stateFilePath);
         }
+    }
+
+    private SettingsRepositoryActionResult CommitSettingsSnapshotLocked(string reason)
+    {
+        return settingsRepository.CommitSnapshot(CreateSettingsRepositorySnapshotLocked(), reason);
+    }
+
+    private SettingsRepositorySnapshot CreateSettingsRepositorySnapshotLocked()
+    {
+        return new SettingsRepositorySnapshot
+        {
+            TargetTemperatureCelsius = state.TargetTemperatureCelsius,
+            DefenderEnabled = state.DefenderEnabled,
+            Settings = CloneSettings(state.Settings),
+            Schedule = state.Schedule.Select(CloneScheduleEntry).ToList()
+        };
+    }
+
+    private bool TryRestoreSettingsFromRepository()
+    {
+        var result = settingsRepository.TryReadCurrentSnapshot();
+        if (!result.Success || result.Snapshot is null)
+        {
+            return false;
+        }
+
+        ApplySettingsRepositorySnapshotLocked(result.Snapshot, "Restored settings from the local settings repository.");
+        return true;
+    }
+
+    private void ApplySettingsRepositorySnapshotLocked(SettingsRepositorySnapshot snapshot, string reason)
+    {
+        state.TargetTemperatureCelsius = NormalizeTargetTemperature(snapshot.TargetTemperatureCelsius);
+        state.DefenderEnabled = snapshot.DefenderEnabled;
+        state.Settings = snapshot.Settings?.Clone() ?? new DefenderSettings();
+        state.Schedule = snapshot.Schedule?.Select(NormalizeScheduleEntry).ToList() ?? [];
+        ResetCoolingDefenderStep();
+        ResetNaturalRecovery(reason);
+        state.UpdatedAt = DateTimeOffset.UtcNow;
+        AddEvent("info", reason);
     }
 
     /// <summary>

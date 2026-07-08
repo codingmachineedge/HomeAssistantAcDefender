@@ -12,6 +12,10 @@ using MudBlazor.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddDebug();
+
 if (await CliCommands.TryRunAsync(args, builder.Configuration))
 {
     return;
@@ -20,6 +24,7 @@ if (await CliCommands.TryRunAsync(args, builder.Configuration))
 builder.Services.Configure<HomeAssistantOptions>(builder.Configuration.GetSection(HomeAssistantOptions.SectionName));
 builder.Services.Configure<DefenderOptions>(builder.Configuration.GetSection(DefenderOptions.SectionName));
 builder.Services.Configure<KioskOptions>(builder.Configuration.GetSection(KioskOptions.SectionName));
+builder.Services.AddSingleton<SettingsGitRepository>();
 builder.Services.AddSingleton<DefenderStateStore>();
 builder.Services.AddSingleton<AcDefenderService>();
 builder.Services.AddSingleton<TwoFactorAuth>();

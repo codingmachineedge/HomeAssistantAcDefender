@@ -24,6 +24,10 @@ public sealed class DefenderOptions
 
     public string StateFilePath { get; set; } = "/data/defender-state.json";
 
+    public string SettingsRepositoryPath { get; set; } = "";
+
+    public bool SettingsRepositoryEnabled { get; set; } = true;
+
     public int CommandGraceSeconds { get; set; } = 120;
 
     /// <summary>

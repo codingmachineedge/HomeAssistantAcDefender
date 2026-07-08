@@ -4471,13 +4471,21 @@ internal sealed class DefenderStoreFixture : IDisposable
         this.ownsContentRoot = ownsContentRoot;
         options ??= new DefenderOptions();
         options.StateFilePath = Path.Combine(contentRoot, "state.json");
+        options.SettingsRepositoryPath = Path.Combine(contentRoot, "settings-repo");
+        options.SettingsRepositoryEnabled = false;
         options.MinimumCoolingSetPointCelsius = 16.0;
         options.MaximumBoostOffsetCelsius = 5.0;
         options.TemperatureToleranceCelsius = 0.1;
+        var environment = new TestWebHostEnvironment(contentRoot);
+        var settingsRepository = new SettingsGitRepository(
+            Options.Create(options),
+            environment,
+            NullLogger<SettingsGitRepository>.Instance);
         Store = new DefenderStateStore(
             Options.Create(options),
-            new TestWebHostEnvironment(contentRoot),
-            NullLogger<DefenderStateStore>.Instance);
+            environment,
+            NullLogger<DefenderStateStore>.Instance,
+            settingsRepository);
 
         // Tests drive the walk-down state machine call-by-call, so disable the wall-clock pacing
         // gap by default; the dedicated gentle-stepping test re-enables it explicitly.
@@ -4515,6 +4523,11 @@ internal sealed class DefenderStoreFixture : IDisposable
     {
         if (Directory.Exists(contentRoot))
         {
+            foreach (var path in Directory.EnumerateFileSystemEntries(contentRoot, "*", SearchOption.AllDirectories))
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+            }
+
             Directory.Delete(contentRoot, recursive: true);
         }
     }

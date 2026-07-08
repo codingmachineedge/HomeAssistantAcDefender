@@ -12,6 +12,11 @@ WORKDIR /app
 
 ENV ASPNETCORE_URLS=http://+:8080
 ENV Defender__StateFilePath=/data/defender-state.json
+ENV Defender__SettingsRepositoryPath=/data/settings-repo
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir /data
 VOLUME ["/data"]

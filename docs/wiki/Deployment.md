@@ -27,11 +27,30 @@ http://<host>:8888
 
 ## Runtime State
 
-Runtime state is persisted in the Docker volume `ac-defender-data` at:
+Runtime state is bind-mounted from the deployment host so a no-cache rebuild, a
+Compose project-name change, or a fresh image cannot hide the existing settings
+behind a new empty named volume.
+
+Inside the container:
 
 ```text
 /data/defender-state.json
+/data/thermostat-history.jsonl
+/data/settings-repo
+/app/App_Data
 ```
+
+On the host, those paths come from:
+
+```text
+./App_Data/defender -> /data
+./App_Data/auth     -> /app/App_Data
+```
+
+`/data/settings-repo` is a local git repository managed by the app. It stores
+the website target, defender switch, Settings page values, and schedule history
+only. It does not store Home Assistant tokens, accounts, DataProtection keys,
+`.env`, raw runtime telemetry, or thermostat history.
 
 ## Secrets
 

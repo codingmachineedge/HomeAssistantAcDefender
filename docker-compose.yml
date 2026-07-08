@@ -11,11 +11,8 @@ services:
       ASPNETCORE_URLS: http://+:8080
       TZ: America/Toronto
       Defender__StateFilePath: /data/defender-state.json
+      Defender__SettingsRepositoryPath: /data/settings-repo
       Defender__PollIntervalSeconds: 5
     volumes:
-      - ac-defender-data:/data
-      - ac-defender-authdata:/app/App_Data
-
-volumes:
-  ac-defender-data:
-  ac-defender-authdata:
+      - ./App_Data/defender:/data
+      - ./App_Data/auth:/app/App_Data

@@ -295,12 +295,15 @@
         new("/logs", "≣", "LOGS", "STN-05", true),
         new("/controls", "⌘", "CONTROLS", "STN-06", false),
         new("/settings", "⚙", "ORDERS", "STN-07", true),
-        new("/guide", "✦", "GUIDE", "STN-08", false),
+        new("/repository", "⇄", "REPO", "STN-08", false),
+        new("/guide", "✦", "GUIDE", "STN-09", false),
     ];
 
     private string CurrentPath => new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant() is { Length: > 0 } p ? p : "/";
 
-    private bool IsActive(Station s) => s.Href == "/" ? CurrentPath == "/" : CurrentPath.StartsWith(s.Href, StringComparison.Ordinal);
+    private bool IsActive(Station s) => s.Href == "/"
+        ? CurrentPath == "/"
+        : CurrentPath == s.Href || CurrentPath.StartsWith($"{s.Href}/", StringComparison.Ordinal);
 
     private string RailClass(Station s) => IsActive(s) ? "ops-rail__item active" : "ops-rail__item";
     private string MobileClass(Station s) => IsActive(s) ? "ops-mobile-nav__item active" : "ops-mobile-nav__item";
@@ -322,6 +325,7 @@
         "/logs" => "Field Reports",
         "/controls" => "Direct Controls",
         "/settings" => "Standing Orders",
+        "/repository" or "/settings/repository" => "Settings Repository",
         "/guide" => "Field Manual",
         var other => other.TrimStart('/') is { Length: > 0 } name
             ? char.ToUpperInvariant(name[0]) + name[1..]
@@ -337,7 +341,8 @@
         "/logs" => "STN-05 · ARCHIVE",
         "/controls" => "STN-06 · DIRECT",
         "/settings" => "STN-07 · CONFIG",
-        "/guide" => "STN-08 · MANUAL",
+        "/repository" or "/settings/repository" => "STN-08 · GIT",
+        "/guide" => "STN-09 · MANUAL",
         _ => ""
     };
 
