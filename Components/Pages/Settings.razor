@@ -633,10 +633,16 @@
                     </MudGrid>
                 </MudExpansionPanel>
             }
-            @if (Show("cooling failure mega omega runway hvac action")) {
-                <MudExpansionPanel Text="Cooling runway" Expanded="@IsSettingsSearchActive">
+            @if (Show("cooling failure mega omega alert shutdown breaker compressor")) {
+                <MudExpansionPanel Text="Cooling failure watch" Expanded="@IsSettingsSearchActive">
                     <MudGrid Spacing="2">
                         <SettingSwitch Label="Cooling failure watch" Value="_coolingFailureWatchEnabled" ValueChanged="@(v => SetDirty(v, x => _coolingFailureWatchEnabled = x))" Help="Raise MEGA/OMEGA alerts when cooling is demanded but the AC is not cooling." />
+                    </MudGrid>
+                </MudExpansionPanel>
+            }
+            @if (Show("cooling runway hvac action")) {
+                <MudExpansionPanel Text="Cooling runway" Expanded="@IsSettingsSearchActive">
+                    <MudGrid Spacing="2">
                         <SettingSwitch Label="Cooling runway" Value="_coolingRunwayGuardEnabled" ValueChanged="@(v => SetDirty(v, x => _coolingRunwayGuardEnabled = x))" Help="Give the AC time to work after cooling starts." />
                         <SettingInt Label="Min wait" Unit="s" Value="_coolingRunwayMinimumSeconds" ValueChanged="@(v => SetDirty(v, x => _coolingRunwayMinimumSeconds = x))" Min="0" Max="1800" />
                         <SettingInt Label="Pressure extra" Unit="s" Value="_coolingRunwayPressureExtraSeconds" ValueChanged="@(v => SetDirty(v, x => _coolingRunwayPressureExtraSeconds = x))" Min="0" Max="3600" />
