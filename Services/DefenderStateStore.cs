@@ -6997,6 +6997,7 @@ public sealed class DefenderStateStore
         state.LastChangeContextParentId = reading.Context?.ParentId;
         state.LastChangeContextUserId = reading.Context?.UserId;
         TrackSuperDefenderSource(source, now);
+        ClearCoolingFailure("Cooling failure watch reset after thermostat change.");
 
         // Peace offering: someone RAISED the setpoint (wall, Nest app, or HA app — live logs show
         // household changes arrive as "thermostat-device", so all external raises count). Concede

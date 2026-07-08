@@ -23,6 +23,7 @@ tests.WebsiteCommandDebounceIsOffByDefault();
 tests.WebsiteCommandDebounceBlocksRapidControlsForTwoMinutes();
 tests.WebsiteCommandDebounceCanBypassNonThermostatButtons();
 tests.CoolingFailureAlertsWhenCoolingDemandStaysIdle();
+tests.CoolingFailureExternalAcChangeGetsFreshThirtyMinuteWindow();
 tests.OmegaAlertEscalatesOnlyWhenRoomRisesDuringIdleCoolingFailure();
 tests.CoolingFailureStaysQuietWhenRoomIsAtUserTarget();
 tests.CoolingFailureStaysQuietWhileRoomStillCoolingDown();
@@ -2305,6 +2306,53 @@ internal sealed class DefenderSetPointRegressionTests
         if (snapshot.CoolingFailure.Alerting)
         {
             throw new InvalidOperationException("Cooling failure should clear after Home Assistant reports cooling and room temperature improves.");
+        }
+    }
+
+    public void CoolingFailureExternalAcChangeGetsFreshThirtyMinuteWindow()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var now = DateTimeOffset.UtcNow;
+        var original = new ThermostatReading(
+            "climate.dining_room",
+            24.0,
+            22.0,
+            "cool",
+            "idle",
+            new HomeAssistantStateContext("ctx-before", null, null),
+            []);
+
+        store.RecordHomeAssistantReading(original, now.AddMinutes(-31));
+        SetRuntimeProperty(store, "CoolingFailureSuspectedAt", now.AddMinutes(-31));
+        var alerted = store.RecordHomeAssistantReading(original, now.AddSeconds(-1));
+        if (!alerted.CoolingFailure.Alerting)
+        {
+            throw new InvalidOperationException("Cooling failure should mega-alert before the external AC change.");
+        }
+
+        var changed = original with
+        {
+            SetPointCelsius = 23.0,
+            Context = new HomeAssistantStateContext("ctx-human-change", null, "ha-user")
+        };
+        var afterChange = store.RecordHomeAssistantReading(changed, now);
+        if (afterChange.CoolingFailure.Alerting)
+        {
+            throw new InvalidOperationException("External AC change must clear the stale cooling-failure alert.");
+        }
+
+        var twentyNineMinutes = store.RecordHomeAssistantReading(changed, now.AddMinutes(29));
+        if (twentyNineMinutes.CoolingFailure.Alerting)
+        {
+            throw new InvalidOperationException("Cooling failure must allow a fresh 30-minute cooling window after an AC change.");
+        }
+
+        var reactivated = store.RecordHomeAssistantReading(changed, now.AddMinutes(31));
+        if (!reactivated.CoolingFailure.Alerting || !reactivated.CoolingFailure.Status.Contains("MEGA ALERT", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Cooling failure should reactivate after the fresh 30-minute window if cooling is still demanded and idle.");
         }
     }
 
