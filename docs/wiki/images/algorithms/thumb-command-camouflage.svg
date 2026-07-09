@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450" role="img" aria-labelledby="title desc">
+<title id="title">Command Camouflage thumbnail</title>
+<desc id="desc">Unique generated thumbnail for the Command Camouflage algorithm.</desc>
+<style>.font{font-family:Inter,Segoe UI,Arial,sans-serif}.move{animation:move 4.5s ease-in-out infinite}@keyframes move{0%,100%{transform:translateX(0)}50%{transform:translateX(72px)}}</style>
+<rect width="800" height="450" fill="#ffffff"/>
+<rect x="24" y="24" width="752" height="402" rx="28" fill="#ffebe5"/>
+<path d="M64 326 C190 250 260 250 382 326 S600 402 724 326" fill="none" stroke="#dd5f45" stroke-width="7" stroke-linecap="round" opacity="0.5"/>
+<g class="move"> <circle cx="164" cy="326" r="18" fill="#dd5f45"/> </g>
+<circle cx="515" cy="92" r="15" fill="#fb923c" opacity="0.62"/><circle cx="567" cy="92" r="17" fill="#dd5f45" opacity="0.62"/><circle cx="619" cy="92" r="15" fill="#fb923c" opacity="0.62"/><circle cx="671" cy="92" r="17" fill="#dd5f45" opacity="0.62"/><circle cx="515" cy="144" r="13" fill="#fb923c" opacity="0.62"/><circle cx="567" cy="144" r="16" fill="#dd5f45" opacity="0.62"/><circle cx="619" cy="144" r="16" fill="#fb923c" opacity="0.62"/><circle cx="671" cy="144" r="21" fill="#dd5f45" opacity="0.62"/>
+<g class="font">
+  <text x="60" y="82" font-size="18" font-weight="900" fill="#dd5f45">WALL TOUCH</text>
+  <text x="60" y="142" font-size="42" font-weight="850" fill="#111827">Command Camouflage</text>
+  <text x="60" y="250" font-size="22" font-weight="550" fill="#374151">Gives a recent helper command time to look</text>
+<text x="60" y="280" font-size="22" font-weight="550" fill="#374151">normal before another safe correction...</text>
+  <rect x="60" y="344" width="150" height="38" rx="10" fill="#ffffff" stroke="#dd5f45"/>
+  <text x="78" y="369" font-size="17" font-weight="850" fill="#dd5f45">Full article</text>
+  <circle cx="614" cy="288" r="58" fill="#ffffff" stroke="#dd5f45" stroke-width="7"/>
+  <path d="M614 248 L650 286 L614 328 L578 286 Z" fill="#fb923c"/>
+</g>
+</svg>

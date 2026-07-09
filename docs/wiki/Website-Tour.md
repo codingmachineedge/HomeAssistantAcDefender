@@ -173,6 +173,7 @@ of date from the code.
 
 ## Where next?
 
+- [Algorithms](Algorithms.html) — searchable cards plus a full article for every algorithm.
 - [Every Guard, Explained Simply](Every-Guard-Explained.html) — every algorithm in plain words.
 - [Defender Logic](Defender-Logic.html) — every guard's exact rules.
 - [Energy & Costs](Energy-and-Costs.html) — how the dollars are computed.

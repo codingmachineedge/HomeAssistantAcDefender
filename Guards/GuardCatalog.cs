@@ -63,7 +63,7 @@ public static class GuardCatalog
             "Natural Walkback", GuardCategory.WallTouch,
             "Walks a safe-band correction toward target in small, slightly random steps instead of one obvious jump.",
             "Recent wall-touch pressure (a 0–100 suspicion score) and how far the setpoint is from the defender target.",
-            "Once recent touches reach the trigger count and the room is inside the walkback safety band, each command moves only about the walkback step (plus a tiny jitter) toward target. A warm room that needs direct cooling skips walkback and still commands 1 °C below the current room temperature.",
+            "Once recent touches reach the trigger count and the room is inside the walkback safety band, each command moves only about the walkback step (plus a tiny jitter) toward target. A warm room that needs direct cooling skips walkback and still commands the configured warm-room approach below the current room temperature (0.5 C by default).",
             "Shapes the size of the setpoint command just before it is sent.",
             ["NaturalWalkbackEnabled", "NaturalWalkbackTriggerTouches", "NaturalWalkbackStepCelsius", "NaturalWalkbackJitterCelsius", "NaturalWalkbackSafetyBandCelsius"],
             s =>

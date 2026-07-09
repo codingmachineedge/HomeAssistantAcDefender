@@ -1,339 +1,714 @@
 ---
 layout: doc
 title: "Defender Logic"
+description: "The searchable decision cycle and exact rule text for every AC Defender algorithm."
 ---
 
 # Defender Logic
 
-This page describes every algorithm the AC Defender runs. The same descriptions appear in the app:
-each guard on the **Defense** page has a "How this works" explainer and a hidden
-"More extra-specific info" decision report. That report shows the card's current verdict, next worker
-step, trigger reason, future trigger condition, live evidence source, overrule rules, command effect,
-and algorithm path. The **Guide** page lists the whole reference. The source of truth for the live cards
-and this document is `Guards/GuardCatalog.cs`,
-projected from the real implementation in `Services/DefenderStateStore.cs` and orchestrated by
-`Services/AcDefenderService.RunCycleAsync`.
+This page describes every algorithm AC Defender runs. The same catalog powers the in-app Guide, the Defense page help drawers, and the individual wiki articles. The implementation reads real Home Assistant state, real sensor/weather/usage evidence, and real thermostat audit context. There is no dummy climate entity, no fake state, and no simulator fallback.
 
-All timing/comfort guards read **real Home Assistant data only**. There is no simulator.
+<div class="doc-hero media-hero">
+  <div>
+    <p class="article-kicker">Super clear logic map</p>
+    <h2>Search one family at a time.</h2>
+    <p>Each family below has its own search bar. Every algorithm card shows the input evidence, decision, output, settings, animation, and link to its full article.</p>
+  </div>
+  <img src="images/logic-search-map.svg" alt="Unique generated visual for the Defender Logic search map">
+</div>
 
-## The decision cycle
-
-Every few seconds (`PollIntervalSeconds`, minimum 3) the worker reads Home Assistant and walks this
-sequence. The first guard that wants to wait stops the cycle and reports its next action.
+## Decision cycle
 
 1. Pull weather and outdoor temperature.
-2. Pull the real dining-room climate entity.
-3. Pull real front-door person detector entities when the guard is enabled.
-4. **Front-door Guard Post** pauses the defender and can turn the thermostat off if a person is detected.
-5. **Emergency protocols** stand down if a too-cold, someone-upset, or suspicion window is active.
-6. If the defender is **paused**, keep reading 24/7 but send nothing.
-7. **Cool Mode Restore** brings the HVAC mode back to `cool` after a short safe delay.
-8. **Schedule & weather rules** choose the target and decide whether corrective action is allowed.
-9. **Upstairs Comfort Guard** lowers the target and adds boost when upstairs is hot.
-10. Decide whether **severe upstairs heat**, **Cooler Intent Fast Lane**, or **Super Defender** should bypass quiet timing.
-11. **Wall Settling**, **Conflict Quiet**, **Manual Comfort Grace**, and **Dynamic Cooldown** may each hold.
-12. **Alectra Peak Power Saver** makes safe cooling more chill during On-peak, high-price, or high-power usage.
-13. **Fan Energy Saver** moves the fan to a saver mode when near target.
-14. Compute the **expected setpoint**: 1 C below room when the room is warm.
-15. If the setpoint needs to change, walk the timing guards in order: **Alectra Peak Power Saver -> Comfort Envelope -> Tug-of-War Truce -> Room Trend -> Thermal Momentum -> Weather Drift -> Setpoint Echo -> Setpoint Stillness -> Remote Settling -> Cooling Runway -> Sensor Rhythm -> HVAC Alibi -> Telemetry Alibi -> Comfort Sync -> Comfort Pace -> Routine Timing -> Comfort Budget -> Command Camouflage -> Stealth Governor -> Visibility Guard -> Natural Cadence**.
-16. Shape the command size with **Natural Walkback**, **Touch Signature**, and **Human Nudge**, then **Repeat Quiet**.
-17. Send the corrected setpoint to Home Assistant.
-18. **Cooling Failure Watch** runs alongside: it raises a mega-alert (the idle branch arms after ~30 min) if cooling is demanded but not real, then turns the AC off until the room warms 0.5 °C.
+2. Pull the real dining-room Home Assistant climate entity.
+3. Pull configured real front-door person detector entities when enabled.
+4. Apply emergency, front-door, tamper, siesta, cool-outdoor, and paused-state stand-down rules before normal corrections.
+5. Restore `cool` mode when needed, delaying only while the room remains inside the configured comfort band.
+6. Choose the effective target from the website target, schedule, weather gates, upstairs comfort, compromise/memory, and budget policy.
+7. If the room is warm, compute the expected setpoint from `WarmRoomApproachCelsius` below current room temperature (0.5 C by default), walking toward the website target without using the wall setpoint as the starting point.
+8. Run the quiet, sensor, weather, energy, and stealth guards in order; each may hold only the safe correction it owns.
+9. Shape the outgoing command with walkback/signature/human-nudge rules when safe.
+10. Send the real Home Assistant command or surface a real error.
+11. Keep refreshing Home Assistant state 24/7 even while paused, weather-blocked, budget-paced, or standing down.
 
-## Warm-room cooling — the "1 °C below room" rule
+## Warm-room command rule
 
-When the room is above target, a fresh correction commands a setpoint exactly **1 °C below the current
-room temperature** to force cooling — not 1 °C below the wall setting. If Home Assistant reports cooling
-is idle/off while the room is still above target, it lowers the setpoint one more degree each cycle. It
-never goes below the website target, and once the room reaches target the setpoint returns to the exact
-target.
+When the room is above the effective target, the first direct-cooling command starts from the **current room temperature minus `WarmRoomApproachCelsius`**. The default approach is **0.5 C**. Repeated cycles continue toward the website target in small steps, and the command never cools below that website target.
 
-> Example: room `25.0 °C`, website target `22.0 °C`, wall moved to `26.0 °C` → the first command is
-> `24.0 °C` (room − 1), then `23.0 °C`, then `22.0 °C` if cooling keeps stalling.
+> Example: room `25.0 C`, website target `22.0 C`, wall moved to `26.0 C`, default approach `0.5 C` -> the direct correction begins at `24.5 C`, then walks down as real readings show the room and wall state.
 
-## Quiet levels
+<section class="logic-section category-core" data-search-root>
+  <div class="logic-section-head"><div><p class="article-kicker">Core Cooling</p><h2>Core Cooling</h2><p>The always-on spine that keeps the AC in cooling mode and gets warm rooms moving back toward the chosen target.</p></div><div class="section-search"><label for="search-core">Search core</label><div class="search-row"><input id="search-core" data-search-input type="search" placeholder="Search this family..."><button type="button" data-search-clear aria-label="Clear Core search">Clear</button></div><p><span data-search-count>2</span> shown</p><p data-search-empty hidden>No algorithms in this family match that search.</p></div></div>
+  <div class="logic-list"><article class="logic-card category-core" id="comfort-sync-quiet-recovery" data-search-item data-search-text="Comfort Sync (quiet recovery) Core Cooling Spaces out and softens corrections so a fixed thermostat does not look like an instant robot. Recent wall-touch count, time since the last defender command, and how far the room is above target. After a manual change it waits a random delay, may hold one or two extra short beats, enforces a minimum gap between commands, and shrinks the nudge size. Repeated touches raise the quiet level (Calm → Light → Quiet → Extra quiet → Softest), lengthening waits and shrinking steps. A warm room (over the safety override) skips all of it. Holds the correction until the chosen calm moment, then lets a softened nudge through. NaturalRecoveryEnabled AdaptiveQuietnessEnabled MinimumNaturalDelaySeconds MaximumNaturalDelaySeconds NaturalStepCelsius NaturalHoldChancePercent MinimumCommandGapSeconds NaturalSafetyOverrideCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Core</span><h3>Comfort Sync (quiet recovery)</h3></div><a class="mini-link" href="Algorithm-comfort-sync-quiet-recovery.html">Full article</a></div>
+  <div class="motion-stage category-core" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Spaces out and softens corrections so a fixed thermostat does not look like an instant robot.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent wall-touch count, time since the last defender command, and how far the room is above target.</p></section><section><h4>Decision</h4><p>After a manual change it waits a random delay, may hold one or two extra short beats, enforces a minimum gap between commands, and shrinks the nudge size. Repeated touches raise the quiet level (Calm → Light → Quiet → Extra quiet → Softest), lengthening waits and shrinking steps. A warm room (over the safety override) skips all of it.</p></section><section><h4>Effect</h4><p>Holds the correction until the chosen calm moment, then lets a softened nudge through.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>NaturalRecoveryEnabled</code></li><li><code>AdaptiveQuietnessEnabled</code></li><li><code>MinimumNaturalDelaySeconds</code></li><li><code>MaximumNaturalDelaySeconds</code></li><li><code>NaturalStepCelsius</code></li><li><code>NaturalHoldChancePercent</code></li><li><code>MinimumCommandGapSeconds</code></li><li><code>NaturalSafetyOverrideCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-core" id="cool-mode-restore" data-search-item data-search-text="Cool Mode Restore Core Cooling Puts the thermostat back into cool mode whenever someone switches it to heat/off/auto. The Home Assistant HVAC mode, plus how far the room is above target. If the mode is not &#x27;cool&#x27; it normally waits a short random delay (between the min and max seconds) so the change is not jarring — but only while the room stays within the comfort band. If the room is warmer than target + band, upstairs is severely hot, or the safety override is crossed, it restores cool immediately. Sends climate.set_hvac_mode = cool once the delay (if any) elapses. CoolModeRestoreDelayEnabled CoolModeRestoreMinimumDelaySeconds CoolModeRestoreMaximumDelaySeconds CoolModeRestoreComfortBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Core</span><h3>Cool Mode Restore</h3></div><a class="mini-link" href="Algorithm-cool-mode-restore.html">Full article</a></div>
+  <div class="motion-stage category-core" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Puts the thermostat back into cool mode whenever someone switches it to heat/off/auto.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The Home Assistant HVAC mode, plus how far the room is above target.</p></section><section><h4>Decision</h4><p>If the mode is not &#x27;cool&#x27; it normally waits a short random delay (between the min and max seconds) so the change is not jarring — but only while the room stays within the comfort band. If the room is warmer than target + band, upstairs is severely hot, or the safety override is crossed, it restores cool immediately.</p></section><section><h4>Effect</h4><p>Sends climate.set_hvac_mode = cool once the delay (if any) elapses.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>CoolModeRestoreDelayEnabled</code></li><li><code>CoolModeRestoreMinimumDelaySeconds</code></li><li><code>CoolModeRestoreMaximumDelaySeconds</code></li><li><code>CoolModeRestoreComfortBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article></div>
+</section>
 
-Adaptive quietness ramps up with repeated wall touches and is shown on the dashboard:
+<section class="logic-section category-wall" data-search-root>
+  <div class="logic-section-head"><div><p class="article-kicker">Wall-Touch Response</p><h2>Wall-Touch Response</h2><p>The courtesy and stealth layer for real thermostat touches from people in the house.</p></div><div class="section-search"><label for="search-wall">Search wall touch</label><div class="search-row"><input id="search-wall" data-search-input type="search" placeholder="Search this family..."><button type="button" data-search-clear aria-label="Clear Wall touch search">Clear</button></div><p><span data-search-count>20</span> shown</p><p data-search-empty hidden>No algorithms in this family match that search.</p></div></div>
+  <div class="logic-list"><article class="logic-card category-wall" id="natural-walkback" data-search-item data-search-text="Natural Walkback Wall-Touch Response Walks a safe-band correction toward target in small, slightly random steps instead of one obvious jump. Recent wall-touch pressure (a 0–100 suspicion score) and how far the setpoint is from the defender target. Once recent touches reach the trigger count and the room is inside the walkback safety band, each command moves only about the walkback step (plus a tiny jitter) toward target. A warm room that needs direct cooling skips walkback and still commands the configured warm-room approach below the current room temperature (0.5 C by default). Shapes the size of the setpoint command just before it is sent. NaturalWalkbackEnabled NaturalWalkbackTriggerTouches NaturalWalkbackStepCelsius NaturalWalkbackJitterCelsius NaturalWalkbackSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Natural Walkback</h3></div><a class="mini-link" href="Algorithm-natural-walkback.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Walks a safe-band correction toward target in small, slightly random steps instead of one obvious jump.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent wall-touch pressure (a 0–100 suspicion score) and how far the setpoint is from the defender target.</p></section><section><h4>Decision</h4><p>Once recent touches reach the trigger count and the room is inside the walkback safety band, each command moves only about the walkback step (plus a tiny jitter) toward target. A warm room that needs direct cooling skips walkback and still commands the configured warm-room approach below the current room temperature (0.5 C by default).</p></section><section><h4>Effect</h4><p>Shapes the size of the setpoint command just before it is sent.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>NaturalWalkbackEnabled</code></li><li><code>NaturalWalkbackTriggerTouches</code></li><li><code>NaturalWalkbackStepCelsius</code></li><li><code>NaturalWalkbackJitterCelsius</code></li><li><code>NaturalWalkbackSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="touch-signature" data-search-item data-search-text="Touch Signature Wall-Touch Response Matches safe nudges to the size of steps people actually use on the wall thermostat. The recent real wall-thermostat steps (their median size) inside the retention window. With enough recent steps and a room still inside the signature safety band, it learns the median wall-step size, clamps it between the min and max signature step, and caps safe nudges to that size. Too-warm rooms clear the signature so direct cooling resumes. Lowers the per-command nudge size used by Natural Walkback. TouchSignatureEnabled TouchSignatureTriggerTouches TouchSignatureRetentionMinutes TouchSignatureMinimumStepCelsius TouchSignatureMaximumStepCelsius TouchSignatureSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Touch Signature</h3></div><a class="mini-link" href="Algorithm-touch-signature.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Matches safe nudges to the size of steps people actually use on the wall thermostat.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The recent real wall-thermostat steps (their median size) inside the retention window.</p></section><section><h4>Decision</h4><p>With enough recent steps and a room still inside the signature safety band, it learns the median wall-step size, clamps it between the min and max signature step, and caps safe nudges to that size. Too-warm rooms clear the signature so direct cooling resumes.</p></section><section><h4>Effect</h4><p>Lowers the per-command nudge size used by Natural Walkback.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>TouchSignatureEnabled</code></li><li><code>TouchSignatureTriggerTouches</code></li><li><code>TouchSignatureRetentionMinutes</code></li><li><code>TouchSignatureMinimumStepCelsius</code></li><li><code>TouchSignatureMaximumStepCelsius</code></li><li><code>TouchSignatureSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="human-nudge" data-search-item data-search-text="Human Nudge Wall-Touch Response Makes the final safe setpoint command look like a normal thermostat step instead of a precise bot number. Recent wall touches, the candidate defender command, the current thermostat setpoint, and room temperature. After repeated touches and while the room is inside the safe band, it snaps only safe follow-up commands to the configured human step size. Direct warm-room cooling, upstairs heat, or quiet-timing bypasses skip this shaper. Rewrites the outgoing safe setpoint to a normal one-step-looking value. HumanNudgeEnabled HumanNudgeTriggerTouches HumanNudgeStepCelsius HumanNudgeSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Human Nudge</h3></div><a class="mini-link" href="Algorithm-human-nudge.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Makes the final safe setpoint command look like a normal thermostat step instead of a precise bot number.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent wall touches, the candidate defender command, the current thermostat setpoint, and room temperature.</p></section><section><h4>Decision</h4><p>After repeated touches and while the room is inside the safe band, it snaps only safe follow-up commands to the configured human step size. Direct warm-room cooling, upstairs heat, or quiet-timing bypasses skip this shaper.</p></section><section><h4>Effect</h4><p>Rewrites the outgoing safe setpoint to a normal one-step-looking value.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>HumanNudgeEnabled</code></li><li><code>HumanNudgeTriggerTouches</code></li><li><code>HumanNudgeStepCelsius</code></li><li><code>HumanNudgeSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="visibility-guard" data-search-item data-search-text="Visibility Guard Wall-Touch Response Slows the next safe nudge when a wall touch lands right after a defender command (someone likely noticed). Wall touches that occur within the after-command window, counted as &#x27;notices&#x27; over the notice window. Each notice adds pressure (0–100). When notices reach the trigger, the next safe correction waits a variable hold between the min and max hold minutes, scaled by pressure. A room over the safety band clears the hold. Delays the next safe correction so the AC&#x27;s reaction looks less mechanical. VisibilityGuardEnabled VisibilityGuardTriggerNotices VisibilityGuardNoticeWindowMinutes VisibilityGuardAfterCommandSeconds VisibilityGuardMinimumHoldMinutes VisibilityGuardMaximumHoldMinutes VisibilityGuardSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Visibility Guard</h3></div><a class="mini-link" href="Algorithm-visibility-guard.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Slows the next safe nudge when a wall touch lands right after a defender command (someone likely noticed).</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Wall touches that occur within the after-command window, counted as &#x27;notices&#x27; over the notice window.</p></section><section><h4>Decision</h4><p>Each notice adds pressure (0–100). When notices reach the trigger, the next safe correction waits a variable hold between the min and max hold minutes, scaled by pressure. A room over the safety band clears the hold.</p></section><section><h4>Effect</h4><p>Delays the next safe correction so the AC&#x27;s reaction looks less mechanical.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>VisibilityGuardEnabled</code></li><li><code>VisibilityGuardTriggerNotices</code></li><li><code>VisibilityGuardNoticeWindowMinutes</code></li><li><code>VisibilityGuardAfterCommandSeconds</code></li><li><code>VisibilityGuardMinimumHoldMinutes</code></li><li><code>VisibilityGuardMaximumHoldMinutes</code></li><li><code>VisibilityGuardSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="routine-timing" data-search-item data-search-text="Routine Timing Wall-Touch Response Lines safe corrections up with a normal-looking comfort-check rhythm instead of firing instantly. Recent wall touches and the wall-clock minute. After repeated touches and while the room is safe, the next correction waits until the next interval boundary (the routine minutes) plus a little random wiggle, capped at the max routine delay. Too-warm rooms clear it. Delays the safe correction to the next tidy time slot. RoutineTimingEnabled RoutineTimingTriggerTouches RoutineTimingIntervalMinutes RoutineTimingJitterMinutes RoutineTimingMaxDelayMinutes RoutineTimingSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Routine Timing</h3></div><a class="mini-link" href="Algorithm-routine-timing.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Lines safe corrections up with a normal-looking comfort-check rhythm instead of firing instantly.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent wall touches and the wall-clock minute.</p></section><section><h4>Decision</h4><p>After repeated touches and while the room is safe, the next correction waits until the next interval boundary (the routine minutes) plus a little random wiggle, capped at the max routine delay. Too-warm rooms clear it.</p></section><section><h4>Effect</h4><p>Delays the safe correction to the next tidy time slot.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>RoutineTimingEnabled</code></li><li><code>RoutineTimingTriggerTouches</code></li><li><code>RoutineTimingIntervalMinutes</code></li><li><code>RoutineTimingJitterMinutes</code></li><li><code>RoutineTimingMaxDelayMinutes</code></li><li><code>RoutineTimingSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="comfort-budget" data-search-item data-search-text="Comfort Budget Wall-Touch Response Caps how many safe corrections happen inside a rolling window so the AC is not constantly nudged. The count of recent automatic setpoint commands in the budget window. If the number of commands in the window reaches the max, it rests until the oldest command ages out of the window. A room over the safety band clears the budget. Holds new safe corrections until the budget frees up. ComfortBudgetEnabled ComfortBudgetWindowMinutes ComfortBudgetMaxCommands ComfortBudgetSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Comfort Budget</h3></div><a class="mini-link" href="Algorithm-comfort-budget.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Caps how many safe corrections happen inside a rolling window so the AC is not constantly nudged.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The count of recent automatic setpoint commands in the budget window.</p></section><section><h4>Decision</h4><p>If the number of commands in the window reaches the max, it rests until the oldest command ages out of the window. A room over the safety band clears the budget.</p></section><section><h4>Effect</h4><p>Holds new safe corrections until the budget frees up.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>ComfortBudgetEnabled</code></li><li><code>ComfortBudgetWindowMinutes</code></li><li><code>ComfortBudgetMaxCommands</code></li><li><code>ComfortBudgetSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="command-camouflage" data-search-item data-search-text="Command Camouflage Wall-Touch Response Gives a recent helper command time to look normal before another safe correction appears. The last real helper setpoint command, recent helper-command pressure, recent wall-touch pressure, and the room temperature. After a setpoint command, it waits at least the minimum gap plus pressure-scaled extra seconds before another safe correction. Higher recent touch or command pressure makes the gap longer. A room over the safety band or any comfort/safety bypass clears it immediately. Holds the next safe correction until the recent command has enough spacing. CommandCamouflageEnabled CommandCamouflageMinimumGapSeconds CommandCamouflagePressureExtraSeconds CommandCamouflageSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Command Camouflage</h3></div><a class="mini-link" href="Algorithm-command-camouflage.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Gives a recent helper command time to look normal before another safe correction appears.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The last real helper setpoint command, recent helper-command pressure, recent wall-touch pressure, and the room temperature.</p></section><section><h4>Decision</h4><p>After a setpoint command, it waits at least the minimum gap plus pressure-scaled extra seconds before another safe correction. Higher recent touch or command pressure makes the gap longer. A room over the safety band or any comfort/safety bypass clears it immediately.</p></section><section><h4>Effect</h4><p>Holds the next safe correction until the recent command has enough spacing.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>CommandCamouflageEnabled</code></li><li><code>CommandCamouflageMinimumGapSeconds</code></li><li><code>CommandCamouflagePressureExtraSeconds</code></li><li><code>CommandCamouflageSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="stealth-governor" data-search-item data-search-text="Stealth Governor Wall-Touch Response Runs a whole-system low-profile hold when wall touches, noticed corrections, remote changes, and helper commands make the defender look too busy. Recent wall-touch pressure, noticed-correction pressure, Home Assistant remote-change pressure, helper command count, and room temperature. It computes a 0-100 pressure score. If the score reaches the trigger and the room is inside the safety band, it holds the next safe correction for a min-to-max low-profile window scaled by the score. Direct comfort needs, upstairs heat, or a quiet-timing bypass clear it. Holds only safe corrections until the low-profile window ends. StealthGovernorEnabled StealthGovernorTriggerScore StealthGovernorMinimumHoldMinutes StealthGovernorMaximumHoldMinutes StealthGovernorSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Stealth Governor</h3></div><a class="mini-link" href="Algorithm-stealth-governor.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Runs a whole-system low-profile hold when wall touches, noticed corrections, remote changes, and helper commands make the defender look too busy.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent wall-touch pressure, noticed-correction pressure, Home Assistant remote-change pressure, helper command count, and room temperature.</p></section><section><h4>Decision</h4><p>It computes a 0-100 pressure score. If the score reaches the trigger and the room is inside the safety band, it holds the next safe correction for a min-to-max low-profile window scaled by the score. Direct comfort needs, upstairs heat, or a quiet-timing bypass clear it.</p></section><section><h4>Effect</h4><p>Holds only safe corrections until the low-profile window ends.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>StealthGovernorEnabled</code></li><li><code>StealthGovernorTriggerScore</code></li><li><code>StealthGovernorMinimumHoldMinutes</code></li><li><code>StealthGovernorMaximumHoldMinutes</code></li><li><code>StealthGovernorSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="natural-cadence" data-search-item data-search-text="Natural Cadence Wall-Touch Response Picks a variable future slot for safe nudges so they never land at identical, robotic times. Recent wall-touch pressure and recent command pressure. After repeated touches it chooses a wait between the min and max cadence minutes (later as pressure rises) plus a small jitter. Too-warm rooms clear it. Delays the safe correction to the chosen cadence slot. NaturalCadenceEnabled NaturalCadenceTriggerTouches NaturalCadenceMinimumMinutes NaturalCadenceMaximumMinutes NaturalCadenceJitterMinutes NaturalCadenceSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Natural Cadence</h3></div><a class="mini-link" href="Algorithm-natural-cadence.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Picks a variable future slot for safe nudges so they never land at identical, robotic times.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent wall-touch pressure and recent command pressure.</p></section><section><h4>Decision</h4><p>After repeated touches it chooses a wait between the min and max cadence minutes (later as pressure rises) plus a small jitter. Too-warm rooms clear it.</p></section><section><h4>Effect</h4><p>Delays the safe correction to the chosen cadence slot.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>NaturalCadenceEnabled</code></li><li><code>NaturalCadenceTriggerTouches</code></li><li><code>NaturalCadenceMinimumMinutes</code></li><li><code>NaturalCadenceMaximumMinutes</code></li><li><code>NaturalCadenceJitterMinutes</code></li><li><code>NaturalCadenceSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="comfort-pace" data-search-item data-search-text="Comfort Pace Wall-Touch Response The high-frequency planner: under heavy wall fighting it waits for a calm weather, sensor, or clock-aligned slot. Touch pressure, command pressure, real outdoor-weather movement, the learned Home Assistant sensor beat, and 5/10-minute clock boundaries. When touches reach the trigger and the room is inside the safety band, it computes a base delay between the min and max pace minutes (scaling with pressure) and then snaps it to the nearest calm slot — a weather update, the sensor beat, or a clock boundary — recording why. Too-warm rooms clear it instantly. Delays the safe correction to the chosen calm climate slot. NaturalChangePlannerEnabled NaturalChangePlannerTriggerTouches NaturalChangePlannerMinimumMinutes NaturalChangePlannerMaximumMinutes NaturalChangePlannerJitterMinutes NaturalChangePlannerPreferWeatherSlots NaturalChangePlannerPreferSensorBeat">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Comfort Pace</h3></div><a class="mini-link" href="Algorithm-comfort-pace.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">The high-frequency planner: under heavy wall fighting it waits for a calm weather, sensor, or clock-aligned slot.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Touch pressure, command pressure, real outdoor-weather movement, the learned Home Assistant sensor beat, and 5/10-minute clock boundaries.</p></section><section><h4>Decision</h4><p>When touches reach the trigger and the room is inside the safety band, it computes a base delay between the min and max pace minutes (scaling with pressure) and then snaps it to the nearest calm slot — a weather update, the sensor beat, or a clock boundary — recording why. Too-warm rooms clear it instantly.</p></section><section><h4>Effect</h4><p>Delays the safe correction to the chosen calm climate slot.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>NaturalChangePlannerEnabled</code></li><li><code>NaturalChangePlannerTriggerTouches</code></li><li><code>NaturalChangePlannerMinimumMinutes</code></li><li><code>NaturalChangePlannerMaximumMinutes</code></li><li><code>NaturalChangePlannerJitterMinutes</code></li><li><code>NaturalChangePlannerPreferWeatherSlots</code></li><li><code>NaturalChangePlannerPreferSensorBeat</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="comfort-envelope" data-search-item data-search-text="Comfort Envelope Wall-Touch Response Lets a tiny safe wall preference rest for a while instead of being corrected the instant it appears. The wall setpoint relative to the defender target and how far the room is above target. After repeated touches, if the wall setpoint stays within the accepted range (target ± max offset) and the room is under the safety band, it simply observes for the hold minutes. A setpoint outside the range, a too-warm room, or a direct-cooling need clears it. Suppresses the small correction while the wall preference is inside the safe range. ComfortEnvelopeEnabled ComfortEnvelopeTriggerTouches ComfortEnvelopeHoldMinutes ComfortEnvelopeMaxOffsetCelsius ComfortEnvelopeSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Comfort Envelope</h3></div><a class="mini-link" href="Algorithm-comfort-envelope.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Lets a tiny safe wall preference rest for a while instead of being corrected the instant it appears.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The wall setpoint relative to the defender target and how far the room is above target.</p></section><section><h4>Decision</h4><p>After repeated touches, if the wall setpoint stays within the accepted range (target ± max offset) and the room is under the safety band, it simply observes for the hold minutes. A setpoint outside the range, a too-warm room, or a direct-cooling need clears it.</p></section><section><h4>Effect</h4><p>Suppresses the small correction while the wall preference is inside the safe range.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>ComfortEnvelopeEnabled</code></li><li><code>ComfortEnvelopeTriggerTouches</code></li><li><code>ComfortEnvelopeHoldMinutes</code></li><li><code>ComfortEnvelopeMaxOffsetCelsius</code></li><li><code>ComfortEnvelopeSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="comfort-compromise" data-search-item data-search-text="Comfort Compromise Wall-Touch Response Blends a repeated wall choice into a temporary target, then fades it back to the website target. The latest wall setpoint, the website target, and how far the room is above target. If touches repeat and the room is inside the compromise safety band, the wall setpoint pulls the effective target up to the max offset for the hold minutes, then eases back over the decay minutes. A too-warm room clears it immediately. Temporarily shifts the defender target the corrections aim for. ComfortCompromiseEnabled ComfortCompromiseTriggerTouches ComfortCompromiseHoldMinutes ComfortCompromiseDecayMinutes ComfortCompromiseMaxOffsetCelsius ComfortCompromiseSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Comfort Compromise</h3></div><a class="mini-link" href="Algorithm-comfort-compromise.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Blends a repeated wall choice into a temporary target, then fades it back to the website target.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The latest wall setpoint, the website target, and how far the room is above target.</p></section><section><h4>Decision</h4><p>If touches repeat and the room is inside the compromise safety band, the wall setpoint pulls the effective target up to the max offset for the hold minutes, then eases back over the decay minutes. A too-warm room clears it immediately.</p></section><section><h4>Effect</h4><p>Temporarily shifts the defender target the corrections aim for.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>ComfortCompromiseEnabled</code></li><li><code>ComfortCompromiseTriggerTouches</code></li><li><code>ComfortCompromiseHoldMinutes</code></li><li><code>ComfortCompromiseDecayMinutes</code></li><li><code>ComfortCompromiseMaxOffsetCelsius</code></li><li><code>ComfortCompromiseSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="comfort-memory" data-search-item data-search-text="Comfort Memory Wall-Touch Response Learns a small time-of-day target bias from repeated safe wall choices and re-applies it later that hour. The current hour and the offsets learned for it; the room temperature. Repeated safe touches teach a bounded offset (± max offset) for the current hour slot. On later checks in the same window it nudges the target by that learned offset. Learned memory expires after the retention hours and is skipped when the room is warm or upstairs needs cooling. Adjusts the defender target by the learned hourly bias. ComfortMemoryEnabled ComfortMemoryLearningTouches ComfortMemoryRetentionHours ComfortMemoryMaxOffsetCelsius ComfortMemorySafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Comfort Memory</h3></div><a class="mini-link" href="Algorithm-comfort-memory.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Learns a small time-of-day target bias from repeated safe wall choices and re-applies it later that hour.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The current hour and the offsets learned for it; the room temperature.</p></section><section><h4>Decision</h4><p>Repeated safe touches teach a bounded offset (± max offset) for the current hour slot. On later checks in the same window it nudges the target by that learned offset. Learned memory expires after the retention hours and is skipped when the room is warm or upstairs needs cooling.</p></section><section><h4>Effect</h4><p>Adjusts the defender target by the learned hourly bias.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>ComfortMemoryEnabled</code></li><li><code>ComfortMemoryLearningTouches</code></li><li><code>ComfortMemoryRetentionHours</code></li><li><code>ComfortMemoryMaxOffsetCelsius</code></li><li><code>ComfortMemorySafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="conflict-quiet" data-search-item data-search-text="Conflict Quiet Wall-Touch Response Stands the defender down during an obvious tug-of-war over the thermostat. Recent wall touches within the touch window and how far the room is above target. When touches reach the conflict threshold, it stops sending visible corrections for the stand-down minutes — but only while the room stays within target + comfort band. A warmer room, severe upstairs heat, or a crossed safety override ends it. Suppresses corrections for the stand-down period. ConflictQuietModeEnabled ConflictQuietTouchThreshold ConflictQuietMinutes ConflictQuietComfortBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Conflict Quiet</h3></div><a class="mini-link" href="Algorithm-conflict-quiet.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Stands the defender down during an obvious tug-of-war over the thermostat.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent wall touches within the touch window and how far the room is above target.</p></section><section><h4>Decision</h4><p>When touches reach the conflict threshold, it stops sending visible corrections for the stand-down minutes — but only while the room stays within target + comfort band. A warmer room, severe upstairs heat, or a crossed safety override ends it.</p></section><section><h4>Effect</h4><p>Suppresses corrections for the stand-down period.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>ConflictQuietModeEnabled</code></li><li><code>ConflictQuietTouchThreshold</code></li><li><code>ConflictQuietMinutes</code></li><li><code>ConflictQuietComfortBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="tug-of-war-truce" data-search-item data-search-text="Tug-of-War Truce Wall-Touch Response Calls a temporary truce when the real thermostat bounces up and down, so answer-back commands do not look like a duel. The real external thermostat audit log: previous setpoint, new setpoint, timestamp, and source classification. Inside the configured flip window it converts each external setpoint change into up/down/flat, counts direction flips, and compares that count to the flip trigger. If the flip trigger is met and the room is still inside the safety band, it holds only safe answer-back corrections for the truce minutes. A warm room, severe upstairs heat, matching setpoint, cooler-intent fast lane, or Super Defender strict bypass clears it. Holds safe corrections until the truce window ends, then lets the normal defender chain continue. TugOfWarTruceEnabled TugOfWarTruceMinimumFlips TugOfWarTruceWindowMinutes TugOfWarTruceHoldMinutes TugOfWarTruceSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Tug-of-War Truce</h3></div><a class="mini-link" href="Algorithm-tug-of-war-truce.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Calls a temporary truce when the real thermostat bounces up and down, so answer-back commands do not look like a duel.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The real external thermostat audit log: previous setpoint, new setpoint, timestamp, and source classification.</p></section><section><h4>Decision</h4><p>Inside the configured flip window it converts each external setpoint change into up/down/flat, counts direction flips, and compares that count to the flip trigger. If the flip trigger is met and the room is still inside the safety band, it holds only safe answer-back corrections for the truce minutes. A warm room, severe upstairs heat, matching setpoint, cooler-intent fast lane, or Super Defender strict bypass clears it.</p></section><section><h4>Effect</h4><p>Holds safe corrections until the truce window ends, then lets the normal defender chain continue.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>TugOfWarTruceEnabled</code></li><li><code>TugOfWarTruceMinimumFlips</code></li><li><code>TugOfWarTruceWindowMinutes</code></li><li><code>TugOfWarTruceHoldMinutes</code></li><li><code>TugOfWarTruceSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="wall-settling" data-search-item data-search-text="Wall Settling Wall-Touch Response Waits for someone who is still tapping the wall thermostat to stop before correcting. Recent touches inside the settling window and the room temperature. With enough recent touches it holds for the base settle seconds plus extra pressure seconds (more touches = longer), measured from the latest touch. A room over the safety band clears it. Holds the correction until the wall stops changing. WallSettlingGuardEnabled WallSettlingMinimumTouches WallSettlingWindowMinutes WallSettlingBaseSeconds WallSettlingPressureExtraSeconds WallSettlingSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Wall Settling</h3></div><a class="mini-link" href="Algorithm-wall-settling.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Waits for someone who is still tapping the wall thermostat to stop before correcting.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent touches inside the settling window and the room temperature.</p></section><section><h4>Decision</h4><p>With enough recent touches it holds for the base settle seconds plus extra pressure seconds (more touches = longer), measured from the latest touch. A room over the safety band clears it.</p></section><section><h4>Effect</h4><p>Holds the correction until the wall stops changing.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>WallSettlingGuardEnabled</code></li><li><code>WallSettlingMinimumTouches</code></li><li><code>WallSettlingWindowMinutes</code></li><li><code>WallSettlingBaseSeconds</code></li><li><code>WallSettlingPressureExtraSeconds</code></li><li><code>WallSettlingSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="manual-comfort-grace" data-search-item data-search-text="Manual Comfort Grace Wall-Touch Response Leaves a manual wall change alone while the room still feels comfortable. Time since the wall change and how far the room is above target. After cooldown it can keep waiting up to the grace minutes while the room stays within target + grace band. If the room rises above the band, the mode leaves cool, or upstairs becomes severely hot, grace ends. Touch Intent can extend the grace when recent changes are clearly warmer. Suppresses the correction while the wall change stays comfortable. ManualComfortGraceEnabled ManualComfortGraceMinutes ManualComfortGraceBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Manual Comfort Grace</h3></div><a class="mini-link" href="Algorithm-manual-comfort-grace.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Leaves a manual wall change alone while the room still feels comfortable.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Time since the wall change and how far the room is above target.</p></section><section><h4>Decision</h4><p>After cooldown it can keep waiting up to the grace minutes while the room stays within target + grace band. If the room rises above the band, the mode leaves cool, or upstairs becomes severely hot, grace ends. Touch Intent can extend the grace when recent changes are clearly warmer.</p></section><section><h4>Effect</h4><p>Suppresses the correction while the wall change stays comfortable.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>ManualComfortGraceEnabled</code></li><li><code>ManualComfortGraceMinutes</code></li><li><code>ManualComfortGraceBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="touch-intent" data-search-item data-search-text="Touch Intent Wall-Touch Response Reads whether recent wall changes trend warmer, cooler, or mixed, and extends grace for a clear warmer pattern. The net sum of recent wall setpoint changes inside the intent window. If the net movement is at least the warm threshold and the room is inside the intent safety band, it adds the extra grace minutes to Manual Comfort Grace. Cooler or mixed patterns get no extra grace; a too-warm room steps it aside. Lengthens Manual Comfort Grace when people clearly want warmer air. TouchIntentEnabled TouchIntentMinimumTouches TouchIntentWindowMinutes TouchIntentNetWarmThresholdCelsius TouchIntentExtraGraceMinutes TouchIntentSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Touch Intent</h3></div><a class="mini-link" href="Algorithm-touch-intent.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Reads whether recent wall changes trend warmer, cooler, or mixed, and extends grace for a clear warmer pattern.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The net sum of recent wall setpoint changes inside the intent window.</p></section><section><h4>Decision</h4><p>If the net movement is at least the warm threshold and the room is inside the intent safety band, it adds the extra grace minutes to Manual Comfort Grace. Cooler or mixed patterns get no extra grace; a too-warm room steps it aside.</p></section><section><h4>Effect</h4><p>Lengthens Manual Comfort Grace when people clearly want warmer air.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>TouchIntentEnabled</code></li><li><code>TouchIntentMinimumTouches</code></li><li><code>TouchIntentWindowMinutes</code></li><li><code>TouchIntentNetWarmThresholdCelsius</code></li><li><code>TouchIntentExtraGraceMinutes</code></li><li><code>TouchIntentSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="cooler-intent-fast-lane" data-search-item data-search-text="Cooler Intent Fast Lane Wall-Touch Response When people keep dialing the wall cooler, it skips quiet waits so the room cools sooner. The net cooler movement of recent wall changes and whether the room is above target. If repeated touches move the wall cooler by at least the cool threshold and the room is above target, it clears quiet waits (cooldown, grace, conflict quiet, cadence, repeat quiet, sensor rhythm, runway, and more) for the hold minutes. It never lowers the website target — cooling still starts at room minus 1 °C and stops at target. A room over the safety band hands control back to normal safety rules. Bypasses the quiet timing guards for a short window. CoolerIntentFastLaneEnabled CoolerIntentMinimumTouches CoolerIntentWindowMinutes CoolerIntentHoldMinutes CoolerIntentNetCoolThresholdCelsius CoolerIntentSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Cooler Intent Fast Lane</h3></div><a class="mini-link" href="Algorithm-cooler-intent-fast-lane.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">When people keep dialing the wall cooler, it skips quiet waits so the room cools sooner.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The net cooler movement of recent wall changes and whether the room is above target.</p></section><section><h4>Decision</h4><p>If repeated touches move the wall cooler by at least the cool threshold and the room is above target, it clears quiet waits (cooldown, grace, conflict quiet, cadence, repeat quiet, sensor rhythm, runway, and more) for the hold minutes. It never lowers the website target — cooling still starts at room minus 1 °C and stops at target. A room over the safety band hands control back to normal safety rules.</p></section><section><h4>Effect</h4><p>Bypasses the quiet timing guards for a short window.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>CoolerIntentFastLaneEnabled</code></li><li><code>CoolerIntentMinimumTouches</code></li><li><code>CoolerIntentWindowMinutes</code></li><li><code>CoolerIntentHoldMinutes</code></li><li><code>CoolerIntentNetCoolThresholdCelsius</code></li><li><code>CoolerIntentSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-wall" id="repeated-raise-surrender" data-search-item data-search-text="Repeated-Raise Surrender Wall-Touch Response If a person re-raises the setpoint to about the same value 3+ times in 30 minutes, the defender adopts their number for 4 hours — the human wins the argument. Recent external RAISES (times and values, pruned to a 30-minute window). Three or more raises landing within 0.7 C of each other mean the person really wants that temperature. The defender adopts it (capped at 27 C) as the effective target for 4 hours — deliberately with NO &#x27;unless the room is too warm&#x27; escape, because that escape hatch is what turned dawn disagreements into a detached thermostat. My temp stays the hard floor, emergencies still win, and a deliberate website target clears the surrender. Raises the effective target to the human&#x27;s number for 4 hours and logs the surrender. (always on — fixed: 3 raises / 30 min window / 4 h hold / 27 C cap)">
+  <div class="logic-card-header"><div><span class="category-pill">Wall touch</span><h3>Repeated-Raise Surrender</h3></div><a class="mini-link" href="Algorithm-repeated-raise-surrender.html">Full article</a></div>
+  <div class="motion-stage category-wall" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">If a person re-raises the setpoint to about the same value 3+ times in 30 minutes, the defender adopts their number for 4 hours — the human wins the argument.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent external RAISES (times and values, pruned to a 30-minute window).</p></section><section><h4>Decision</h4><p>Three or more raises landing within 0.7 C of each other mean the person really wants that temperature. The defender adopts it (capped at 27 C) as the effective target for 4 hours — deliberately with NO &#x27;unless the room is too warm&#x27; escape, because that escape hatch is what turned dawn disagreements into a detached thermostat. My temp stays the hard floor, emergencies still win, and a deliberate website target clears the surrender.</p></section><section><h4>Effect</h4><p>Raises the effective target to the human&#x27;s number for 4 hours and logs the surrender.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>(always on — fixed: 3 raises / 30 min window / 4 h hold / 27 C cap)</code></li></ul><p><strong>Defense page:</strong> Guide-only reference; no live Defense card is projected.</p></details>
+</article></div>
+</section>
 
-| Level | Meaning |
-|-------|---------|
-| **Calm** | No recent wall touches. |
-| **Light** | A few touches; base quiet settings. |
-| **Quiet** | Repeated touches; waits and spacing grow. |
-| **Extra quiet** | More touches; smaller nudges, higher hold chance. |
-| **Softest** | Maximum quietness before comfort safety overrides. |
+<section class="logic-section category-sensor" data-search-root>
+  <div class="logic-section-head"><div><p class="article-kicker">Sensor Timing</p><h2>Sensor Timing</h2><p>Timing that lines corrections up with real Home Assistant readings, HVAC action, weather, and usage telemetry.</p></div><div class="section-search"><label for="search-sensor">Search sensor</label><div class="search-row"><input id="search-sensor" data-search-input type="search" placeholder="Search this family..."><button type="button" data-search-clear aria-label="Clear Sensor search">Clear</button></div><p><span data-search-count>11</span> shown</p><p data-search-empty hidden>No algorithms in this family match that search.</p></div></div>
+  <div class="logic-list"><article class="logic-card category-sensor" id="setpoint-echo" data-search-item data-search-text="Setpoint Echo Sensor Timing Waits for Home Assistant to report back the last setpoint before sending another safe command. The pending command setpoint and whether Home Assistant has echoed it yet. After a command it waits up to the echo grace seconds for Home Assistant to report that setpoint within 0.15 °C. Once echoed, or after the grace expires, the next command is allowed. A too-warm room steps it aside. Briefly holds the next safe command to avoid piling commands on a slow integration. SetpointEchoGuardEnabled SetpointEchoGraceSeconds SetpointEchoSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Setpoint Echo</h3></div><a class="mini-link" href="Algorithm-setpoint-echo.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Waits for Home Assistant to report back the last setpoint before sending another safe command.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The pending command setpoint and whether Home Assistant has echoed it yet.</p></section><section><h4>Decision</h4><p>After a command it waits up to the echo grace seconds for Home Assistant to report that setpoint within 0.15 °C. Once echoed, or after the grace expires, the next command is allowed. A too-warm room steps it aside.</p></section><section><h4>Effect</h4><p>Briefly holds the next safe command to avoid piling commands on a slow integration.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>SetpointEchoGuardEnabled</code></li><li><code>SetpointEchoGraceSeconds</code></li><li><code>SetpointEchoSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="repeat-quiet" data-search-item data-search-text="Repeat Quiet Sensor Timing Waits before sending the very same thermostat number again. The setpoint about to be sent versus the last defender command, plus touch and command pressure. If the next safe command would repeat the last number, it waits at least the minimum wait seconds plus extra pressure seconds (scaling with recent touches and commands). Different one-degree step-downs pass straight through; a too-warm room steps it aside. Holds an identical follow-up command until the wait elapses. RepeatCommandGuardEnabled RepeatCommandMinimumWaitSeconds RepeatCommandPressureExtraSeconds RepeatCommandSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Repeat Quiet</h3></div><a class="mini-link" href="Algorithm-repeat-quiet.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Waits before sending the very same thermostat number again.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The setpoint about to be sent versus the last defender command, plus touch and command pressure.</p></section><section><h4>Decision</h4><p>If the next safe command would repeat the last number, it waits at least the minimum wait seconds plus extra pressure seconds (scaling with recent touches and commands). Different one-degree step-downs pass straight through; a too-warm room steps it aside.</p></section><section><h4>Effect</h4><p>Holds an identical follow-up command until the wait elapses.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>RepeatCommandGuardEnabled</code></li><li><code>RepeatCommandMinimumWaitSeconds</code></li><li><code>RepeatCommandPressureExtraSeconds</code></li><li><code>RepeatCommandSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="setpoint-stillness" data-search-item data-search-text="Setpoint Stillness Sensor Timing Waits until the wall setpoint stops moving before a safe correction answers back. Real Home Assistant climate readings, the current reported setpoint, recent wall touches, and room temperature. After repeated external touches, while the room is still inside the safe band, it requires a few consecutive real Home Assistant readings at the same wall setpoint before allowing a safe correction. If the room gets too warm, a cooler-intent fast lane is active, the expected setpoint is already reached, or the max hold expires, it steps aside. Delays only safe corrections until the wall setpoint looks settled. SetpointStillnessGuardEnabled SetpointStillnessTriggerTouches SetpointStillnessRequiredSamples SetpointStillnessMaxHoldSeconds SetpointStillnessToleranceCelsius SetpointStillnessSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Setpoint Stillness</h3></div><a class="mini-link" href="Algorithm-setpoint-stillness.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Waits until the wall setpoint stops moving before a safe correction answers back.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Real Home Assistant climate readings, the current reported setpoint, recent wall touches, and room temperature.</p></section><section><h4>Decision</h4><p>After repeated external touches, while the room is still inside the safe band, it requires a few consecutive real Home Assistant readings at the same wall setpoint before allowing a safe correction. If the room gets too warm, a cooler-intent fast lane is active, the expected setpoint is already reached, or the max hold expires, it steps aside.</p></section><section><h4>Effect</h4><p>Delays only safe corrections until the wall setpoint looks settled.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>SetpointStillnessGuardEnabled</code></li><li><code>SetpointStillnessTriggerTouches</code></li><li><code>SetpointStillnessRequiredSamples</code></li><li><code>SetpointStillnessMaxHoldSeconds</code></li><li><code>SetpointStillnessToleranceCelsius</code></li><li><code>SetpointStillnessSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="sensor-rhythm" data-search-item data-search-text="Sensor Rhythm Sensor Timing Times nudges to just after the normal Home Assistant reading beat so they look less mechanical. Timestamps of real Home Assistant readings, used to learn the median update interval. With at least the minimum samples in the rhythm window, it learns the median interval between updates and waits until just after the next beat plus a small jitter. A too-warm room or upstairs heat clears it. Delays the safe correction to align with the sensor&#x27;s update cadence. SensorRhythmGuardEnabled SensorRhythmMinimumSamples SensorRhythmWindowMinutes SensorRhythmJitterSeconds SensorRhythmSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Sensor Rhythm</h3></div><a class="mini-link" href="Algorithm-sensor-rhythm.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Times nudges to just after the normal Home Assistant reading beat so they look less mechanical.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Timestamps of real Home Assistant readings, used to learn the median update interval.</p></section><section><h4>Decision</h4><p>With at least the minimum samples in the rhythm window, it learns the median interval between updates and waits until just after the next beat plus a small jitter. A too-warm room or upstairs heat clears it.</p></section><section><h4>Effect</h4><p>Delays the safe correction to align with the sensor&#x27;s update cadence.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>SensorRhythmGuardEnabled</code></li><li><code>SensorRhythmMinimumSamples</code></li><li><code>SensorRhythmWindowMinutes</code></li><li><code>SensorRhythmJitterSeconds</code></li><li><code>SensorRhythmSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="hvac-alibi" data-search-item data-search-text="HVAC Alibi Sensor Timing Waits for a real HVAC action transition so a safe correction lands near a normal thermostat event. The current Home Assistant hvac_action, the last action transition, recent wall touches, and room temperature. After repeated wall touches, while the room is still inside the safety band, it can hold a safe correction until hvac_action changes (for example idle to cooling or cooling to idle). A recent transition can also clear the hold. Direct comfort needs, upstairs heat, or a too-warm room bypass the wait immediately. Delays only safe corrections until a real HVAC action transition or the max hold expires. HvacActionAlibiEnabled HvacActionAlibiTriggerTouches HvacActionAlibiTransitionWindowSeconds HvacActionAlibiMaxHoldMinutes HvacActionAlibiSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>HVAC Alibi</h3></div><a class="mini-link" href="Algorithm-hvac-alibi.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Waits for a real HVAC action transition so a safe correction lands near a normal thermostat event.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The current Home Assistant hvac_action, the last action transition, recent wall touches, and room temperature.</p></section><section><h4>Decision</h4><p>After repeated wall touches, while the room is still inside the safety band, it can hold a safe correction until hvac_action changes (for example idle to cooling or cooling to idle). A recent transition can also clear the hold. Direct comfort needs, upstairs heat, or a too-warm room bypass the wait immediately.</p></section><section><h4>Effect</h4><p>Delays only safe corrections until a real HVAC action transition or the max hold expires.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>HvacActionAlibiEnabled</code></li><li><code>HvacActionAlibiTriggerTouches</code></li><li><code>HvacActionAlibiTransitionWindowSeconds</code></li><li><code>HvacActionAlibiMaxHoldMinutes</code></li><li><code>HvacActionAlibiSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="telemetry-alibi" data-search-item data-search-text="Telemetry Alibi Sensor Timing Waits for a normal Home Assistant/weather/usage update before a safe correction, so the nudge is not an isolated event. Recent wall touches, real Home Assistant reading beats, weather samples, Alectra Hui usage updates, and room temperature. After repeated wall touches, while the room is still inside the safety band, it starts a short quiet hold and then waits for the next enabled real telemetry signal. A too-warm room, direct comfort need, matching setpoint, disabled signal source, or max wait clears the hold. Delays only safe corrections until a normal house telemetry update can act as cover. TelemetryAlibiEnabled TelemetryAlibiTriggerTouches TelemetryAlibiMinimumHoldSeconds TelemetryAlibiMaxHoldMinutes TelemetryAlibiSafetyBandCelsius TelemetryAlibiUseWeather TelemetryAlibiUseSensorBeat TelemetryAlibiUsePeakPower">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Telemetry Alibi</h3></div><a class="mini-link" href="Algorithm-telemetry-alibi.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Waits for a normal Home Assistant/weather/usage update before a safe correction, so the nudge is not an isolated event.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Recent wall touches, real Home Assistant reading beats, weather samples, Alectra Hui usage updates, and room temperature.</p></section><section><h4>Decision</h4><p>After repeated wall touches, while the room is still inside the safety band, it starts a short quiet hold and then waits for the next enabled real telemetry signal. A too-warm room, direct comfort need, matching setpoint, disabled signal source, or max wait clears the hold.</p></section><section><h4>Effect</h4><p>Delays only safe corrections until a normal house telemetry update can act as cover.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>TelemetryAlibiEnabled</code></li><li><code>TelemetryAlibiTriggerTouches</code></li><li><code>TelemetryAlibiMinimumHoldSeconds</code></li><li><code>TelemetryAlibiMaxHoldMinutes</code></li><li><code>TelemetryAlibiSafetyBandCelsius</code></li><li><code>TelemetryAlibiUseWeather</code></li><li><code>TelemetryAlibiUseSensorBeat</code></li><li><code>TelemetryAlibiUsePeakPower</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="cooling-runway" data-search-item data-search-text="Cooling Runway Sensor Timing Gives the AC time to work after cooling starts before nudging the setpoint again. The Home Assistant hvac_action and how long ago cooling started, plus command pressure. When the action turns to cooling it records the start and holds for the minimum runway seconds plus extra pressure seconds. If cooling stops or the room gets too warm, it clears immediately. Holds the next safe nudge so a fresh cooling cycle is not interrupted. CoolingRunwayGuardEnabled CoolingRunwayMinimumSeconds CoolingRunwayPressureExtraSeconds CoolingRunwaySafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Cooling Runway</h3></div><a class="mini-link" href="Algorithm-cooling-runway.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Gives the AC time to work after cooling starts before nudging the setpoint again.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The Home Assistant hvac_action and how long ago cooling started, plus command pressure.</p></section><section><h4>Decision</h4><p>When the action turns to cooling it records the start and holds for the minimum runway seconds plus extra pressure seconds. If cooling stops or the room gets too warm, it clears immediately.</p></section><section><h4>Effect</h4><p>Holds the next safe nudge so a fresh cooling cycle is not interrupted.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>CoolingRunwayGuardEnabled</code></li><li><code>CoolingRunwayMinimumSeconds</code></li><li><code>CoolingRunwayPressureExtraSeconds</code></li><li><code>CoolingRunwaySafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="room-trend-guard" data-search-item data-search-text="Room Trend Guard Sensor Timing Keeps observing when the room is already stable or cooling after a wall change. Real room-temperature samples: the oldest versus newest inside the trend window. If the room is cooling (delta below the negative stable tolerance) it holds for the trend hold minutes so cooling can continue. Stable or warming rooms let the correction proceed; rooms above the grace band or safety override always proceed. Holds the correction while the room is trending cooler on its own. RoomTrendGuardEnabled RoomTrendWindowMinutes RoomTrendStableToleranceCelsius RoomTrendHoldMinutes">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Room Trend Guard</h3></div><a class="mini-link" href="Algorithm-room-trend-guard.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Keeps observing when the room is already stable or cooling after a wall change.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Real room-temperature samples: the oldest versus newest inside the trend window.</p></section><section><h4>Decision</h4><p>If the room is cooling (delta below the negative stable tolerance) it holds for the trend hold minutes so cooling can continue. Stable or warming rooms let the correction proceed; rooms above the grace band or safety override always proceed.</p></section><section><h4>Effect</h4><p>Holds the correction while the room is trending cooler on its own.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>RoomTrendGuardEnabled</code></li><li><code>RoomTrendWindowMinutes</code></li><li><code>RoomTrendStableToleranceCelsius</code></li><li><code>RoomTrendHoldMinutes</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="thermal-momentum" data-search-item data-search-text="Thermal Momentum Sensor Timing Waits when the room is already cooling fast enough to reach target soon on its own. Real room-temperature samples (to estimate cooling rate) and the active cooling action. It estimates the cooling rate and minutes-to-target. If the rate is at least the minimum C/hour and target is within the look-ahead minutes, it holds for the momentum hold minutes. A room near target or above the safety band proceeds. Holds the correction so existing momentum can finish the job. ThermalMomentumGuardEnabled ThermalMomentumMinimumCoolingRateCelsiusPerHour ThermalMomentumLookAheadMinutes ThermalMomentumHoldMinutes">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Thermal Momentum</h3></div><a class="mini-link" href="Algorithm-thermal-momentum.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Waits when the room is already cooling fast enough to reach target soon on its own.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Real room-temperature samples (to estimate cooling rate) and the active cooling action.</p></section><section><h4>Decision</h4><p>It estimates the cooling rate and minutes-to-target. If the rate is at least the minimum C/hour and target is within the look-ahead minutes, it holds for the momentum hold minutes. A room near target or above the safety band proceeds.</p></section><section><h4>Effect</h4><p>Holds the correction so existing momentum can finish the job.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>ThermalMomentumGuardEnabled</code></li><li><code>ThermalMomentumMinimumCoolingRateCelsiusPerHour</code></li><li><code>ThermalMomentumLookAheadMinutes</code></li><li><code>ThermalMomentumHoldMinutes</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="weather-drift-timing" data-search-item data-search-text="Weather Drift Timing Sensor Timing Times safe corrections to real outdoor-weather movement instead of firing immediately. Real outdoor-temperature samples (oldest versus newest) inside the weather window. After a wall touch, while the room is inside the weather safety band, stable or cooling outdoor temperatures let it hold for the weather hold minutes. Once the outdoor temperature genuinely warms by the minimum change, the hold clears so the correction lines up with real weather. A too-warm room clears it. Holds the safe correction until outdoor weather moves. WeatherDriftGuardEnabled WeatherDriftWindowMinutes WeatherDriftMinimumChangeCelsius WeatherDriftHoldMinutes WeatherDriftSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Weather Drift Timing</h3></div><a class="mini-link" href="Algorithm-weather-drift-timing.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Times safe corrections to real outdoor-weather movement instead of firing immediately.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Real outdoor-temperature samples (oldest versus newest) inside the weather window.</p></section><section><h4>Decision</h4><p>After a wall touch, while the room is inside the weather safety band, stable or cooling outdoor temperatures let it hold for the weather hold minutes. Once the outdoor temperature genuinely warms by the minimum change, the hold clears so the correction lines up with real weather. A too-warm room clears it.</p></section><section><h4>Effect</h4><p>Holds the safe correction until outdoor weather moves.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>WeatherDriftGuardEnabled</code></li><li><code>WeatherDriftWindowMinutes</code></li><li><code>WeatherDriftMinimumChangeCelsius</code></li><li><code>WeatherDriftHoldMinutes</code></li><li><code>WeatherDriftSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-sensor" id="wake-up-truce-door-sensor" data-search-item data-search-text="Wake-Up Truce (door sensor) Sensor Timing A bedroom door opening at dawn means that person is awake — adopt the warm truce temperature before they ever touch the thermostat. The configured bedroom door sensor (closed-to-open transitions) during the dawn window. When the door sensor flips from closed to open between the window start and end (default 04:00-09:00), the defender immediately adopts the truce temperature (default 25 C, never below my temp, capped at 27 C) for the hold period (default 2 h) using the same surrender machinery. The person wakes to a defender that already agrees with them. Adopts the truce target for the hold period and logs a friendly good-morning event. WakeTruceDoorSensorEntityId WakeTruceWindowStart WakeTruceWindowEnd WakeTruceTargetCelsius WakeTruceHoldMinutes">
+  <div class="logic-card-header"><div><span class="category-pill">Sensor</span><h3>Wake-Up Truce (door sensor)</h3></div><a class="mini-link" href="Algorithm-wake-up-truce-door-sensor.html">Full article</a></div>
+  <div class="motion-stage category-sensor" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">A bedroom door opening at dawn means that person is awake — adopt the warm truce temperature before they ever touch the thermostat.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The configured bedroom door sensor (closed-to-open transitions) during the dawn window.</p></section><section><h4>Decision</h4><p>When the door sensor flips from closed to open between the window start and end (default 04:00-09:00), the defender immediately adopts the truce temperature (default 25 C, never below my temp, capped at 27 C) for the hold period (default 2 h) using the same surrender machinery. The person wakes to a defender that already agrees with them.</p></section><section><h4>Effect</h4><p>Adopts the truce target for the hold period and logs a friendly good-morning event.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>WakeTruceDoorSensorEntityId</code></li><li><code>WakeTruceWindowStart</code></li><li><code>WakeTruceWindowEnd</code></li><li><code>WakeTruceTargetCelsius</code></li><li><code>WakeTruceHoldMinutes</code></li></ul><p><strong>Defense page:</strong> Guide-only reference; no live Defense card is projected.</p></details>
+</article></div>
+</section>
 
----
+<section class="logic-section category-system" data-search-root>
+  <div class="logic-section-head"><div><p class="article-kicker">Safety, Energy, and System</p><h2>Safety, Energy, and System</h2><p>Safety protocols, remote-change handling, energy policy, schedules, emergency controls, and owner-enforcement rules.</p></div><div class="section-search"><label for="search-system">Search system</label><div class="search-row"><input id="search-system" data-search-input type="search" placeholder="Search this family..."><button type="button" data-search-clear aria-label="Clear System search">Clear</button></div><p><span data-search-count>17</span> shown</p><p data-search-empty hidden>No algorithms in this family match that search.</p></div></div>
+  <div class="logic-list"><article class="logic-card category-system" id="website-debounce" data-search-item data-search-text="Website Debounce Safety, Energy, and System Blocks repeated website button taps for two minutes so the UI does not spam Home Assistant. The last website command name and time. The first click runs; later clicks within the debounce seconds show the remaining wait instead of resending. Emergency actions bypass the debounce and then start a fresh window. Rejects duplicate website actions until the window clears. (fixed at 120 seconds)">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Website Debounce</h3></div><a class="mini-link" href="Algorithm-website-debounce.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Blocks repeated website button taps for two minutes so the UI does not spam Home Assistant.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The last website command name and time.</p></section><section><h4>Decision</h4><p>The first click runs; later clicks within the debounce seconds show the remaining wait instead of resending. Emergency actions bypass the debounce and then start a fresh window.</p></section><section><h4>Effect</h4><p>Rejects duplicate website actions until the window clears.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>(fixed at 120 seconds)</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="super-defender" data-search-item data-search-text="Super Defender Safety, Energy, and System Detects repeated phone/Home Assistant thermostat changes and tightens correction timing without cutting thermostat Wi-Fi. Home Assistant context on climate state changes: user_id, parent_id, and context id. Changes with user_id count as Home Assistant user or phone changes. Changes with parent_id count as automation/script changes. Repeated remote-style changes inside the configured window arm Super Defender for the hold minutes. While active and the room still needs cooling, it can bypass subtle quiet waits. Wi-Fi blocking is intentionally manual only because cutting the thermostat off can also remove monitoring and recovery. Shows source attribution, arms a strict response window, and can bypass quiet timing while cooling is needed. SuperDefenderModeEnabled SuperDefenderRemoteChangeThreshold SuperDefenderWindowMinutes SuperDefenderHoldMinutes SuperDefenderSafetyBandCelsius SuperDefenderBypassQuietTiming">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Super Defender</h3></div><a class="mini-link" href="Algorithm-super-defender.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Detects repeated phone/Home Assistant thermostat changes and tightens correction timing without cutting thermostat Wi-Fi.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Home Assistant context on climate state changes: user_id, parent_id, and context id.</p></section><section><h4>Decision</h4><p>Changes with user_id count as Home Assistant user or phone changes. Changes with parent_id count as automation/script changes. Repeated remote-style changes inside the configured window arm Super Defender for the hold minutes. While active and the room still needs cooling, it can bypass subtle quiet waits. Wi-Fi blocking is intentionally manual only because cutting the thermostat off can also remove monitoring and recovery.</p></section><section><h4>Effect</h4><p>Shows source attribution, arms a strict response window, and can bypass quiet timing while cooling is needed.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>SuperDefenderModeEnabled</code></li><li><code>SuperDefenderRemoteChangeThreshold</code></li><li><code>SuperDefenderWindowMinutes</code></li><li><code>SuperDefenderHoldMinutes</code></li><li><code>SuperDefenderSafetyBandCelsius</code></li><li><code>SuperDefenderBypassQuietTiming</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="rival-schedule-watch" data-search-item data-search-text="Rival Schedule Watch Safety, Energy, and System Knows the AC vendor app&#x27;s own temperature schedule (SLEEP / DEEP SLEEP / GOOD MORNING) and defends my temp when a scheduled block pushes the wall warmer while everyone sleeps. The configured rival AC-app schedule blocks (start time + low/high setpoints per weekday), the live wall setpoint, Home Assistant change context, and the local clock. The blocks are configuration (appsettings/environment), never code. A setpoint change that is not from a Home Assistant user and lands on the active block&#x27;s low/high number is attributed to the AC app schedule instead of a human wall touch — so it starts no cooldown, no comfort grace, no touch counters, no peace offering, and teaches nothing to comfort memory/compromise (otherwise the schedule would train the defender to like the rival&#x27;s warm blocks). While the wall sits at a scheduled setpoint above my temp and the room is warm, quiet waits are bypassed: a schedule is a machine running while the household sleeps, so nobody is watching the correction. My temp is never changed by the rival schedule, and extreme heat still defers to normal comfort safety. The vendor app&#x27;s Fan schedule tab is reserved in configuration but not enforced yet. Attributes schedule pushes in the audit log, announces block boundaries as events, and answers a scheduled warm push back toward my temp without human-style delays. RivalScheduleWatchEnabled RivalScheduleSetpointToleranceCelsius RivalScheduleBypassQuietTiming RivalScheduleSafetyBandCelsius RivalScheduleBlocks RivalFanScheduleBlocks">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Rival Schedule Watch</h3></div><a class="mini-link" href="Algorithm-rival-schedule-watch.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Knows the AC vendor app&#x27;s own temperature schedule (SLEEP / DEEP SLEEP / GOOD MORNING) and defends my temp when a scheduled block pushes the wall warmer while everyone sleeps.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The configured rival AC-app schedule blocks (start time + low/high setpoints per weekday), the live wall setpoint, Home Assistant change context, and the local clock.</p></section><section><h4>Decision</h4><p>The blocks are configuration (appsettings/environment), never code. A setpoint change that is not from a Home Assistant user and lands on the active block&#x27;s low/high number is attributed to the AC app schedule instead of a human wall touch — so it starts no cooldown, no comfort grace, no touch counters, no peace offering, and teaches nothing to comfort memory/compromise (otherwise the schedule would train the defender to like the rival&#x27;s warm blocks). While the wall sits at a scheduled setpoint above my temp and the room is warm, quiet waits are bypassed: a schedule is a machine running while the household sleeps, so nobody is watching the correction. My temp is never changed by the rival schedule, and extreme heat still defers to normal comfort safety. The vendor app&#x27;s Fan schedule tab is reserved in configuration but not enforced yet.</p></section><section><h4>Effect</h4><p>Attributes schedule pushes in the audit log, announces block boundaries as events, and answers a scheduled warm push back toward my temp without human-style delays.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>RivalScheduleWatchEnabled</code></li><li><code>RivalScheduleSetpointToleranceCelsius</code></li><li><code>RivalScheduleBypassQuietTiming</code></li><li><code>RivalScheduleSafetyBandCelsius</code></li><li><code>RivalScheduleBlocks</code></li><li><code>RivalFanScheduleBlocks</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="cool-outdoor-shutdown-open-window-armistice" data-search-item data-search-text="Cool-Outdoor Shutdown (Open-Window Armistice) Safety, Energy, and System When it is genuinely cool outside and the forecast says it stays cool, the defender turns the AC fully off — and turns it back on by itself when the weather or the room demands it. The real outdoor temperature, the hourly Home Assistant forecast over the gate hours, the room temperature, the thermostat mode, and the minimum-off dwell clock. Below the shutdown threshold, and only when the forecast peak over the gate hours stays under threshold+margin (no off/on flapping before a hot afternoon), it sends ONE off command per cool episode and stands guard. It restores cool mode on its own once outdoor warms past threshold+margin (after the minimum off dwell) — or immediately, dwell ignored, if the room crosses the safety band. Someone turning the AC back on mid-episode wins for the rest of that episode; an AC already off by hand is adopted without a command. Unknown outdoor or a missing forecast means it does nothing new; safety bands always win. While it holds the AC off, the quiet minutes bank food rations. Sends climate.set_hvac_mode = off once per cool episode, then a tagged automatic restore. CoolOutdoorShutdownEnabled CoolOutdoorShutdownBelowCelsius CoolOutdoorRestoreMarginCelsius CoolOutdoorMinimumOffMinutes CoolOutdoorForecastGateEnabled CoolOutdoorForecastGateHours ForecastRefreshMinutes">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Cool-Outdoor Shutdown (Open-Window Armistice)</h3></div><a class="mini-link" href="Algorithm-cool-outdoor-shutdown-open-window-armistice.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">When it is genuinely cool outside and the forecast says it stays cool, the defender turns the AC fully off — and turns it back on by itself when the weather or the room demands it.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The real outdoor temperature, the hourly Home Assistant forecast over the gate hours, the room temperature, the thermostat mode, and the minimum-off dwell clock.</p></section><section><h4>Decision</h4><p>Below the shutdown threshold, and only when the forecast peak over the gate hours stays under threshold+margin (no off/on flapping before a hot afternoon), it sends ONE off command per cool episode and stands guard. It restores cool mode on its own once outdoor warms past threshold+margin (after the minimum off dwell) — or immediately, dwell ignored, if the room crosses the safety band. Someone turning the AC back on mid-episode wins for the rest of that episode; an AC already off by hand is adopted without a command. Unknown outdoor or a missing forecast means it does nothing new; safety bands always win. While it holds the AC off, the quiet minutes bank food rations.</p></section><section><h4>Effect</h4><p>Sends climate.set_hvac_mode = off once per cool episode, then a tagged automatic restore.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>CoolOutdoorShutdownEnabled</code></li><li><code>CoolOutdoorShutdownBelowCelsius</code></li><li><code>CoolOutdoorRestoreMarginCelsius</code></li><li><code>CoolOutdoorMinimumOffMinutes</code></li><li><code>CoolOutdoorForecastGateEnabled</code></li><li><code>CoolOutdoorForecastGateHours</code></li><li><code>ForecastRefreshMinutes</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="siesta-watch-mess-hall" data-search-item data-search-text="Siesta Watch (mess hall) Safety, Energy, and System Lets the whole guard force nap on command; while they sleep the AC eases off and the money it would have spent is banked as food rations. The siesta timer, the room temperature against the wake band, the budget safety maximum, and the thermostat mode. A siesta starts from the dashboard (1h/2h/4h) and parks the thermostat — or turns it off — exactly once; a human changing it back mid-nap is respected, the accrual just pauses while the unit cools. The guards wake on the timer, immediately when the room passes target + wake band or the budget safety maximum, on cancel, or when an emergency fires or the master switch pauses the defender. Rations already earned are always kept. Holds the whole correction pipeline while the nap timer runs; sends one park/off command at the start. SiestaEnabled SiestaThermostatAction SiestaWakeBandCelsius SiestaMaxMinutes">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Siesta Watch (mess hall)</h3></div><a class="mini-link" href="Algorithm-siesta-watch-mess-hall.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Lets the whole guard force nap on command; while they sleep the AC eases off and the money it would have spent is banked as food rations.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The siesta timer, the room temperature against the wake band, the budget safety maximum, and the thermostat mode.</p></section><section><h4>Decision</h4><p>A siesta starts from the dashboard (1h/2h/4h) and parks the thermostat — or turns it off — exactly once; a human changing it back mid-nap is respected, the accrual just pauses while the unit cools. The guards wake on the timer, immediately when the room passes target + wake band or the budget safety maximum, on cancel, or when an emergency fires or the master switch pauses the defender. Rations already earned are always kept.</p></section><section><h4>Effect</h4><p>Holds the whole correction pipeline while the nap timer runs; sends one park/off command at the start.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>SiestaEnabled</code></li><li><code>SiestaThermostatAction</code></li><li><code>SiestaWakeBandCelsius</code></li><li><code>SiestaMaxMinutes</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="field-kitchen-food-rations" data-search-item data-search-text="Field Kitchen (food rations) Safety, Energy, and System Banks unspent AC dollars during siestas and cool-outdoor shutdowns, and spends them on forecast-hot days so the monthly budget eases exactly when cooling matters most. The pantry balance and cap, the trailing-week compressor duty cycle, the Alectra TOU rate in force, the hourly forecast over the release lookahead, and the AC&#x27;s real per-slice estimated cost. While the guards nap, every quiet minute banks the money the AC would probably have spent — its usual share of run-time from the last week × its assumed power draw × the Alectra rate right now. On a forecast-hot day the pantry pays the AC&#x27;s bill: every dollar the AC actually spends during the hot window comes out of the food balance instead of counting against the monthly budget (up to the per-day cap, only while over pace). A slice where the compressor actually cools earns nothing, and no usage history means no accrual — the pantry never invents savings. Rations can also summon the WinForge reactor&#x27;s AI operator — one ration per hour. Adjusts the monthly budget&#x27;s over/under bookkeeping; moves no real money and sends no thermostat commands. FoodRationsEnabled FoodBalanceMaxCad FoodReleaseHotThresholdCelsius FoodReleaseLookaheadHours FoodReleaseMaxPerDayCad ReactorPowerEnabled FoodRationSizeCad">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Field Kitchen (food rations)</h3></div><a class="mini-link" href="Algorithm-field-kitchen-food-rations.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Banks unspent AC dollars during siestas and cool-outdoor shutdowns, and spends them on forecast-hot days so the monthly budget eases exactly when cooling matters most.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The pantry balance and cap, the trailing-week compressor duty cycle, the Alectra TOU rate in force, the hourly forecast over the release lookahead, and the AC&#x27;s real per-slice estimated cost.</p></section><section><h4>Decision</h4><p>While the guards nap, every quiet minute banks the money the AC would probably have spent — its usual share of run-time from the last week × its assumed power draw × the Alectra rate right now. On a forecast-hot day the pantry pays the AC&#x27;s bill: every dollar the AC actually spends during the hot window comes out of the food balance instead of counting against the monthly budget (up to the per-day cap, only while over pace). A slice where the compressor actually cools earns nothing, and no usage history means no accrual — the pantry never invents savings. Rations can also summon the WinForge reactor&#x27;s AI operator — one ration per hour.</p></section><section><h4>Effect</h4><p>Adjusts the monthly budget&#x27;s over/under bookkeeping; moves no real money and sends no thermostat commands.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>FoodRationsEnabled</code></li><li><code>FoodBalanceMaxCad</code></li><li><code>FoodReleaseHotThresholdCelsius</code></li><li><code>FoodReleaseLookaheadHours</code></li><li><code>FoodReleaseMaxPerDayCad</code></li><li><code>ReactorPowerEnabled</code></li><li><code>FoodRationSizeCad</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="desired-state-enforcer" data-search-item data-search-text="Desired-State Enforcer Safety, Energy, and System Makes the owner&#x27;s chosen AC state win automatically: if someone else turns the unit off or moves the setpoint, it restores the exact desired state and keeps it there. Home Assistant HVAC mode, the live setpoint vs the owner&#x27;s target, context.user_id attribution, recent override/assert counts, and the learned interference probability. When a change is attributed to someone other than the owner (or has no owner user_id) it debounces, then either lets the human-like stealth pipeline ease the setpoint back (smart-stealth mode) or snaps to the exact target (hard mode). Cooldown, device-reject backoff, and a rate limit stop it thrashing; repeated overrides escalate it to firm mode and an optional notification. Owner changes are respected. It clamps to the device min/max and never acts while Home Assistant is unreachable. Restores the desired mode/setpoint, escalates on repeated interference, and notifies — using the trained interference/cadence models to pace itself. EnforcerModeEnabled EnforcerTargetTemperatureCelsius EnforcerEnforceMode EnforcerEnforceSetpoint EnforcerStealthShaping EnforcerRespectOwner EnforcerOwnerUserIds EnforcerDebounceSeconds EnforcerCooldownSeconds EnforcerRateWindowMinutes EnforcerMaxAssertsPerWindow EnforcerEscalateAfterOverrides EnforcerBackoffBaseSeconds EnforcerBackoffMaxSeconds EnforcerScheduleEnabled EnforcerStartTime EnforcerEndTime EnforcerRequirePresence EnforcerNotifyEnabled EnforcerUseLearning">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Desired-State Enforcer</h3></div><a class="mini-link" href="Algorithm-desired-state-enforcer.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Makes the owner&#x27;s chosen AC state win automatically: if someone else turns the unit off or moves the setpoint, it restores the exact desired state and keeps it there.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Home Assistant HVAC mode, the live setpoint vs the owner&#x27;s target, context.user_id attribution, recent override/assert counts, and the learned interference probability.</p></section><section><h4>Decision</h4><p>When a change is attributed to someone other than the owner (or has no owner user_id) it debounces, then either lets the human-like stealth pipeline ease the setpoint back (smart-stealth mode) or snaps to the exact target (hard mode). Cooldown, device-reject backoff, and a rate limit stop it thrashing; repeated overrides escalate it to firm mode and an optional notification. Owner changes are respected. It clamps to the device min/max and never acts while Home Assistant is unreachable.</p></section><section><h4>Effect</h4><p>Restores the desired mode/setpoint, escalates on repeated interference, and notifies — using the trained interference/cadence models to pace itself.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>EnforcerModeEnabled</code></li><li><code>EnforcerTargetTemperatureCelsius</code></li><li><code>EnforcerEnforceMode</code></li><li><code>EnforcerEnforceSetpoint</code></li><li><code>EnforcerStealthShaping</code></li><li><code>EnforcerRespectOwner</code></li><li><code>EnforcerOwnerUserIds</code></li><li><code>EnforcerDebounceSeconds</code></li><li><code>EnforcerCooldownSeconds</code></li><li><code>EnforcerRateWindowMinutes</code></li><li><code>EnforcerMaxAssertsPerWindow</code></li><li><code>EnforcerEscalateAfterOverrides</code></li><li><code>EnforcerBackoffBaseSeconds</code></li><li><code>EnforcerBackoffMaxSeconds</code></li><li><code>EnforcerScheduleEnabled</code></li><li><code>EnforcerStartTime</code></li><li><code>EnforcerEndTime</code></li><li><code>EnforcerRequirePresence</code></li><li><code>EnforcerNotifyEnabled</code></li><li><code>EnforcerUseLearning</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="remote-settling-guard" data-search-item data-search-text="Remote Settling Guard Safety, Energy, and System Gives repeated phone/Home Assistant or automation thermostat changes a quiet settling window before a safe answer-back. Home Assistant change source attribution, recent remote-style change count, room temperature, and the expected setpoint. When Home Assistant context shows repeated user/phone or automation changes inside the configured window, and the room is still inside the safety band, it holds only safe corrections for the quiet hold minutes. A too-warm room, cooler intent, matching setpoint, disabled setting, or expired hold releases it immediately. Delays only safe corrections after remote-style thermostat changes so the response does not look instant. RemoteSettlingGuardEnabled RemoteSettlingTriggerChanges RemoteSettlingWindowMinutes RemoteSettlingHoldMinutes RemoteSettlingSafetyBandCelsius">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Remote Settling Guard</h3></div><a class="mini-link" href="Algorithm-remote-settling-guard.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Gives repeated phone/Home Assistant or automation thermostat changes a quiet settling window before a safe answer-back.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Home Assistant change source attribution, recent remote-style change count, room temperature, and the expected setpoint.</p></section><section><h4>Decision</h4><p>When Home Assistant context shows repeated user/phone or automation changes inside the configured window, and the room is still inside the safety band, it holds only safe corrections for the quiet hold minutes. A too-warm room, cooler intent, matching setpoint, disabled setting, or expired hold releases it immediately.</p></section><section><h4>Effect</h4><p>Delays only safe corrections after remote-style thermostat changes so the response does not look instant.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>RemoteSettlingGuardEnabled</code></li><li><code>RemoteSettlingTriggerChanges</code></li><li><code>RemoteSettlingWindowMinutes</code></li><li><code>RemoteSettlingHoldMinutes</code></li><li><code>RemoteSettlingSafetyBandCelsius</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="alectra-peak-power-saver" data-search-item data-search-text="Alectra Peak Power Saver Safety, Energy, and System Makes the defender more chill and resource-saving when Alectra Hui reports on-peak, high price, or high power use. Alectra Hui current TOU period, current price, current power, and current plan sensors from Home Assistant. When enabled, On-peak TOU, price above the c/kWh threshold, or current power above the kW threshold arms a short saver window. During that window it holds only safe cooling commands that would demand more cooling, and it can set the configured fan saver mode if the room is still inside the safety band. If the room or upstairs gets too hot, or the command would save energy by warming the setpoint, it steps aside. Holds safe cooling during expensive/high-load periods and prefers the saver fan mode. PeakPowerSaverEnabled PeakPowerSaverOnPeakEnabled PeakPowerSaverHighPowerEnabled PeakPowerSaverPowerThresholdKilowatts PeakPowerSaverPriceThresholdCentsPerKwh PeakPowerSaverHoldMinutes PeakPowerSaverSafetyBandCelsius PeakPowerSaverFanSaverEnabled PeakPowerSaverFanMode">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Alectra Peak Power Saver</h3></div><a class="mini-link" href="Algorithm-alectra-peak-power-saver.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Makes the defender more chill and resource-saving when Alectra Hui reports on-peak, high price, or high power use.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Alectra Hui current TOU period, current price, current power, and current plan sensors from Home Assistant.</p></section><section><h4>Decision</h4><p>When enabled, On-peak TOU, price above the c/kWh threshold, or current power above the kW threshold arms a short saver window. During that window it holds only safe cooling commands that would demand more cooling, and it can set the configured fan saver mode if the room is still inside the safety band. If the room or upstairs gets too hot, or the command would save energy by warming the setpoint, it steps aside.</p></section><section><h4>Effect</h4><p>Holds safe cooling during expensive/high-load periods and prefers the saver fan mode.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>PeakPowerSaverEnabled</code></li><li><code>PeakPowerSaverOnPeakEnabled</code></li><li><code>PeakPowerSaverHighPowerEnabled</code></li><li><code>PeakPowerSaverPowerThresholdKilowatts</code></li><li><code>PeakPowerSaverPriceThresholdCentsPerKwh</code></li><li><code>PeakPowerSaverHoldMinutes</code></li><li><code>PeakPowerSaverSafetyBandCelsius</code></li><li><code>PeakPowerSaverFanSaverEnabled</code></li><li><code>PeakPowerSaverFanMode</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="front-door-guard-post" data-search-item data-search-text="Front-door Guard Post Safety, Energy, and System Pauses the defender and can turn the thermostat off when a real front-door person detector trips. Configured or auto-discovered Home Assistant front-door person sensors. The worker reads the configured entities, or auto-discovers likely front-door/porch/entry person sensors. If any detector reports a person, the defender pauses immediately, holds the guard window, and sends thermostat OFF if that setting is enabled. The source is recorded as the front-door guard post so it does not look like a wall touch. Runs the kill switch, hides the live boards while paused, and records the source. FrontDoorKillSwitchEnabled FrontDoorPersonEntityIds FrontDoorKillSwitchHoldMinutes FrontDoorKillSwitchRefreshSeconds FrontDoorKillSwitchTurnsThermostatOff">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Front-door Guard Post</h3></div><a class="mini-link" href="Algorithm-front-door-guard-post.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Pauses the defender and can turn the thermostat off when a real front-door person detector trips.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Configured or auto-discovered Home Assistant front-door person sensors.</p></section><section><h4>Decision</h4><p>The worker reads the configured entities, or auto-discovers likely front-door/porch/entry person sensors. If any detector reports a person, the defender pauses immediately, holds the guard window, and sends thermostat OFF if that setting is enabled. The source is recorded as the front-door guard post so it does not look like a wall touch.</p></section><section><h4>Effect</h4><p>Runs the kill switch, hides the live boards while paused, and records the source.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>FrontDoorKillSwitchEnabled</code></li><li><code>FrontDoorPersonEntityIds</code></li><li><code>FrontDoorKillSwitchHoldMinutes</code></li><li><code>FrontDoorKillSwitchRefreshSeconds</code></li><li><code>FrontDoorKillSwitchTurnsThermostatOff</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="emergency-protocols" data-search-item data-search-text="Emergency Protocols Safety, Energy, and System One-tap stand-down modes for too-cold, someone-upset, and suspicion situations. The chosen protocol and its remaining window. Too cold (30 min) pauses the defender and turns the thermostat off. Someone upset (45 min) and Suspicion quiet (90 min) keep reading the thermostat 24/7 but send no corrective commands until the window ends. Emergency actions bypass the website debounce. Suppresses corrective commands for the protocol window. (run from the Controls page)">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Emergency Protocols</h3></div><a class="mini-link" href="Algorithm-emergency-protocols.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">One-tap stand-down modes for too-cold, someone-upset, and suspicion situations.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The chosen protocol and its remaining window.</p></section><section><h4>Decision</h4><p>Too cold (30 min) pauses the defender and turns the thermostat off. Someone upset (45 min) and Suspicion quiet (90 min) keep reading the thermostat 24/7 but send no corrective commands until the window ends. Emergency actions bypass the website debounce.</p></section><section><h4>Effect</h4><p>Suppresses corrective commands for the protocol window.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>(run from the Controls page)</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="cooling-failure-watch" data-search-item data-search-text="Cooling Failure Watch Safety, Energy, and System Raises a repeating mega-alert when cool mode is demanded but the AC is not really cooling, escalates to a full-site OMEGA alert when a rising room confirms it, then turns the AC off until the room warms 0.5 C. Real Home Assistant data only: hvac_mode, hvac_action, the setpoint, and room-temperature history. MEGA: it alerts if the entity is in cool, the room is clearly above the setpoint, and the action stays idle for about 30 minutes (possible breaker/equipment), or if the action says cooling but the room does not drop over the retained window (possible compressor/airflow). OMEGA: while the idle/breaker mega alert is up, if the room has also risen at least 0.4 C over the last 5 minutes — what a dead breaker looks like — it escalates to a full-site OMEGA alert. Requiring a real, sustained rise (and only on the idle branch) keeps false positives down. Alerts repeat about once a minute. Surfaces a red alert, an event log entry, and (on OMEGA) a site-wide overlay. It also turns the AC fully off (a failing unit is only wasting power) and holds it off until the real room temperature rises 0.5 C above the reading captured at shutdown, then restores cool. A human turning the AC back on is always respected. CoolingFailureWatchEnabled">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Cooling Failure Watch</h3></div><a class="mini-link" href="Algorithm-cooling-failure-watch.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Raises a repeating mega-alert when cool mode is demanded but the AC is not really cooling, escalates to a full-site OMEGA alert when a rising room confirms it, then turns the AC off until the room warms 0.5 C.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Real Home Assistant data only: hvac_mode, hvac_action, the setpoint, and room-temperature history.</p></section><section><h4>Decision</h4><p>MEGA: it alerts if the entity is in cool, the room is clearly above the setpoint, and the action stays idle for about 30 minutes (possible breaker/equipment), or if the action says cooling but the room does not drop over the retained window (possible compressor/airflow). OMEGA: while the idle/breaker mega alert is up, if the room has also risen at least 0.4 C over the last 5 minutes — what a dead breaker looks like — it escalates to a full-site OMEGA alert. Requiring a real, sustained rise (and only on the idle branch) keeps false positives down. Alerts repeat about once a minute.</p></section><section><h4>Effect</h4><p>Surfaces a red alert, an event log entry, and (on OMEGA) a site-wide overlay. It also turns the AC fully off (a failing unit is only wasting power) and holds it off until the real room temperature rises 0.5 C above the reading captured at shutdown, then restores cool. A human turning the AC back on is always respected.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>CoolingFailureWatchEnabled</code></li></ul><p><strong>Defense page:</strong> Shown as a live guard card with current evidence.</p></details>
+</article><article class="logic-card category-system" id="dynamic-cooldown" data-search-item data-search-text="Dynamic Cooldown Safety, Energy, and System A frequency-based quiet period after a manual thermostat change. How many wall touches happened recently inside the touch-frequency window. cooldown = min(MaxCooldownSeconds, BaseCooldownSeconds × recentTouchCount) + a small random quiet delay. More repeated changes mean longer cooldowns. Holds the next correction until the cooldown elapses. BaseCooldownSeconds MaxCooldownSeconds TouchFrequencyWindowMinutes">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Dynamic Cooldown</h3></div><a class="mini-link" href="Algorithm-dynamic-cooldown.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">A frequency-based quiet period after a manual thermostat change.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>How many wall touches happened recently inside the touch-frequency window.</p></section><section><h4>Decision</h4><p>cooldown = min(MaxCooldownSeconds, BaseCooldownSeconds × recentTouchCount) + a small random quiet delay. More repeated changes mean longer cooldowns.</p></section><section><h4>Effect</h4><p>Holds the next correction until the cooldown elapses.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>BaseCooldownSeconds</code></li><li><code>MaxCooldownSeconds</code></li><li><code>TouchFrequencyWindowMinutes</code></li></ul><p><strong>Defense page:</strong> Guide-only reference; no live Defense card is projected.</p></details>
+</article><article class="logic-card category-system" id="fan-energy-saver" data-search-item data-search-text="Fan Energy Saver Safety, Energy, and System Optionally moves the fan to an energy-saving mode when the room is near target. Room temperature versus target and the thermostat&#x27;s available fan modes. When enabled and the room is within the threshold of target, if the configured fan mode exists on the device it calls climate.set_fan_mode. Sets the fan to the saver mode; otherwise leaves the fan alone. FanEnergySaverEnabled FanEnergySaverThresholdCelsius FanEnergySaverMode">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Fan Energy Saver</h3></div><a class="mini-link" href="Algorithm-fan-energy-saver.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Optionally moves the fan to an energy-saving mode when the room is near target.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Room temperature versus target and the thermostat&#x27;s available fan modes.</p></section><section><h4>Decision</h4><p>When enabled and the room is within the threshold of target, if the configured fan mode exists on the device it calls climate.set_fan_mode.</p></section><section><h4>Effect</h4><p>Sets the fan to the saver mode; otherwise leaves the fan alone.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>FanEnergySaverEnabled</code></li><li><code>FanEnergySaverThresholdCelsius</code></li><li><code>FanEnergySaverMode</code></li></ul><p><strong>Defense page:</strong> Guide-only reference; no live Defense card is projected.</p></details>
+</article><article class="logic-card category-system" id="upstairs-comfort-guard" data-search-item data-search-text="Upstairs Comfort Guard Safety, Energy, and System Prioritizes cooling when upstairs rooms get hot while someone is home. The hottest configured (or auto-discovered) upstairs temperature sensor and optional presence entities. If the hottest upstairs room exceeds the comfort maximum, it lowers the target toward the comfort target and adds the cooling boost. Severe upstairs heat bypasses cooldown so comfort wins. When presence is required and nobody is detected, it assumes home rather than under-cooling. Lowers the effective target and can bypass quiet timing. UpstairsComfortEnabled UpstairsTemperatureEntityIds UpstairsMaxComfortCelsius UpstairsComfortTargetCelsius UpstairsComfortBoostCelsius HomePresenceRequired PresenceEntityIds">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Upstairs Comfort Guard</h3></div><a class="mini-link" href="Algorithm-upstairs-comfort-guard.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Prioritizes cooling when upstairs rooms get hot while someone is home.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The hottest configured (or auto-discovered) upstairs temperature sensor and optional presence entities.</p></section><section><h4>Decision</h4><p>If the hottest upstairs room exceeds the comfort maximum, it lowers the target toward the comfort target and adds the cooling boost. Severe upstairs heat bypasses cooldown so comfort wins. When presence is required and nobody is detected, it assumes home rather than under-cooling.</p></section><section><h4>Effect</h4><p>Lowers the effective target and can bypass quiet timing.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>UpstairsComfortEnabled</code></li><li><code>UpstairsTemperatureEntityIds</code></li><li><code>UpstairsMaxComfortCelsius</code></li><li><code>UpstairsComfortTargetCelsius</code></li><li><code>UpstairsComfortBoostCelsius</code></li><li><code>HomePresenceRequired</code></li><li><code>PresenceEntityIds</code></li></ul><p><strong>Defense page:</strong> Guide-only reference; no live Defense card is projected.</p></details>
+</article><article class="logic-card category-system" id="schedule-and-weather-rules" data-search-item data-search-text="Schedule &amp; Weather Rules Safety, Energy, and System Time-of-day target rules, each gated by a weather activation condition. The active schedule entry for the current day/time and the weather rule. When the custom schedule is on, the matching rule supplies the target. Weather rules (always, room-above-outdoor, room-below-outdoor, outdoor-above-target, outdoor-below-target) decide whether corrective action is allowed. The defender still reads Home Assistant 24/7 even when a rule blocks correction. Sets the target and whether corrective action runs. ScheduleEnabled WeatherActivationMode (per-rule Days / Start / End / Target / Weather)">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Schedule &amp; Weather Rules</h3></div><a class="mini-link" href="Algorithm-schedule-and-weather-rules.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">Time-of-day target rules, each gated by a weather activation condition.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>The active schedule entry for the current day/time and the weather rule.</p></section><section><h4>Decision</h4><p>When the custom schedule is on, the matching rule supplies the target. Weather rules (always, room-above-outdoor, room-below-outdoor, outdoor-above-target, outdoor-below-target) decide whether corrective action is allowed. The defender still reads Home Assistant 24/7 even when a rule blocks correction.</p></section><section><h4>Effect</h4><p>Sets the target and whether corrective action runs.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>ScheduleEnabled</code></li><li><code>WeatherActivationMode</code></li><li><code>(per-rule Days / Start / End / Target / Weather)</code></li></ul><p><strong>Defense page:</strong> Guide-only reference; no live Defense card is projected.</p></details>
+</article><article class="logic-card category-system" id="tamper-truce" data-search-item data-search-text="Tamper Truce Safety, Energy, and System If the thermostat vanishes right after a correction exchange, assume a frustrated person detached it — stand down 2 hours instead of escalating. Home Assistant reachability, the last defender command time, and recent human touches. A thermostat that becomes unreachable within 20 minutes of a defender command AND 45 minutes of a human touch looks exactly like someone pulling the unit off the wall (it really happened, twice). This is the ULTRA OMEGA ALERT — one tier above MEGA (not cooling) and OMEGA (breaker off). Instead of fighting harder, the defender enters a 2-hour emergency quiet named &#x27;Tamper truce&#x27; and says why. Normal outages without a preceding exchange are unaffected. Raises the ULTRA OMEGA ALERT, activates a 2-hour stand-down, and records the tamper-truce event. (always on — fixed: 20 min command window / 45 min touch window / 2 h truce)">
+  <div class="logic-card-header"><div><span class="category-pill">System</span><h3>Tamper Truce</h3></div><a class="mini-link" href="Algorithm-tamper-truce.html">Full article</a></div>
+  <div class="motion-stage category-system" aria-hidden="true">
+  <div class="motion-track motion-track-a"></div>
+  <div class="motion-track motion-track-b"></div>
+  <div class="motion-node motion-node-input"><span>1</span><strong>Watch</strong></div>
+  <div class="motion-node motion-node-decision"><span>2</span><strong>Decide</strong></div>
+  <div class="motion-node motion-node-output"><span>3</span><strong>Act</strong></div>
+  <div class="thermostat-mini"><i></i></div>
+</div>
+  <p class="logic-summary">If the thermostat vanishes right after a correction exchange, assume a frustrated person detached it — stand down 2 hours instead of escalating.</p>
+  <div class="logic-columns"><section><h4>Watches</h4><p>Home Assistant reachability, the last defender command time, and recent human touches.</p></section><section><h4>Decision</h4><p>A thermostat that becomes unreachable within 20 minutes of a defender command AND 45 minutes of a human touch looks exactly like someone pulling the unit off the wall (it really happened, twice). This is the ULTRA OMEGA ALERT — one tier above MEGA (not cooling) and OMEGA (breaker off). Instead of fighting harder, the defender enters a 2-hour emergency quiet named &#x27;Tamper truce&#x27; and says why. Normal outages without a preceding exchange are unaffected.</p></section><section><h4>Effect</h4><p>Raises the ULTRA OMEGA ALERT, activates a 2-hour stand-down, and records the tamper-truce event.</p></section></div>
+  <details class="settings-details"><summary>Settings and live surface</summary><ul class="settings-list"><li><code>(always on — fixed: 20 min command window / 45 min touch window / 2 h truce)</code></li></ul><p><strong>Defense page:</strong> Guide-only reference; no live Defense card is projected.</p></details>
+</article></div>
+</section>
 
-## Core cooling
+## Source files
 
-### Comfort Sync (quiet recovery)
-Spaces out and softens corrections so a fixed thermostat does not look like an instant robot.
-- **Watches:** recent wall-touch count, time since the last defender command, how far the room is above target.
-- **Logic:** after a manual change it waits a random delay, may hold one or two extra short beats, enforces a minimum gap between commands, and shrinks the nudge size. Repeated touches raise the quiet level (Calm → Softest), lengthening waits and shrinking steps. A room over the safety override skips all of it.
-- **Settings:** `NaturalRecoveryEnabled`, `AdaptiveQuietnessEnabled`, `MinimumNaturalDelaySeconds`, `MaximumNaturalDelaySeconds`, `NaturalStepCelsius`, `NaturalHoldChancePercent`, `MinimumCommandGapSeconds`, `NaturalSafetyOverrideCelsius`.
-
-### Cool Mode Restore
-Puts the thermostat back into cool mode whenever someone switches it to heat/off/auto.
-- **Watches:** the Home Assistant HVAC mode, plus how far the room is above target.
-- **Logic:** if the mode is not `cool` it normally waits a short random delay (between `Minimum` and `Maximum` seconds) while the room stays within `target + comfort band`. A warmer room, severe upstairs heat, or a crossed safety override restores `cool` immediately.
-- **Settings:** `CoolModeRestoreDelayEnabled`, `CoolModeRestoreMinimumDelaySeconds`, `CoolModeRestoreMaximumDelaySeconds`, `CoolModeRestoreComfortBandCelsius`.
-
----
-
-## Wall-touch response
-
-### Natural Walkback
-Walks a safe-band correction toward target in small, slightly random steps instead of one obvious jump.
-- **Watches:** recent wall-touch pressure (a 0–100 suspicion score) and the distance from the defender target.
-- **Logic:** once touches reach the trigger and the room is inside the walkback safety band, each command moves only about the walkback step (plus a tiny jitter). A warm room that needs direct cooling skips walkback and still commands 1 °C below room temperature.
-- **Settings:** `NaturalWalkbackEnabled`, `NaturalWalkbackTriggerTouches`, `NaturalWalkbackStepCelsius`, `NaturalWalkbackJitterCelsius`, `NaturalWalkbackSafetyBandCelsius`.
-
-### Touch Signature
-Matches safe nudges to the size of steps people actually use on the wall thermostat.
-- **Watches:** recent real wall steps (their median size) inside the retention window.
-- **Logic:** with enough recent steps and a room inside the signature safety band, it learns the median wall-step size, clamps it between the min and max signature step, and caps safe nudges to that size.
-- **Settings:** `TouchSignatureEnabled`, `TouchSignatureTriggerTouches`, `TouchSignatureRetentionMinutes`, `TouchSignatureMinimumStepCelsius`, `TouchSignatureMaximumStepCelsius`, `TouchSignatureSafetyBandCelsius`.
-
-### Human Nudge
-Makes the final safe setpoint command look like a normal thermostat step instead of a precise bot number.
-- **Watches:** recent wall touches, the candidate defender command, the current thermostat setpoint, and room temperature.
-- **Logic:** after repeated touches and while the room is inside the safe band, it snaps only safe follow-up commands to the configured human step size. Direct warm-room cooling, upstairs heat, or quiet-timing bypasses skip this shaper.
-- **Settings:** `HumanNudgeEnabled`, `HumanNudgeTriggerTouches`, `HumanNudgeStepCelsius`, `HumanNudgeSafetyBandCelsius`.
-
-### Visibility Guard
-Slows the next safe nudge when a wall touch lands right after a defender command (someone likely noticed).
-- **Watches:** wall touches within the after-command window, counted as "notices" over the notice window.
-- **Logic:** each notice adds pressure (0–100). When notices reach the trigger, the next safe correction waits a variable hold between the min and max hold minutes, scaled by pressure. A room over the safety band clears the hold.
-- **Settings:** `VisibilityGuardEnabled`, `VisibilityGuardTriggerNotices`, `VisibilityGuardNoticeWindowMinutes`, `VisibilityGuardAfterCommandSeconds`, `VisibilityGuardMinimumHoldMinutes`, `VisibilityGuardMaximumHoldMinutes`, `VisibilityGuardSafetyBandCelsius`.
-
-### Routine Timing
-Lines safe corrections up with a normal-looking comfort-check rhythm instead of firing instantly.
-- **Watches:** recent wall touches and the wall-clock minute.
-- **Logic:** after repeated touches and while the room is safe, the next correction waits until the next interval boundary plus a little random wiggle, capped at the max routine delay.
-- **Settings:** `RoutineTimingEnabled`, `RoutineTimingTriggerTouches`, `RoutineTimingIntervalMinutes`, `RoutineTimingJitterMinutes`, `RoutineTimingMaxDelayMinutes`, `RoutineTimingSafetyBandCelsius`.
-
-### Comfort Budget
-Caps how many safe corrections happen inside a rolling window.
-- **Watches:** the count of recent automatic setpoint commands in the budget window.
-- **Logic:** if the count reaches the max, it rests until the oldest command ages out of the window. A room over the safety band clears the budget.
-- **Settings:** `ComfortBudgetEnabled`, `ComfortBudgetWindowMinutes`, `ComfortBudgetMaxCommands`, `ComfortBudgetSafetyBandCelsius`.
-
-### Command Camouflage
-Gives a recent helper command time to look normal before another safe correction appears.
-- **Watches:** the last helper setpoint command, recent helper-command pressure, recent wall-touch pressure, and room temperature.
-- **Logic:** after a setpoint command, it waits at least the minimum gap plus pressure-scaled extra seconds before another safe correction. A room over the safety band or any comfort bypass clears it.
-- **Settings:** `CommandCamouflageEnabled`, `CommandCamouflageMinimumGapSeconds`, `CommandCamouflagePressureExtraSeconds`, `CommandCamouflageSafetyBandCelsius`.
-
-### Stealth Governor
-Runs a whole-system low-profile hold when the defender looks too active.
-- **Watches:** wall-touch pressure, noticed-correction pressure, Home Assistant remote changes, helper command count, and room temperature.
-- **Logic:** it computes a 0-100 score. If the score reaches the trigger and the room is inside the safety band, it holds only safe corrections for a min-to-max low-profile window.
-- **Settings:** `StealthGovernorEnabled`, `StealthGovernorTriggerScore`, `StealthGovernorMinimumHoldMinutes`, `StealthGovernorMaximumHoldMinutes`, `StealthGovernorSafetyBandCelsius`.
-
-### Natural Cadence
-Picks a variable future slot for safe nudges so they never land at identical, robotic times.
-- **Watches:** recent wall-touch pressure and recent command pressure.
-- **Logic:** after repeated touches it chooses a wait between the min and max cadence minutes (later as pressure rises) plus a small jitter.
-- **Settings:** `NaturalCadenceEnabled`, `NaturalCadenceTriggerTouches`, `NaturalCadenceMinimumMinutes`, `NaturalCadenceMaximumMinutes`, `NaturalCadenceJitterMinutes`, `NaturalCadenceSafetyBandCelsius`.
-
-### Comfort Pace
-The high-frequency planner: under heavy wall fighting it waits for a calm weather, sensor, or clock-aligned slot.
-- **Watches:** touch pressure, command pressure, real outdoor-weather movement, the learned Home Assistant sensor beat, and 5/10-minute clock boundaries.
-- **Logic:** when touches reach the trigger and the room is inside the safety band, it computes a base delay between the min and max pace minutes (scaling with pressure) and snaps it to the nearest calm slot — a weather update, the sensor beat, or a clock boundary — recording why.
-- **Settings:** `NaturalChangePlannerEnabled`, `NaturalChangePlannerTriggerTouches`, `NaturalChangePlannerMinimumMinutes`, `NaturalChangePlannerMaximumMinutes`, `NaturalChangePlannerJitterMinutes`, `NaturalChangePlannerPreferWeatherSlots`, `NaturalChangePlannerPreferSensorBeat`.
-
-### Comfort Envelope
-Lets a tiny safe wall preference rest for a while instead of being corrected the instant it appears.
-- **Watches:** the wall setpoint relative to the defender target and how far the room is above target.
-- **Logic:** after repeated touches, if the wall setpoint stays within `target ± max offset` and the room is under the safety band, it observes for the hold minutes.
-- **Settings:** `ComfortEnvelopeEnabled`, `ComfortEnvelopeTriggerTouches`, `ComfortEnvelopeHoldMinutes`, `ComfortEnvelopeMaxOffsetCelsius`, `ComfortEnvelopeSafetyBandCelsius`.
-
-### Comfort Compromise
-Blends a repeated wall choice into a temporary target, then fades it back to the website target.
-- **Watches:** the latest wall setpoint, the website target, and the room temperature.
-- **Logic:** if touches repeat and the room is inside the safety band, the wall setpoint pulls the effective target up to the max offset for the hold minutes, then eases back over the decay minutes. Effective target = `target + (preference − target) × decayFactor`.
-- **Settings:** `ComfortCompromiseEnabled`, `ComfortCompromiseTriggerTouches`, `ComfortCompromiseHoldMinutes`, `ComfortCompromiseDecayMinutes`, `ComfortCompromiseMaxOffsetCelsius`, `ComfortCompromiseSafetyBandCelsius`.
-
-### Comfort Memory
-Learns a small time-of-day target bias from repeated safe wall choices and re-applies it later that hour.
-- **Watches:** the current hour and the offsets learned for it; the room temperature.
-- **Logic:** repeated safe touches teach a bounded offset (`± max offset`) for the current hour slot, applied on later checks in the same window. Memory expires after the retention hours and is skipped when warm or when upstairs needs cooling.
-- **Settings:** `ComfortMemoryEnabled`, `ComfortMemoryLearningTouches`, `ComfortMemoryRetentionHours`, `ComfortMemoryMaxOffsetCelsius`, `ComfortMemorySafetyBandCelsius`.
-
-### Conflict Quiet
-Stands the defender down during an obvious tug-of-war over the thermostat.
-- **Watches:** recent wall touches within the touch window and how far the room is above target.
-- **Logic:** when touches reach the threshold, it stops sending visible corrections for the stand-down minutes while the room stays within `target + comfort band`.
-- **Settings:** `ConflictQuietModeEnabled`, `ConflictQuietTouchThreshold`, `ConflictQuietMinutes`, `ConflictQuietComfortBandCelsius`.
-
-### Tug-of-War Truce
-Calls a temporary truce when the real thermostat bounces up and down.
-- **Watches:** the external thermostat audit log: previous setpoint, new setpoint, timestamp, and source classification.
-- **Logic:** inside the flip window, it maps real setpoint changes to `up`, `down`, or `flat`, counts direction flips, and starts a truce once the flip trigger is met. The truce holds only safe answer-back corrections while the room stays within `target + safety band`.
-- **Settings:** `TugOfWarTruceEnabled`, `TugOfWarTruceMinimumFlips`, `TugOfWarTruceWindowMinutes`, `TugOfWarTruceHoldMinutes`, `TugOfWarTruceSafetyBandCelsius`.
-
-### Wall Settling
-Waits for someone who is still tapping the wall thermostat to stop before correcting.
-- **Watches:** recent touches inside the settling window and the room temperature.
-- **Logic:** with enough recent touches it holds for `base settle seconds + extra pressure seconds` (more touches = longer), measured from the latest touch.
-- **Settings:** `WallSettlingGuardEnabled`, `WallSettlingMinimumTouches`, `WallSettlingWindowMinutes`, `WallSettlingBaseSeconds`, `WallSettlingPressureExtraSeconds`, `WallSettlingSafetyBandCelsius`.
-
-### Manual Comfort Grace
-Leaves a manual wall change alone while the room still feels comfortable.
-- **Watches:** time since the wall change and how far the room is above target.
-- **Logic:** after cooldown it can keep waiting up to the grace minutes while the room stays within `target + grace band`. Touch Intent can extend the grace for clearly warmer changes.
-- **Settings:** `ManualComfortGraceEnabled`, `ManualComfortGraceMinutes`, `ManualComfortGraceBandCelsius`.
-
-### Touch Intent
-Reads whether recent wall changes trend warmer, cooler, or mixed, and extends grace for a clear warmer pattern.
-- **Watches:** the net sum of recent wall setpoint changes inside the intent window.
-- **Logic:** if net movement is at least the warm threshold and the room is inside the safety band, it adds the extra grace minutes to Manual Comfort Grace.
-- **Settings:** `TouchIntentEnabled`, `TouchIntentMinimumTouches`, `TouchIntentWindowMinutes`, `TouchIntentNetWarmThresholdCelsius`, `TouchIntentExtraGraceMinutes`, `TouchIntentSafetyBandCelsius`.
-
-### Cooler Intent Fast Lane
-When people keep dialing the wall cooler, it skips quiet waits so the room cools sooner.
-- **Watches:** the net cooler movement of recent wall changes and whether the room is above target.
-- **Logic:** if repeated touches move the wall cooler by at least the cool threshold and the room is above target, it clears the quiet waits (cooldown, grace, conflict quiet, cadence, repeat quiet, sensor rhythm, runway, …) for the hold minutes. It never lowers the website target.
-- **Settings:** `CoolerIntentFastLaneEnabled`, `CoolerIntentMinimumTouches`, `CoolerIntentWindowMinutes`, `CoolerIntentHoldMinutes`, `CoolerIntentNetCoolThresholdCelsius`, `CoolerIntentSafetyBandCelsius`.
-
----
-
-### Super Defender
-Treats repeated phone/Home Assistant changes as a stricter signal than a single wall touch.
-- **Watches:** Home Assistant climate state `context.user_id`, `context.parent_id`, and `context.id` from real thermostat readings.
-- **Logic:** `user_id` is labeled as a Home Assistant user or phone app change, `parent_id` as an automation/script/service chain, and context without either field as a thermostat/device change. When enough remote-style changes happen inside the configured window, Super Defender arms for a hold period. While armed, if the room is above target and not inside the configured safe natural-recovery band, it can bypass quiet waits so the normal 1 C-below-room correction runs sooner. It does not automatically block Wi-Fi, router, or firewall access because that can remove thermostat monitoring and recovery; the app shows a manual-only network-lockdown warning instead.
-- **Settings:** `SuperDefenderModeEnabled`, `SuperDefenderRemoteChangeThreshold`, `SuperDefenderWindowMinutes`, `SuperDefenderHoldMinutes`, `SuperDefenderSafetyBandCelsius`, `SuperDefenderBypassQuietTiming`.
-
-### Remote Settling Guard
-Gives repeated Home Assistant user/phone or automation thermostat changes a quiet safe window before answering back.
-- **Watches:** real Home Assistant context source attribution, recent remote-style change count, room temperature, and the expected setpoint.
-- **Logic:** after enough Home Assistant user/phone or automation changes inside the configured window, it holds only safe corrections for the quiet hold minutes. A too-warm room, cooler-intent fast lane, direct comfort bypass, matching expected setpoint, disabled setting, or expired hold clears it.
-- **Settings:** `RemoteSettlingGuardEnabled`, `RemoteSettlingTriggerChanges`, `RemoteSettlingWindowMinutes`, `RemoteSettlingHoldMinutes`, `RemoteSettlingSafetyBandCelsius`.
-
-### Rival Schedule Watch
-Knows the AC vendor app's own temperature schedule (e.g. SLEEP 21.5/23 at 12:00 a.m., DEEP SLEEP 23.5/26 at 2:00 a.m., GOOD MORNING 22.5/24 at 9:00 a.m.) and defends my temp when a scheduled block pushes the wall warmer while everyone sleeps.
-- **Watches:** the configured rival AC-app schedule blocks (start time + low/high setpoints per weekday), the live wall setpoint, Home Assistant change context, and the local clock.
-- **Logic:** a setpoint change that is not from a Home Assistant user and lands on the active block's low/high number is attributed to the AC app schedule (`rival-schedule`) instead of a human wall touch, so it starts no cooldown, grace, touch counters, rage detection, or peace offering, and teaches nothing to comfort memory/compromise. While the wall sits at a scheduled setpoint above my temp and the room is warm, quiet waits are bypassed; my temp is never changed and extreme heat still defers to normal comfort safety. Block boundaries are announced as events. The vendor app's fan schedule tab is a configuration placeholder only.
-- **Settings:** `RivalScheduleWatchEnabled`, `RivalScheduleSetpointToleranceCelsius`, `RivalScheduleBypassQuietTiming`, `RivalScheduleSafetyBandCelsius`, `RivalScheduleBlocks`, `RivalFanScheduleBlocks` (options/appsettings, not the settings page).
-- **Configuration sample** (blocks run from their start until the next applicable block, wrapping past midnight, per weekday like the vendor app):
-
-```jsonc
-"RivalScheduleWatchEnabled": true,
-"RivalScheduleSetpointToleranceCelsius": 0.3,
-"RivalScheduleBypassQuietTiming": true,
-"RivalScheduleSafetyBandCelsius": 3.0,
-"RivalScheduleBlocks": [
-  { "Name": "SLEEP",        "Start": "00:00", "LowSetPointCelsius": 21.5, "HighSetPointCelsius": 23.0, "Days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" },
-  { "Name": "DEEP SLEEP",   "Start": "02:00", "LowSetPointCelsius": 23.5, "HighSetPointCelsius": 26.0, "Days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" },
-  { "Name": "GOOD MORNING", "Start": "09:00", "LowSetPointCelsius": 22.5, "HighSetPointCelsius": 24.0, "Days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" }
-],
-"RivalFanScheduleBlocks": []   // vendor app Fan tab: reserved, not enforced yet
-```
-
----
-
-## Sensor timing
-
-### Setpoint Echo
-Waits for Home Assistant to report back the last setpoint before sending another safe command.
-- **Logic:** after a command it waits up to the echo grace seconds for Home Assistant to report that setpoint within 0.15 °C. A too-warm room steps it aside.
-- **Settings:** `SetpointEchoGuardEnabled`, `SetpointEchoGraceSeconds`, `SetpointEchoSafetyBandCelsius`.
-
-### Repeat Quiet
-Waits before sending the very same thermostat number again.
-- **Logic:** if the next safe command repeats the last number, it waits at least the minimum wait plus extra pressure seconds (scaling with recent touches and commands). Different one-degree step-downs pass through.
-- **Settings:** `RepeatCommandGuardEnabled`, `RepeatCommandMinimumWaitSeconds`, `RepeatCommandPressureExtraSeconds`, `RepeatCommandSafetyBandCelsius`.
-
-### Setpoint Stillness
-Waits until the wall setpoint stops moving before a safe correction answers back.
-- **Watches:** real Home Assistant climate readings, the current reported setpoint, recent wall touches, and room temperature.
-- **Logic:** after repeated external touches, while the room is still inside the safe band, it requires the configured number of consecutive real readings at the same setpoint before allowing a safe correction. A too-warm room, cooler-intent bypass, matching expected setpoint, or max-hold expiry releases it.
-- **Settings:** `SetpointStillnessGuardEnabled`, `SetpointStillnessTriggerTouches`, `SetpointStillnessRequiredSamples`, `SetpointStillnessMaxHoldSeconds`, `SetpointStillnessToleranceCelsius`, `SetpointStillnessSafetyBandCelsius`.
-
-### Sensor Rhythm
-Times nudges to just after the normal Home Assistant reading beat so they look less mechanical.
-- **Logic:** with at least the minimum samples in the rhythm window, it learns the median update interval and waits until just after the next beat plus a small jitter.
-- **Settings:** `SensorRhythmGuardEnabled`, `SensorRhythmMinimumSamples`, `SensorRhythmWindowMinutes`, `SensorRhythmJitterSeconds`, `SensorRhythmSafetyBandCelsius`.
-
-### HVAC Alibi
-Waits for a real HVAC action transition so a safe correction lands near a normal thermostat event.
-- **Watches:** the current Home Assistant `hvac_action`, the last action transition, recent wall touches, and room temperature.
-- **Logic:** after repeated wall touches, while the room is inside the safety band, it can hold a safe correction until `hvac_action` changes. A recent action transition can also clear the hold. Direct comfort needs, upstairs heat, or a too-warm room bypass it immediately.
-- **Settings:** `HvacActionAlibiEnabled`, `HvacActionAlibiTriggerTouches`, `HvacActionAlibiTransitionWindowSeconds`, `HvacActionAlibiMaxHoldMinutes`, `HvacActionAlibiSafetyBandCelsius`.
-
-### Telemetry Alibi
-Waits for a normal house telemetry update before a safe correction lands.
-- **Watches:** recent wall touches, Home Assistant reading beats, weather samples, Alectra Hui usage updates, and room temperature.
-- **Logic:** after repeated wall touches, while the room is inside the safety band, it starts a short quiet hold and then waits for the next enabled real telemetry signal. A too-warm room, direct comfort need, matching expected setpoint, disabled signal source, or max wait clears it.
-- **Settings:** `TelemetryAlibiEnabled`, `TelemetryAlibiTriggerTouches`, `TelemetryAlibiMinimumHoldSeconds`, `TelemetryAlibiMaxHoldMinutes`, `TelemetryAlibiSafetyBandCelsius`, `TelemetryAlibiUseWeather`, `TelemetryAlibiUseSensorBeat`, `TelemetryAlibiUsePeakPower`.
-
-### Cooling Runway
-Gives the AC time to work after cooling starts before nudging the setpoint again.
-- **Logic:** when `hvac_action` turns to cooling it records the start and holds for the minimum runway seconds plus extra pressure seconds. If cooling stops or the room gets too warm, it clears immediately.
-- **Settings:** `CoolingRunwayGuardEnabled`, `CoolingRunwayMinimumSeconds`, `CoolingRunwayPressureExtraSeconds`, `CoolingRunwaySafetyBandCelsius`.
-
-### Room Trend Guard
-Keeps observing when the room is already stable or cooling after a wall change.
-- **Logic:** comparing the oldest and newest room samples in the trend window, a cooling room (delta below the negative stable tolerance) holds for the trend hold minutes so cooling can continue. Warming or above-band rooms proceed.
-- **Settings:** `RoomTrendGuardEnabled`, `RoomTrendWindowMinutes`, `RoomTrendStableToleranceCelsius`, `RoomTrendHoldMinutes`.
-
-### Thermal Momentum
-Waits when the room is already cooling fast enough to reach target soon on its own.
-- **Logic:** it estimates the cooling rate and minutes-to-target. If the rate is at least the minimum C/hour and target is within the look-ahead minutes, it holds for the momentum hold minutes.
-- **Settings:** `ThermalMomentumGuardEnabled`, `ThermalMomentumMinimumCoolingRateCelsiusPerHour`, `ThermalMomentumLookAheadMinutes`, `ThermalMomentumHoldMinutes`.
-
-### Weather Drift Timing
-Times safe corrections to real outdoor-weather movement instead of firing immediately.
-- **Logic:** after a wall touch, while the room is inside the weather safety band, stable or cooling outdoor temperatures hold for the weather hold minutes. Once the outdoor temperature warms by the minimum change, the hold clears.
-- **Settings:** `WeatherDriftGuardEnabled`, `WeatherDriftWindowMinutes`, `WeatherDriftMinimumChangeCelsius`, `WeatherDriftHoldMinutes`, `WeatherDriftSafetyBandCelsius`.
-
----
-
-## Safety & system
-
-### Dynamic Cooldown
-A frequency-based quiet period after a manual thermostat change.
-- **Formula:** `cooldown = min(MaxCooldownSeconds, BaseCooldownSeconds × recentTouchCount) + randomQuietDelay`, where `recentTouchCount` is counted inside `TouchFrequencyWindowMinutes`.
-- **Settings:** `BaseCooldownSeconds`, `MaxCooldownSeconds`, `TouchFrequencyWindowMinutes`.
-
-### Fan Energy Saver
-Optionally moves the fan to an energy-saving mode when the room is near target.
-- **Logic:** when enabled and the room is within the threshold of target, if the configured fan mode exists on the device it calls `climate.set_fan_mode`.
-- **Settings:** `FanEnergySaverEnabled`, `FanEnergySaverThresholdCelsius`, `FanEnergySaverMode`.
-
-### Alectra Peak Power Saver
-Makes safe cooling more chill and resource-saving when Alectra Hui says power is expensive or high.
-- **Logic:** the worker refreshes Alectra Hui usage sensors on the configured interval. On-peak TOU, current price at or above the c/kWh threshold, or current power at or above the kW threshold arms the saver window. While active, it holds only safe commands that would demand more cooling, and can set the configured fan saver mode. If the room or upstairs gets too hot, or the command would save energy by raising the setpoint, it steps aside.
-- **Settings:** `PeakPowerSaverEnabled`, `PeakPowerSaverOnPeakEnabled`, `PeakPowerSaverHighPowerEnabled`, `PeakPowerSaverPowerThresholdKilowatts`, `PeakPowerSaverPriceThresholdCentsPerKwh`, `PeakPowerSaverHoldMinutes`, `PeakPowerSaverRefreshSeconds`, `PeakPowerSaverSafetyBandCelsius`, `PeakPowerSaverFanSaverEnabled`, `PeakPowerSaverFanMode`.
-
-### Front-door Guard Post
-Pauses the defender when a real front-door person detector reports a person, and can immediately turn the thermostat off.
-- **Logic:** the worker reads configured front-door person detector entity IDs, or auto-discovers likely front-door, porch, entry, or entrance person sensors. If any detector is active, it pauses the defender, holds the guard window, and sends thermostat `off` when that setting is enabled. The command source is tagged as `front-door-kill-switch`, so its Home Assistant echo is not treated like a wall-control touch.
-- **Settings:** `FrontDoorKillSwitchEnabled`, `FrontDoorPersonEntityIds`, `FrontDoorKillSwitchHoldMinutes`, `FrontDoorKillSwitchRefreshSeconds`, `FrontDoorKillSwitchTurnsThermostatOff`.
-
-### Upstairs Comfort Guard
-Prioritizes cooling when upstairs rooms get hot while someone is home.
-- **Logic:** if the hottest upstairs room exceeds the comfort maximum, it lowers the target toward the comfort target and adds the cooling boost. Severe upstairs heat bypasses cooldown. When presence is required and nobody is detected, it assumes home rather than under-cooling.
-- **Settings:** `UpstairsComfortEnabled`, `UpstairsTemperatureEntityIds`, `UpstairsMaxComfortCelsius`, `UpstairsComfortTargetCelsius`, `UpstairsComfortBoostCelsius`, `HomePresenceRequired`, `PresenceEntityIds`.
-
-### Schedule & Weather Rules
-Time-of-day target rules, each gated by a weather activation condition.
-- **Logic:** when the custom schedule is on, the matching rule supplies the target. Weather rules (`always`, `room-above-outdoor`, `room-below-outdoor`, `outdoor-above-target`, `outdoor-below-target`) decide whether corrective action is allowed. The defender still reads Home Assistant 24/7 when a rule blocks correction.
-- **Settings:** `ScheduleEnabled`, `WeatherActivationMode`, and per-rule Days / Start / End / Target / Weather.
-
-### Website Debounce
-Blocks repeated thermostat-affecting website button taps for two minutes so the UI does not spam Home Assistant.
-- **Logic:** the first thermostat-affecting click runs; later thermostat-affecting clicks within the debounce window show the remaining wait. Defender activation, settings save, refresh, search/filter controls, and non-thermostat emergency pauses bypass the thermostat debounce.
-
-### Emergency Protocols
-One-tap stand-down modes, run from the Controls page.
-- **Too cold** (30 min): pauses the defender and turns the thermostat off.
-- **Someone upset** (45 min) and **Suspicion quiet** (90 min): keep reading the thermostat 24/7 but send no corrective commands until the window ends.
-- Too-cold uses the thermostat debounce because it turns the thermostat off. Someone-upset and suspicion bypass the thermostat debounce because they only pause defender commands.
-
-### Cooling Failure Watch (MEGA → OMEGA)
-Raises a repeating **mega-alert** when cool mode is demanded but the AC is not really cooling, and escalates to a full-site **OMEGA alert** once a rising room confirms the failure.
-- **MEGA logic:** it alerts if the entity is in `cool`, the room is clearly above the setpoint, and `hvac_action` stays idle for about **30 minutes** (`CoolingFailureIdleSeconds` = 1800; possible breaker/equipment), or if the action says cooling but the room does not drop over the retained window (possible compressor/airflow). Alerts repeat about once a minute.
-- **OMEGA logic (confirmed breaker off):** the mega alert only proves the AC is *not cooling*; OMEGA adds proof that the room is actually *getting warmer*. While the **idle/breaker** mega branch is active, if the room has risen at least `OmegaMinimumRiseCelsius` (0.4 °C) over the last `OmegaRiseWindowSeconds` (5 min), it escalates to OMEGA and shows a site-wide overlay. False positives are kept low by three gates: only the idle branch can escalate (a unit that reports cooling still has power), the rise must be **sustained over a window** (not a single noisy reading), and the room must still be above setpoint. If the room stops rising or starts dropping, OMEGA clears immediately.
-- **Cooling-Failure Shutdown (action):** while a MEGA/OMEGA alert is up, the defender turns the AC **fully off** (a failing unit is only wasting power) and holds it off until the real room temperature rises `CoolingFailureShutdownReleaseRiseCelsius` (0.5 °C) above the reading captured at shutdown, then restores cool mode. The hold latches on its own state (so it persists once the unit reads `off`, even as the mega alert itself clears) and a human turning the AC back on is always respected. This is the one branch of the watch that changes thermostat commands; it runs before the enforcer and cool-mode restore so nothing turns the unit back on mid-hold.
+- `Guards/GuardCatalog.cs` is the public explanation catalog.
+- `Services/DefenderStateStore.cs` owns guard state, audit context, persistence, and most decisions.
+- `Services/AcDefenderService.cs` orchestrates each cycle and sends Home Assistant commands.

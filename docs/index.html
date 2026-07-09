@@ -3,203 +3,567 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AC Defender — the thermostat that holds the line</title>
-<meta name="description" content="A Home Assistant companion that defends your chosen temperature against schedules, phone apps, and wall touches — politely, safely, and cheaply.">
+<title>AC Defender — stop waking up hot</title>
+<meta name="description" content="A Home Assistant companion for people tired of being hot because someone or something keeps adjusting the thermostat.">
 <style>
   :root {
-    --cream: #F0EEE6;
-    --paper: #FAF9F5;
-    --ink: #1F1E1D;
-    --sub: #6E6A63;
-    --clay: #CC785C;
-    --clay-dark: #B8603F;
-    --line: #E3DFD5;
-    --ok: #6A9B72;
+    --bg: #f5f7f8;
+    --paper: #ffffff;
+    --ink: #111827;
+    --sub: #4b5563;
+    --line: #d7dde2;
+    --teal: #0f766e;
+    --teal-soft: #dff4f0;
+    --coral: #b83227;
+    --coral-soft: #ffebe5;
+    --blue: #2563eb;
+    --blue-soft: #e8f0ff;
+    --gold: #8a5a13;
+    --gold-soft: #fff4d6;
+    --shadow: 0 18px 48px rgba(17, 24, 39, .14);
   }
   * { box-sizing: border-box; margin: 0; }
   html { scroll-behavior: smooth; }
   body {
-    background: var(--cream);
+    background: var(--bg);
     color: var(--ink);
     font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     line-height: 1.6;
   }
-  h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em; }
-  a { color: var(--clay-dark); }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--teal); }
+  img { max-width: 100%; display: block; }
+  :focus-visible {
+    outline: 3px solid #38bdf8;
+    outline-offset: 3px;
+  }
+  .skip-link {
+    position: absolute;
+    left: 18px;
+    top: 12px;
+    z-index: 10;
+    transform: translateY(-160%);
+    border-radius: 8px;
+    background: #ffffff;
+    color: var(--ink);
+    padding: 10px 14px;
+    font-weight: 900;
+    text-decoration: none;
+  }
+  .skip-link:focus { transform: translateY(0); }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
 
-  header.hero { padding: 88px 0 64px; text-align: center; }
-  .hero .kicker { color: var(--clay); text-transform: uppercase; letter-spacing: 0.22em; font-size: 12px; font-weight: 600; }
-  .hero h1 { font-size: clamp(40px, 6vw, 68px); margin: 14px 0 18px; }
-  .hero p.tag { font-size: 20px; color: var(--sub); max-width: 640px; margin: 0 auto 34px; }
-  .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .hero {
+    position: relative;
+    min-height: 82svh;
+    display: grid;
+    align-items: center;
+    overflow: hidden;
+    color: #fff;
+    isolation: isolate;
+  }
+  .hero::before,
+  .hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+  }
+  .hero::before { background: #07111f; }
+  .hero::after {
+    background:
+      linear-gradient(90deg, rgba(9, 17, 28, .86) 0%, rgba(9, 17, 28, .68) 42%, rgba(9, 17, 28, .22) 74%, rgba(9, 17, 28, .48) 100%),
+      linear-gradient(0deg, rgba(9, 17, 28, .55), rgba(9, 17, 28, .05) 42%);
+  }
+  .hero-bg-img {
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .topnav {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    padding: 18px 0;
+  }
+  .topnav .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .brand {
+    font-family: Georgia, "Times New Roman", serif;
+    color: #fff;
+    text-decoration: none;
+    font-weight: 800;
+    font-size: 20px;
+  }
+  .navlinks { display: flex; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
+  .navlinks a {
+    color: rgba(255, 255, 255, .88);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 800;
+  }
+  .navlinks a:hover { color: #fff; }
+
+  .hero-copy {
+    width: min(720px, 100%);
+    padding: 116px 0 86px;
+    text-shadow: 0 2px 24px rgba(0, 0, 0, .38);
+  }
+  .kicker,
+  .section-kicker {
+    color: var(--teal);
+    font-size: 12px;
+    font-weight: 900;
+    text-transform: uppercase;
+  }
+  .hero .kicker { color: #a7f3d0; }
+  h1,
+  h2,
+  h3 {
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 800;
+    line-height: 1.08;
+  }
+  h1 {
+    font-size: clamp(52px, 10vw, 108px);
+    margin: 10px 0 18px;
+  }
+  .hero p {
+    font-size: clamp(18px, 2.2vw, 23px);
+    max-width: 680px;
+    color: rgba(255, 255, 255, .92);
+  }
+  .hero-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 30px;
+  }
   .btn {
-    display: inline-block; padding: 13px 26px; border-radius: 999px; text-decoration: none;
-    font-weight: 600; font-size: 15px; border: 1.5px solid var(--ink); color: var(--ink);
-    transition: transform .12s ease, background .12s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 46px;
+    padding: 0 18px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 900;
+    border: 1px solid rgba(255, 255, 255, .72);
+    color: #fff;
+    background: rgba(255, 255, 255, .10);
+    backdrop-filter: blur(10px);
   }
-  .btn:hover { transform: translateY(-1px); }
-  .btn--primary { background: var(--clay); border-color: var(--clay); color: #fff; }
-  .btn--primary:hover { background: var(--clay-dark); border-color: var(--clay-dark); }
+  .btn:hover { background: rgba(255, 255, 255, .18); }
+  .btn-primary {
+    background: var(--coral);
+    border-color: var(--coral);
+  }
+  .btn-primary:hover { background: #c94e37; }
 
-  .shot { border-radius: 14px; border: 1px solid var(--line); box-shadow: 0 18px 50px rgba(31,30,29,.10); max-width: 100%; }
-  .hero .shot { margin-top: 52px; }
+  section { padding: 74px 0; }
+  section.band {
+    background: var(--paper);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 420px);
+    gap: 28px;
+    align-items: end;
+    margin-bottom: 34px;
+  }
+  h2 { font-size: clamp(32px, 5vw, 52px); margin: 8px 0 12px; }
+  .lead { color: var(--sub); font-size: 18px; max-width: 720px; }
 
-  section { padding: 72px 0; }
-  section.alt { background: var(--paper); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  .sec-kicker { color: var(--clay); text-transform: uppercase; letter-spacing: 0.2em; font-size: 11px; font-weight: 700; }
-  section h2 { font-size: clamp(28px, 4vw, 40px); margin: 10px 0 14px; }
-  section p.lead { color: var(--sub); font-size: 17px; max-width: 680px; }
+  .problem-grid,
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 520px);
+    gap: 34px;
+    align-items: center;
+  }
+  .panel-list {
+    display: grid;
+    gap: 14px;
+  }
+  .proof {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .band .proof { background: var(--bg); }
+  .proof-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: var(--teal-soft);
+    color: var(--teal);
+    font-weight: 900;
+  }
+  .proof h3 { font-size: 21px; margin-bottom: 6px; }
+  .proof p { color: var(--sub); }
 
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-top: 38px; }
+  .battle-visual {
+    position: relative;
+    min-height: 360px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background:
+      linear-gradient(135deg, rgba(15, 118, 110, .10), transparent 44%),
+      linear-gradient(315deg, rgba(221, 95, 69, .12), transparent 48%),
+      var(--paper);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    padding: 24px;
+  }
+  .battle-visual h3 {
+    font-size: 24px;
+    max-width: 320px;
+  }
+  .thermo-rail {
+    position: absolute;
+    left: 34px;
+    right: 34px;
+    bottom: 84px;
+    height: 6px;
+    border-radius: 8px;
+    background: linear-gradient(90deg, var(--teal), var(--gold), var(--coral));
+  }
+  .thermo-rail::after {
+    content: "";
+    position: absolute;
+    top: -8px;
+    left: 64%;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--coral);
+    box-shadow: 0 0 0 10px rgba(221, 95, 69, .16);
+    animation: warm-push 4s ease-in-out infinite;
+  }
+  .defender-dot {
+    position: absolute;
+    bottom: 70px;
+    left: 34px;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: var(--teal);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    font-weight: 900;
+    box-shadow: 0 0 0 12px rgba(15, 118, 110, .14);
+    animation: defender-step 4s ease-in-out infinite;
+  }
+  .temp-chip {
+    position: absolute;
+    min-width: 88px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    box-shadow: 0 10px 24px rgba(17, 24, 39, .08);
+    font-weight: 900;
+    text-align: center;
+  }
+  .chip-target { left: 24px; bottom: 132px; color: var(--teal); }
+  .chip-wall { right: 24px; bottom: 132px; color: var(--coral); }
+  .chip-room { right: 36px; top: 34px; color: var(--gold); }
+  .battle-caption {
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    bottom: 20px;
+    color: var(--sub);
+    font-size: 14px;
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+    gap: 16px;
+  }
   .card {
-    background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 26px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 20px;
   }
-  section.alt .card { background: var(--cream); }
-  .card .emoji { font-size: 26px; }
-  .card h3 { font-size: 20px; margin: 12px 0 8px; }
-  .card p { color: var(--sub); font-size: 15px; }
+  .card h3 { font-size: 22px; margin-bottom: 8px; }
+  .card p { color: var(--sub); }
+  .card strong { color: var(--ink); }
 
-  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: center; margin-top: 40px; }
-  @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }
-  .split h3 { font-size: 26px; margin-bottom: 10px; }
-  .split p { color: var(--sub); margin-bottom: 12px; }
-  .split ul { color: var(--sub); padding-left: 20px; }
-  .split li { margin-bottom: 6px; }
-
-  .quote {
-    border-left: 3px solid var(--clay); padding: 6px 0 6px 20px; font-family: Georgia, serif;
-    font-size: 18px; color: var(--ink); font-style: italic; margin: 18px 0;
+  .product-shot {
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow);
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+  }
+  .story-photo {
+    width: 100%;
+    margin-top: 18px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow);
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
   }
 
-  footer { padding: 54px 0 70px; text-align: center; color: var(--sub); font-size: 14px; }
-  footer .links { display: flex; gap: 22px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
-  footer a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
-  code.pill { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; font-size: 13px; }
+  .flow-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 24px;
+  }
+  .flow-step {
+    position: relative;
+    min-height: 120px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--paper);
+    padding: 16px;
+    overflow: hidden;
+  }
+  .flow-step::after {
+    content: "";
+    position: absolute;
+    left: -40%;
+    right: -40%;
+    bottom: 0;
+    height: 4px;
+    background: linear-gradient(90deg, transparent, var(--teal), transparent);
+    animation: scan 3s linear infinite;
+  }
+  .flow-step:nth-child(2)::after { animation-delay: .35s; background: linear-gradient(90deg, transparent, var(--blue), transparent); }
+  .flow-step:nth-child(3)::after { animation-delay: .7s; background: linear-gradient(90deg, transparent, var(--coral), transparent); }
+  .flow-step:nth-child(4)::after { animation-delay: 1.05s; background: linear-gradient(90deg, transparent, var(--gold), transparent); }
+  .flow-step span {
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--teal-soft);
+    color: var(--teal);
+    font-weight: 900;
+    margin-bottom: 10px;
+  }
+  .flow-step h3 { font-size: 19px; margin-bottom: 6px; }
+  .flow-step p { color: var(--sub); font-size: 14px; }
+
+  footer {
+    padding: 46px 0 60px;
+    color: var(--sub);
+    border-top: 1px solid var(--line);
+    background: var(--paper);
+  }
+  footer .wrap {
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  footer a { color: var(--ink); text-decoration: none; font-weight: 800; margin-right: 14px; }
+
+  @keyframes warm-push {
+    0%, 100% { left: 64%; transform: translateX(0); }
+    40% { left: 86%; transform: translateX(-50%); }
+    70% { left: 52%; transform: translateX(-50%); }
+  }
+  @keyframes defender-step {
+    0%, 100% { left: 34px; }
+    42% { left: 42%; }
+    70% { left: 28%; }
+  }
+  @keyframes scan {
+    from { transform: translateX(-30%); opacity: .2; }
+    50% { opacity: .7; }
+    to { transform: translateX(30%); opacity: .2; }
+  }
+
+  @media (max-width: 880px) {
+    .topnav .wrap,
+    footer .wrap { align-items: flex-start; }
+    .section-head,
+    .problem-grid,
+    .split { grid-template-columns: 1fr; }
+    .flow-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .hero { min-height: 84svh; }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 0 18px; }
+    .topnav .wrap {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .navlinks { gap: 10px; }
+    .navlinks a { font-size: 13px; }
+    .hero-copy { padding-top: 128px; }
+    h1 {
+      font-size: 44px;
+      overflow-wrap: break-word;
+    }
+    section { padding: 58px 0; }
+    .flow-strip { grid-template-columns: 1fr; }
+    .battle-visual { min-height: 330px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
+  }
 </style>
 </head>
 <body>
 
-<header class="hero wrap">
-  <div class="kicker">Home Assistant companion</div>
-  <h1>The thermostat that<br>holds the line.</h1>
-  <p class="tag">AC Defender watches a real Home Assistant climate entity 24/7 and keeps the room at
-  <em>your</em> temperature — even when the AC's own app, a bedtime schedule, or another person tries
-  to change it. Politely. Safely. Cheaply.</p>
-  <div class="btns">
-    <a class="btn btn--primary" href="wiki/Website-Tour.html">Take the tour</a>
-    <a class="btn" href="https://github.com/codingmachineedge/HomeAssistantAcDefender">View on GitHub</a>
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<header class="hero" aria-label="AC Defender landing hero">
+  <img class="hero-bg-img" src="wiki/images/hero-hot-thermostat.png" alt="Generated photo of a hot person beside a home thermostat at night">
+  <nav class="topnav" aria-label="Primary">
+    <div class="wrap">
+      <a class="brand" href="index.html">AC Defender</a>
+      <div class="navlinks">
+        <a href="wiki/Website-Tour.html">Tour</a>
+        <a href="wiki/Algorithms.html">Algorithms</a>
+        <a href="wiki/Defender-Logic.html">Logic</a>
+        <a href="https://github.com/codingmachineedge/HomeAssistantAcDefender">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <div class="hero-copy">
+      <div class="kicker">For the person who is done being hot</div>
+      <h1>AC Defender</h1>
+      <p>Your thermostat keeps getting nudged warmer. AC Defender watches the real Home Assistant climate entity 24/7 and walks the room back to your temperature safely, quietly, and cheaply.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="wiki/Algorithms.html">Search the algorithms</a>
+        <a class="btn" href="wiki/Defender-Logic.html">See the logic</a>
+        <a class="btn" href="wiki/Website-Tour.html">Take the tour</a>
+      </div>
+    </div>
   </div>
-  <img class="shot" src="wiki/images/dashboard.png" alt="The AC Defender command center dashboard">
 </header>
 
-<section class="alt">
+<main id="main-content" tabindex="-1">
+<section class="band">
+  <div class="wrap problem-grid">
+    <div>
+      <div class="section-kicker">The thermostat fight, handled</div>
+      <h2>Someone raises it. The room warms up. The defender walks it back.</h2>
+      <p class="lead">The point is not to spam the wall unit. The point is to make your chosen temperature survive schedules, phone apps, wall touches, energy rules, and awkward household negotiations without fake HVAC state or simulator tricks.</p>
+      <div class="panel-list" style="margin-top:24px">
+        <div class="proof"><div class="proof-mark">1</div><div><h3>Real device only</h3><p>Every command goes to Home Assistant’s configured climate entity or returns a real error.</p></div></div>
+        <div class="proof"><div class="proof-mark">2</div><div><h3>Comfort wins when warm</h3><p>Warm-room commands start below the current room temperature by the configured approach, default 0.5 C, then continue toward the target.</p></div></div>
+        <div class="proof"><div class="proof-mark">3</div><div><h3>Courtesy stays bounded</h3><p>Quiet waits, stealth timing, budget holds, and compromises are allowed only inside their safety boundaries.</p></div></div>
+      </div>
+      <img class="story-photo" src="wiki/images/thermostat-warmer-touch.png" alt="Generated photo of an anonymous hand adjusting a home thermostat warmer">
+    </div>
+    <div class="battle-visual" aria-label="Animated thermostat battle visual">
+      <h3>The wall can drift warmer. The target does not.</h3>
+      <div class="temp-chip chip-target">My temp 22.0</div>
+      <div class="temp-chip chip-wall">Wall 26.0</div>
+      <div class="temp-chip chip-room">Room 25.0</div>
+      <div class="thermo-rail"></div>
+      <div class="defender-dot">AC</div>
+      <p class="battle-caption">The defender uses real room readings, not the raised wall setpoint, to choose the next cooling step.</p>
+    </div>
+  </div>
+</section>
+
+<section>
   <div class="wrap">
-    <div class="sec-kicker">Five big ideas</div>
-    <h2>Small guards. One law.</h2>
-    <p class="lead">Your chosen temperature — <em>my temp</em> — is a hard floor. Everything else is a
-    team of little guards negotiating how to get back to it gracefully.</p>
+    <div class="section-head">
+      <div>
+        <div class="section-kicker">Why it feels premium</div>
+        <h2>Fifty focused algorithms. One temperature promise.</h2>
+      </div>
+      <p class="lead">Every guard has a live purpose: people get courtesy, machines do not train the target, hot rooms bypass quiet waits, and energy savings never invent comfort.</p>
+    </div>
     <div class="cards">
-      <div class="card"><div class="emoji">🎯</div><h3>My temp is law</h3>
-        <p>No guard, schedule, budget, or learned habit may ever cool below your number. Warm rooms are
-        walked back in gentle 0.5&nbsp;°C steps — never a suspicious snap.</p></div>
-      <div class="card"><div class="emoji">🛡️</div><h3>A team of guards</h3>
-        <p>Dozens of focused guards handle courtesy waits, tug-of-war truces, stealth timing, night
-        shutdown, and emergency apologies. Each one is a live card with a plain-English explainer.</p></div>
-      <div class="card"><div class="emoji">🤝</div><h3>People get courtesy; machines don't</h3>
-        <p>Human wall touches earn cooldowns and peace offerings. The AC app's own 2&nbsp;a.m. warm-up
-        schedule is recognized as a machine and answered promptly — nobody is watching at 2&nbsp;a.m.</p></div>
-      <div class="card"><div class="emoji">💰</div><h3>Money awareness built in</h3>
-        <p>Real compressor hours are priced at time-of-use rates with no power sensor needed, shown on
-        an airline-style usage calendar, and steered by an optional monthly budget.</p></div>
-      <div class="card"><div class="emoji">🚨</div><h3>Safety always wins</h3>
-        <p>Hot rooms bypass every stealth wait. The budget yields to a maximum room temperature.
-        Emergencies stop everything, instantly.</p></div>
-      <div class="card"><div class="emoji">🙇</div><h3>Fully automated getting-yelled-at detection</h3>
-        <p>An angry setpoint jump or a burst of thermostat touches means someone is about to yell.
-        The rage detector sees it coming, apologizes automatically, eases the AC up as a peace
-        gesture, and stands down for two hours — it stops <em>before</em> it happens, to prevent tears.</p></div>
+      <div class="card"><h3>People get grace</h3><p>Wall touches can earn settling time, conflict quiet, truce windows, and natural-looking recovery when comfort is still safe.</p></div>
+      <div class="card"><h3>Machines get answered</h3><p>Rival Schedule Watch recognizes the AC vendor schedule and walks back scheduled warm pushes without treating them like human preference.</p></div>
+      <div class="card"><h3>Energy stays honest</h3><p>Runtime counters, Alectra time-of-use pricing, cool-outdoor shutdown, and budget pacing use real telemetry or conservative estimates.</p></div>
+      <div class="card"><h3>Safety is explicit</h3><p>Emergency protocols, front-door guard, tamper truce, cooling-failure shutdown, and upstairs comfort are documented and visible.</p></div>
     </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap split">
+    <div>
+      <div class="section-kicker">Searchable algorithm wiki</div>
+      <h2>Every algorithm now has its own article.</h2>
+      <p class="lead">Open the Algorithms page to search all 50. Open Defender Logic to search inside each family: Core Cooling, Wall-Touch Response, Sensor Timing, and Safety/Energy/System.</p>
+      <div class="flow-strip">
+        <div class="flow-step"><span>1</span><h3>Watch</h3><p>Real thermostat, sensors, weather, usage, and audit context.</p></div>
+        <div class="flow-step"><span>2</span><h3>Decide</h3><p>Each guard explains its own trigger, hold, bypass, and clear rule.</p></div>
+        <div class="flow-step"><span>3</span><h3>Shape</h3><p>Safe commands can look human, gradual, and naturally timed.</p></div>
+        <div class="flow-step"><span>4</span><h3>Act</h3><p>Commands go through Home Assistant or the UI shows the real failure.</p></div>
+      </div>
+      <div class="hero-actions" style="margin-top:26px">
+        <a class="btn btn-primary" style="color:#fff;text-shadow:none" href="wiki/Algorithms.html">Open Algorithms</a>
+        <a class="btn" style="color:var(--ink);border-color:var(--line);text-shadow:none;background:var(--paper)" href="wiki/Defender-Logic.html">Open Logic</a>
+      </div>
+    </div>
+    <img class="product-shot" src="wiki/images/landing-flow-map.svg" alt="Unique generated AC Defender landing flow graphic">
   </div>
 </section>
 
 <section>
   <div class="wrap">
-    <div class="sec-kicker">The rival schedule</div>
-    <h2>It knows the other side's plan.</h2>
-    <div class="split">
+    <div class="section-head">
       <div>
-        <p>The AC vendor app runs its own bedtime schedule — SLEEP, then DEEP&nbsp;SLEEP quietly
-        drifting the room toward 26&nbsp;°C while everyone dreams.</p>
-        <div class="quote">"Assuming most of us sleep at 12am, we shouldn't notice AC being set to 25…"</div>
-        <p><strong>Rival Schedule Watch</strong> keeps that schedule in configuration, recognizes its
-        pushes in the audit log, refuses to learn comfort preferences from a machine, and walks the
-        wall right back to my temp — skipping the human-style quiet waits.</p>
+        <div class="section-kicker">Documentation that sells the product by explaining it</div>
+        <h2>Clear enough to trust before it touches the thermostat.</h2>
       </div>
-      <img class="shot" src="wiki/images/defense.png" alt="The Defense page with live guard cards">
+      <p class="lead">The public wiki now has generated visuals, animated flows, and searchable pages so a reader can go from the household problem to the exact guard that handles it.</p>
+    </div>
+    <div class="cards">
+      <div class="card"><h3><a href="wiki/Website-Tour.html">Website Tour</a></h3><p>A screenshot-led tour of the dashboard, defense cards, energy page, logs, controls, settings, and guide.</p></div>
+      <div class="card"><h3><a href="wiki/Every-Guard-Explained.html">Every Guard</a></h3><p>A plain-language searchable map for readers who want the simple answer first.</p></div>
+      <div class="card"><h3><a href="wiki/Energy-and-Costs.html">Energy and Costs</a></h3><p>Runtime, calendar, Alectra Hui telemetry, TOU estimates, and budget behavior.</p></div>
+      <div class="card"><h3><a href="wiki/Deployment.html">Deployment</a></h3><p>Docker hosting, required Home Assistant settings, and the real environment-variable contract.</p></div>
     </div>
   </div>
 </section>
 
-<section class="alt">
-  <div class="wrap">
-    <div class="sec-kicker">Energy &amp; costs</div>
-    <h2>Like a flight-price calendar, for your AC.</h2>
-    <div class="split">
-      <img class="shot" src="wiki/images/energy-calendar.png" alt="The AC usage calendar with heat-coloured days">
-      <div>
-        <p>Every day is a little box: how long the AC ran and roughly what it cost. Green days were
-        cheap, red days were expensive. Click a day, flip months, or total any range.</p>
-        <ul>
-          <li><strong>Sensor-free cost estimate</strong> — compressor hours × assumed load × the
-            Ontario time-of-use rate in force at each moment.</li>
-          <li><strong>Monthly budget</strong> — over pace, the room runs slightly warmer (biased to
-            expensive hours); under pace, normal comfort. Never past the safety maximum.</li>
-          <li><strong>Reliability rule</strong> — if the live power sensor goes stale, budgeting
-            automatically falls back to the static-price estimate instead of stalling.</li>
-        </ul>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <div class="sec-kicker">Desktop app</div>
-    <h2>On your desktop, too.</h2>
-    <div class="split">
-      <div>
-        <p>A native Windows app (Tauri&nbsp;+&nbsp;React&nbsp;+&nbsp;TypeScript, ~10&nbsp;MB) that signs
-        into your defender and puts the essentials on your desktop:</p>
-        <ul>
-          <li>Live room temperature, setpoint, and HVAC action</li>
-          <li>My-temp stepper with one-click apply</li>
-          <li>Defender master switch, force cooling, thermostat off</li>
-          <li>Runtime hours with estimated dollars, and the activity feed</li>
-        </ul>
-        <p>Build it from <code class="pill">desktop/</code> with <code class="pill">npm run tauri build</code> —
-        the HTTP session lives on the Rust side, so no CORS, no browser.</p>
-      </div>
-      <div class="card">
-        <h3>📚 Keep reading</h3>
-        <p style="margin-bottom:12px">The wiki explains every page with real screenshots — written so
-        simply anyone can follow along.</p>
-        <p><a href="wiki/Website-Tour.html">Website Tour</a> · <a href="wiki/Every-Guard-Explained.html">Every Guard, Explained Simply</a> ·
-        <a href="wiki/Energy-and-Costs.html">Energy &amp; Costs</a> ·
-        <a href="wiki/Defender-Logic.html">Defender Logic</a> · <a href="wiki/Settings.html">Settings</a> ·
-        <a href="wiki/API.html">API</a> · <a href="wiki/Deployment.html">Deployment</a></p>
-      </div>
-    </div>
-  </div>
-</section>
+</main>
 
 <footer>
-  <div class="links">
-    <a href="https://github.com/codingmachineedge/HomeAssistantAcDefender">GitHub</a>
-    <a href="wiki/Home.html">Documentation</a>
-    <a href="wiki/Website-Tour.html">Screenshots</a>
+  <div class="wrap">
+    <div>
+      <a href="wiki/Home.html">Wiki</a>
+      <a href="wiki/Algorithms.html">Algorithms</a>
+      <a href="wiki/Defender-Logic.html">Logic</a>
+      <a href="https://github.com/codingmachineedge/HomeAssistantAcDefender">GitHub</a>
+    </div>
+    <div>AC Defender · real Home Assistant climate control · no dummy thermostat</div>
   </div>
-  <div>AC Defender · watches a real thermostat, tells no lies · built with Home Assistant, ASP.NET Core, MudBlazor, Tauri &amp; React</div>
 </footer>
 
 </body>

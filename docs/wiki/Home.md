@@ -20,6 +20,7 @@ Assistant climate entity or returns a real error.
 | Page | What it answers |
 | --- | --- |
 | **[Website Tour](Website-Tour.html)** | "What am I looking at?" — every page, with screenshots, in plain words |
+| **[Algorithms](Algorithms.html)** | Search every AC Defender algorithm and open the full article for any guard |
 | **[Every Guard, Explained Simply](Every-Guard-Explained.html)** | Every single algorithm, described so a five-year-old could follow |
 | **[Energy & Costs](Energy-and-Costs.html)** | How hours become dollars: TOU rates, the AC-only estimate, the usage calendar, the monthly budget |
 | **[Defender Logic](Defender-Logic.html)** | The full decision cycle and every guard's exact rules |
