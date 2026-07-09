@@ -25,6 +25,7 @@ builder.Services.Configure<HomeAssistantOptions>(builder.Configuration.GetSectio
 builder.Services.Configure<DefenderOptions>(builder.Configuration.GetSection(DefenderOptions.SectionName));
 builder.Services.Configure<KioskOptions>(builder.Configuration.GetSection(KioskOptions.SectionName));
 builder.Services.AddSingleton<SettingsGitRepository>();
+builder.Services.AddSingleton<WikiContentService>();
 builder.Services.AddSingleton<DefenderStateStore>();
 builder.Services.AddSingleton<AcDefenderService>();
 builder.Services.AddSingleton<TwoFactorAuth>();
@@ -90,6 +91,18 @@ app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
+
+// Serve the Site Wiki's images (docs/wiki/images/**) at /wikimedia. Rendered wiki HTML rewrites
+// "images/..." paths here. Same public content as GitHub Pages, so no auth gate is needed.
+var wikiImages = Path.Combine(app.Environment.ContentRootPath, "docs", "wiki", "images");
+if (Directory.Exists(wikiImages))
+{
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(wikiImages),
+        RequestPath = WikiContentService.ImagesRequestPath,
+    });
+}
 
 app.MapStaticAssets();
 app.MapRazorComponents<App>()

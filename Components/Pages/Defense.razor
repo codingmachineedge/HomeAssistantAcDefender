@@ -4,7 +4,100 @@
 
 <PageTitle>Defense - AC Defender</PageTitle>
 
-<div class="ops-roster-tools">
+@* ═════════ TACTICAL PICTURE — live status board ═════════ *@
+<div class="ops-tactical">
+    <div class="ops-tactical__head">
+        <span class="ops-tactical__title">TACTICAL PICTURE</span>
+        <span class="ops-tactical__blink" aria-hidden="true"></span>
+        <span class="ops-tactical__live">LIVE</span>
+        <span class="ops-tactical__spacer"></span>
+        <span class="ops-tactical__board">@BoardStatus</span>
+    </div>
+    <div class="ops-tactical__grid">
+        <div class="ops-tactical__cell">
+            <div class="ops-tactical__label">UNITS ACTING</div>
+            <div class="@(BusyCount > 0 ? "ops-tactical__value ops-tactical__value--warn" : "ops-tactical__value ops-tactical__value--sub")">@BusyCount</div>
+            <div class="ops-tactical__bar">
+                <div class="@(BusyCount > 0 ? "ops-tactical__bar-fill ops-tactical__bar-fill--live" : "ops-tactical__bar-fill")"></div>
+            </div>
+        </div>
+        <div class="ops-tactical__cell">
+            <div class="ops-tactical__label">WATCHING</div>
+            <div class="ops-tactical__value ops-tactical__value--good">@WatchingCount</div>
+            <div class="ops-tactical__sub">quietly judging the wall</div>
+        </div>
+        <div class="ops-tactical__cell">
+            <div class="ops-tactical__label">ROOM VS TARGET</div>
+            <div class="@RoomDeltaClass">@RoomDeltaText</div>
+            <div class="ops-tactical__sub">@RoomDeltaSub</div>
+        </div>
+        <div class="ops-tactical__cell">
+            <div class="ops-tactical__label">NEXT WORKER CHECK</div>
+            <div class="ops-tactical__value">@NextCheckText</div>
+            <div class="ops-tactical__sub">the loop never sleeps</div>
+        </div>
+    </div>
+    <div class="ops-tactical__feed">
+        <span class="ops-tactical__feed-tag">FIELD FEED</span>
+        <div class="ops-ticker__viewport">
+            <div class="ops-ticker__scroll">@FeedText@FeedText</div>
+        </div>
+    </div>
+</div>
+
+@if (Snapshot?.Siesta is { Active: true } siestaBanner)
+{
+    <div class="ops-alert-row ops-alert-row--info" style="margin-bottom: 14px;">
+        <span class="ops-alert-row__glyph ops-alert-row__glyph--bob" aria-hidden="true">☾</span>
+        <span class="ops-alert-row__tag">GUARDS ASLEEP — MESS HALL OPEN</span>
+        <span class="ops-alert-row__text">Wake at @(siestaBanner.Until?.ToLocalTime().ToString("HH:mm") ?? "--") · rations earned $@siestaBanner.FoodEarnedThisSiestaCad.ToString("0.00") · the room passing the wake band ends the nap early.</span>
+    </div>
+}
+
+@if (Snapshot is { DefenderEnabled: false })
+{
+    <div class="ops-alert-row ops-alert-row--dashed" style="margin-bottom: 14px;">
+        <span class="ops-alert-row__glyph" aria-hidden="true">⏻</span>
+        <span class="ops-alert-row__tag">DEFENDER PAUSED</span>
+        <span class="ops-alert-row__text">The guard shift is napping at their posts. The thermostat is on its own out there.</span>
+    </div>
+}
+
+@* ═════════ ENGAGED RIGHT NOW — spotlight on busy guards ═════════ *@
+@if (Engaged.Count > 0)
+{
+    <div class="ops-engaged">
+        <div class="ops-engaged__head">
+            <span class="ops-engaged__title">◔ Engaged right now</span>
+            <span class="ops-engaged__rule"></span>
+            <span class="ops-engaged__count">@Engaged.Count UNIT@(Engaged.Count == 1 ? "" : "S") ACTING</span>
+        </div>
+        <div class="ops-engaged__grid">
+            @foreach (var (info, view) in Engaged)
+            {
+                var tone = view.Tone.Css();
+                <div class="@($"ops-engaged-card ops-engaged-card--{tone}")">
+                    <div class="ops-engaged-card__strip" aria-hidden="true"></div>
+                    <div class="ops-engaged-card__row">
+                        <span class="ops-engaged-card__avatar" aria-hidden="true">@Initials(info)</span>
+                        <div class="ops-engaged-card__id">
+                            <span class="ops-engaged-card__name">@info.Name</span>
+                            <span class="ops-engaged-card__rank">@Rank(info)</span>
+                        </div>
+                        <div class="ops-engaged-card__stat">
+                            <div class="ops-engaged-card__value">@HeroValue(view)</div>
+                            <div class="ops-engaged-card__sub">@HeroLabel(view)</div>
+                        </div>
+                    </div>
+                    <p class="ops-engaged-card__status">@view.StatusText</p>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@* ═════════ ROSTER TOOLS ═════════ *@
+<div class="ops-roster-tools ops-roster-tools--sticky">
     <input class="ops-input" value="@_search" @oninput="OnSearchChanged" placeholder="SEARCH ROSTER…" aria-label="Search guards" />
     @foreach (var (value, label) in Categories)
     {
@@ -12,24 +105,6 @@
     }
     <a class="ops-chip" href="/guide">✦ GUIDE</a>
 </div>
-
-@if (Snapshot?.Siesta is { Active: true } siestaBanner)
-{
-    <div class="ops-alert-row" style="margin-bottom: 14px;">
-        <span class="ops-alert-row__glyph" aria-hidden="true">☾</span>
-        <span class="ops-alert-row__tag">GUARDS ASLEEP — MESS HALL OPEN</span>
-        <span class="ops-alert-row__text">Wake at @(siestaBanner.Until?.ToLocalTime().ToString("HH:mm") ?? "--") · rations earned $@siestaBanner.FoodEarnedThisSiestaCad.ToString("0.00") · the room passing the wake band ends the nap early.</span>
-    </div>
-}
-
-@if (BusyCount > 0)
-{
-    <div class="ops-alert-row ops-alert-row--warn" style="margin-bottom: 14px;">
-        <span class="ops-alert-row__glyph" aria-hidden="true">◔</span>
-        <span class="ops-alert-row__tag">@BusyCount UNIT@(BusyCount == 1 ? "" : "S") ACTING</span>
-        <span class="ops-alert-row__text">Guards currently holding, waiting, or shaping a correction.</span>
-    </div>
-}
 
 @foreach (var group in Groups)
 {
@@ -59,13 +134,14 @@
     <div class="ops-alert-row">
         <span class="ops-alert-row__glyph" aria-hidden="true">∅</span>
         <span class="ops-alert-row__tag">NO MATCH</span>
-        <span class="ops-alert-row__text">No guard matches that search.</span>
+        <span class="ops-alert-row__text">No guard matches that search. They may be hiding — they are quite good at that.</span>
     </div>
 }
 
 @code {
     private string _search = "";
     private string _category = "All";
+    private System.Threading.Timer? _tick;
 
     private DefenderSnapshot Snapshot => State.Snapshot;
 
@@ -90,7 +166,120 @@
 
     private void OnSearchChanged(ChangeEventArgs e) => _search = e.Value?.ToString() ?? "";
 
-    private int BusyCount => GuardCatalog.Live.Count(g => g.Project!(Snapshot).Busy);
+    // ---------- tactical picture ----------
+
+    private List<(GuardInfo Info, GuardLiveView View)> Engaged =>
+        Snapshot is null
+            ? []
+            : GuardCatalog.Live
+                .Select(g => (Info: g, View: g.Project!(Snapshot)))
+                .Where(x => x.View.Busy)
+                .ToList();
+
+    private int BusyCount => Engaged.Count;
+
+    private int WatchingCount => Math.Max(0, GuardCatalog.Live.Count() - BusyCount);
+
+    private string BoardStatus => Snapshot?.DefenderEnabled == true ? "ALL SECTORS REPORTING" : "GUARD POST PAUSED";
+
+    private double? RoomNow => Snapshot?.HomeAssistantThermostat?.CurrentTemperatureCelsius;
+    private double? RoomWanted => Snapshot?.TargetTemperatureCelsius;
+
+    private string RoomDeltaText =>
+        RoomNow is { } now && RoomWanted is { } want ? $"{now - want:+0.0;-0.0;±0.0} C" : "--";
+
+    private string RoomDeltaClass =>
+        RoomNow is { } now && RoomWanted is { } want && now - want > 0.05
+            ? "ops-tactical__value ops-tactical__value--warn"
+            : "ops-tactical__value ops-tactical__value--good";
+
+    private string RoomDeltaSub =>
+        RoomNow is { } now && RoomWanted is { } want
+            ? $"{now:0.0} C now · {want:0.0} C wanted"
+            : "waiting for Home Assistant";
+
+    private string NextCheckText
+    {
+        get
+        {
+            if (Snapshot?.NextActionAt is not { } next)
+            {
+                return "LIVE";
+            }
+
+            var remaining = next - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                return "NOW";
+            }
+
+            return remaining.TotalMinutes >= 1
+                ? $"{(int)remaining.TotalMinutes}:{remaining.Seconds:00}"
+                : $"{remaining.Seconds}s";
+        }
+    }
+
+    private string FeedText
+    {
+        get
+        {
+            var bits = new List<string>();
+            if (Snapshot?.DefenderEnabled != true)
+            {
+                bits.Add("DEFENDER OFFLINE — THE WALL IS UNSUPERVISED");
+                bits.Add("SNACK INVENTORY: ADEQUATE");
+            }
+            else
+            {
+                if (Snapshot?.HomeAssistantThermostat is { } t)
+                {
+                    bits.Add($"ROOM {t.CurrentTemperatureCelsius:0.0} C · SETPOINT {t.SetPointCelsius:0.0} C · {t.HvacAction?.ToUpperInvariant()}");
+                }
+                foreach (var (info, view) in Engaged.Take(4))
+                {
+                    bits.Add($"◔ {info.Name.ToUpperInvariant()} — {view.StateLabel.ToUpperInvariant()}");
+                }
+                if (Snapshot?.Siesta is { Active: true } nap)
+                {
+                    bits.Add($"MESS HALL OPEN — GUARDS WAKE {nap.Until?.ToLocalTime():HH:mm} · RATIONS +${nap.FoodEarnedThisSiestaCad:0.00}");
+                }
+                foreach (var e in (Snapshot?.Events ?? Array.Empty<DefenderEvent>()).Take(4))
+                {
+                    bits.Add($"{Format.ShortTime(e.Timestamp)} {e.Message.ToUpperInvariant()}");
+                }
+                if (bits.Count == 0)
+                {
+                    bits.Add("ALL SECTORS NOMINAL — SNACK INVENTORY: ADEQUATE");
+                }
+            }
+
+            return "  ···  " + string.Join("  ···  ", bits) + "  ···  ";
+        }
+    }
+
+    // ---------- engaged card helpers ----------
+
+    private static string Initials(GuardInfo info) => string.Concat(
+        info.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => char.ToUpperInvariant(w[0])));
+
+    private static string Rank(GuardInfo info) => info.Category switch
+    {
+        GuardCategory.Core => "SGT · CORE COOLING",
+        GuardCategory.WallTouch => "CPL · WALL-TOUCH OPS",
+        GuardCategory.Sensor => "SPC · SENSOR TIMING",
+        GuardCategory.System => "LT · SAFETY & SYSTEM",
+        _ => info.Category.ToString().ToUpperInvariant()
+    };
+
+    private static string HeroValue(GuardLiveView view) =>
+        view.Metrics.FirstOrDefault() is { } metric ? metric.Value : view.StateLabel.ToUpperInvariant();
+
+    private static string HeroLabel(GuardLiveView view) =>
+        view.Metrics.FirstOrDefault() is { } metric
+            ? $"{view.StateLabel} · {metric.Label}".ToUpperInvariant()
+            : "CURRENT STATE";
+
+    // ---------- roster ----------
 
     private IEnumerable<GuardInfo> Filtered(GuardCategory category)
     {
@@ -113,9 +302,18 @@
         return Format.MatchesSearch(_search, guard.Name, guard.Summary, guard.Watches, guard.Logic, guard.Output, view.StatusText, view.StateLabel);
     }
 
-    protected override void OnInitialized() => State.Changed += OnStateChanged;
+    protected override void OnInitialized()
+    {
+        State.Changed += OnStateChanged;
+        // Per-second tick drives the NEXT WORKER CHECK countdown; everything else re-renders on state changes.
+        _tick = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
 
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
 
-    public void Dispose() => State.Changed -= OnStateChanged;
+    public void Dispose()
+    {
+        State.Changed -= OnStateChanged;
+        _tick?.Dispose();
+    }
 }

@@ -8,11 +8,18 @@
 
   <ItemGroup>
     <PackageReference Include="MudBlazor" Version="9.5.0" />
+    <PackageReference Include="Markdig" Version="0.37.0" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Remove="HomeAssistantAcDefender.Tests\**\*.cs" />
     <Content Remove="HomeAssistantAcDefender.Tests\**\*" />
+  </ItemGroup>
+
+  <!-- The in-app Site Wiki renders the same markdown that GitHub Pages builds from docs/wiki.
+       Ship those files (and their images) with the app so the container can read them at runtime. -->
+  <ItemGroup>
+    <Content Include="docs\wiki\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

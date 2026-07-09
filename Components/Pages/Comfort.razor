@@ -2,20 +2,20 @@
 @implements IDisposable
 @inject DefenderStateProvider State
 
-<PageTitle>Comfort - AC Defender</PageTitle>
+<PageTitle>Comfort Watch — SCP AC Defender</PageTitle>
 
 <div class="ops-dash-stack">
 
     <div class="ops-comfort-metrics">
         <div class="ops-panel" style="padding: 14px 16px;">
             <div class="ops-panel__label">GUARD</div>
-            <div class="ops-comfort-metric__value" style="color: var(--accent);">@GuardText</div>
-            <div class="helper-text">@(Up?.Status ?? "Waiting for upstairs readings.")</div>
+            <div class="ops-comfort-metric__value" style="color: @GuardColor;">@GuardText</div>
+            <div class="helper-text">@GuardHelp</div>
         </div>
         <div class="ops-panel" style="padding: 14px 16px;">
             <div class="ops-panel__label">HOTTEST UPSTAIRS</div>
-            <div class="ops-comfort-metric__value" style="color: var(--warn);">@Format.Temp(Up?.HottestUpstairsTemperatureCelsius)</div>
-            <div class="helper-text">The warmest upstairs sensor right now.</div>
+            <div class="ops-comfort-metric__value" style="color: var(--warn);">@Format.TempDeg(Up?.HottestUpstairsTemperatureCelsius)</div>
+            <div class="helper-text">The warmest Site-UP sensor right now.</div>
         </div>
         <div class="ops-panel" style="padding: 14px 16px;">
             <div class="ops-panel__label">PRESENCE</div>
@@ -25,13 +25,13 @@
         <div class="ops-panel" style="padding: 14px 16px;">
             <div class="ops-panel__label">SENSORS</div>
             <div class="ops-comfort-metric__value">@(Up?.UpstairsSensors?.Count ?? 0)</div>
-            <div class="helper-text">Upstairs thermometers found.</div>
+            <div class="helper-text">Site-UP thermometers found.</div>
         </div>
     </div>
 
     <div class="ops-comfort-grid">
         <div class="ops-panel ops-panel--pad">
-            <div class="ops-panel__label">UPSTAIRS SENSOR ARRAY</div>
+            <div class="ops-panel__label">SITE-UP SENSOR ARRAY — LIVE</div>
             <div class="ops-sensor-list">
                 @if (Up?.UpstairsSensors?.Count > 0)
                 {
@@ -40,7 +40,7 @@
                         var temp = sensor.TemperatureCelsius;
                         <div>
                             <div class="ops-sensor-row__top">
-                                <span class="ops-sensor-row__name">@sensor.Name</span>
+                                <span class="ops-sensor-row__name">@sensor.Name.ToUpperInvariant()</span>
                                 <span class="ops-sensor-row__val" style="color: @BarColor(temp);">@Format.SensorValue(sensor)</span>
                             </div>
                             <div class="ops-bar"><div class="ops-bar__fill" style="width: @BarWidth(temp); background: @BarColor(temp);"></div></div>
@@ -49,13 +49,13 @@
                 }
                 else
                 {
-                    <div class="helper-text">No upstairs sensors found or configured.</div>
+                    <div class="helper-text">No Site-UP sensors found or configured.</div>
                 }
             </div>
         </div>
 
         <div class="ops-panel ops-panel--pad">
-            <div class="ops-panel__label">PRESENCE TRACKING</div>
+            <div class="ops-panel__label">PRESENCE TRACKING — PERSONNEL ON SITE</div>
             <div class="ops-dash-stack" style="gap: 6px;">
                 @if (Up?.Presence?.Count > 0)
                 {
@@ -73,15 +73,29 @@
                     <div class="helper-text">No presence entities found or configured.</div>
                 }
             </div>
-            <div class="helper-text" style="margin-top: 12px;">Upstairs priority only fires while a human is home to feel the heat. The defenders don't cool empty rooms out of principle.</div>
+            <div class="helper-text" style="margin-top: 12px;">Site-UP priority only fires while a human is home to feel the heat. The containment team does not cool empty chambers out of principle.</div>
         </div>
     </div>
 </div>
 
 @code {
     private ComfortSnapshot? Up => State.Snapshot?.Comfort;
+    private bool DefenderEnabled => State.Snapshot?.DefenderEnabled == true;
 
-    private string GuardText => Up?.UpstairsTooHot == true ? "COOLING" : Up?.UpstairsComfortEnabled == true ? "WATCHING" : "OFF";
+    private bool GuardOff => Up is null || !DefenderEnabled || Up.UpstairsComfortEnabled != true;
+
+    private string GuardText => GuardOff ? "OFF" : Up?.UpstairsTooHot == true ? "COOLING" : "WATCHING";
+
+    private string GuardColor => GuardOff ? "var(--sub)" : Up?.UpstairsTooHot == true ? "var(--warn)" : "var(--good)";
+
+    private string GuardHelp => Up is null
+        ? "Waiting for upstairs readings."
+        : GuardOff
+            ? "Comfort guard stood down with the rest of the site."
+            : Up.UpstairsTooHot == true
+                ? "Site-UP is too hot — priority cooling engaged."
+                : "Upstairs within comfort. Observing with quiet approval.";
+
     private string PresenceText => Up?.HomePresenceRequired == true ? "REQUIRED" : "OPTIONAL";
 
     private static string BarWidth(double? temp) => temp is { } t

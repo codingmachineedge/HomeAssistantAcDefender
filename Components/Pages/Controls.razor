@@ -6,263 +6,136 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
-<PageTitle>Controls - AC Defender</PageTitle>
+<PageTitle>Direct Controls — SCP AC Defender</PageTitle>
 
-<MudStack Spacing="3">
-    <SectionCard Title="Defender"
-                 Subtitle="@(Snapshot?.DefenderEnabled == true ? "Active" : "Paused")"
-        Help="The switch turns the helper on or pauses it. Pausing offers to turn the real thermostat off.">
-        <Actions>
-            <MudButton Class="@DefenderToggleClass" Variant="Variant.Filled" Color="@DefenderToggleColor"
-                       Size="Size.Large" StartIcon="@DefenderToggleIcon" OnClick="ToggleDefender">
-                @DefenderToggleText
-            </MudButton>
-        </Actions>
-        <ChildContent>
-            @if (Snapshot?.WebsiteCommandDebounce.Active == true)
+<div class="ops-dash-stack">
+
+    @* ── containment master switch ── *@
+    <button class="@DefenderSwitchClass" @onclick="ToggleDefender" aria-pressed="@DefenderIsEnabled">
+        <span class="ops-defender-switch__glyph" aria-hidden="true">⏻</span>
+        <span class="ops-defender-switch__body">
+            <span class="ops-defender-switch__label">CONTAINMENT MASTER</span>
+            <span class="ops-defender-switch__state">@(DefenderIsEnabled ? "ON DUTY" : "STOOD DOWN")</span>
+            <span class="ops-defender-switch__hint">@(DefenderIsEnabled ? "Tap to stand containment down · syncs to every page" : "Tap to wake the containment shift")</span>
+        </span>
+        <span class="ops-defender-switch__pill" aria-hidden="true"><span class="ops-defender-switch__knob"></span></span>
+    </button>
+
+    <div class="ops-controls-grid">
+
+        @* ── A · temp I want ── *@
+        <div class="ops-ctl-card ops-ctl-card--accent">
+            <div class="ops-ctl-label" style="color: var(--accent);">⌖ TEMP I WANT — O5 DIRECTIVE</div>
+            <div class="ops-stepper">
+                <button class="ops-stepper__btn" @onclick="TargetDown" aria-label="Lower">−</button>
+                <div class="ops-stepper__value">@TargetShort</div>
+                <button class="ops-stepper__btn" @onclick="TargetUp" aria-label="Raise">+</button>
+            </div>
+            <button class="ops-apply-btn" @onclick="ApplyTarget">⌖ APPLY MY TEMP</button>
+            <div class="ops-ctl-quick">
+                <button class="ops-btn ops-btn--outline" @onclick="GenerateTarget">✦ GENERATE</button>
+                <button class="ops-btn" @onclick="ForceBoost">❆ FORCE COOL</button>
+                <button class="ops-btn ops-btn--danger" @onclick="TurnOffFromControls">⏻ OFF</button>
+            </div>
+            <div class="ops-ctl-note">Files the directive with the defender state, then the worker walks the wall unit there politely. Never a rude direct thermostat command.</div>
+        </div>
+
+        @* ── B · fan mode ── *@
+        <div class="ops-ctl-card">
+            <div class="ops-ctl-label">FAN MODE</div>
+            <div class="ops-fan-list">
+                @foreach (var mode in FanModes)
+                {
+                    <button class="@(IsCurrentFan(mode) ? "ops-fan-btn ops-fan-btn--active" : "ops-fan-btn")" @onclick="@(() => ApplyFanModeTo(mode))">@mode.ToUpperInvariant()</button>
+                }
+            </div>
+            <div class="ops-ctl-note">Sends climate.set_fan_mode to the real unit. The fan has no opinions; it is the only one.</div>
+        </div>
+
+        @* ── C · real thermostat actions ── *@
+        <div class="ops-ctl-card">
+            <div class="ops-ctl-label">REAL THERMOSTAT ACTIONS</div>
+            <div class="ops-act-list">
+                <button class="ops-order-btn" @onclick="RefreshReal">
+                    <span aria-hidden="true">⟳</span>
+                    <span class="ops-order-btn__label">REFRESH</span>
+                    <span class="ops-order-btn__hint">ask HA for the newest reading</span>
+                </button>
+                <button class="ops-order-btn" @onclick="ForceTarget">
+                    <span aria-hidden="true">⌖</span>
+                    <span class="ops-order-btn__label">FORCE TARGET</span>
+                    <span class="ops-order-btn__hint">exact directive, now</span>
+                </button>
+                <button class="ops-order-btn ops-order-btn--solid" @onclick="ForceBoost">
+                    <span aria-hidden="true">❆</span>
+                    <span class="ops-order-btn__label">FORCE COOLING</span>
+                    <span class="ops-order-btn__hint">room − @BoostOffsetText, no waiting</span>
+                </button>
+            </div>
+            <div class="ops-ctl-note">These send real Home Assistant service calls now. The website debounce blocks repeat taps for two minutes.</div>
+        </div>
+
+        @* ── D · emergency ── *@
+        <div class="ops-ctl-card ops-ctl-card--bad">
+            <div class="ops-ctl-label" style="color: var(--bad);">⚠ EMERGENCY PROTOCOLS — BYPASS THE WEBSITE LOCK</div>
+            <div class="ops-emg-list">
+                @foreach (var option in EmergencyProtocols)
+                {
+                    <button class="@(_emergencyProtocol == option.Value ? "ops-emg-btn ops-emg-btn--active" : "ops-emg-btn")" @onclick="@(() => _emergencyProtocol = option.Value)">
+                        <span class="ops-emg-btn__label">@option.Label</span>
+                        <span class="ops-emg-btn__help">@option.Help</span>
+                    </button>
+                }
+            </div>
+            <div style="margin-top: 10px;">
+                <SlideToConfirm Label="@($"SLIDE TO RUN {SelectedEmergencyName.ToUpperInvariant()}")" ConfirmedLabel="EMERGENCY RUNNING" Glyph="⚠" OnConfirmed="RunEmergencyProtocol" />
+            </div>
+            @if (Snapshot?.Emergency.Active == true)
             {
-                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot.WebsiteCommandDebounce.Status</MudAlert>
+                <div class="ops-alert-row ops-alert-row--warn" style="margin-top: 10px;">
+                    <span class="ops-alert-row__tag">ACTIVE</span>
+                    <span class="ops-alert-row__text">@Snapshot.Emergency.Status</span>
+                </div>
+            }
+        </div>
+
+        @* ── E · mess hall (siesta) ── *@
+        <div class="ops-ctl-card ops-ctl-card--info">
+            <div class="ops-ctl-label" style="color: var(--info);">☾ MESS HALL (SIESTA)</div>
+            @if (Snapshot?.Siesta is { Active: true } activeNap)
+            {
+                <div class="ops-siesta-active">
+                    <span aria-hidden="true" class="ops-alert-row__glyph--bob">☾</span>
+                    GUARDS ASLEEP — wake @(activeNap.Until?.ToLocalTime().ToString("HH:mm") ?? "soon")
+                    (@(activeNap.SecondsRemaining / 60) min left) · rations this nap $@activeNap.FoodEarnedThisSiestaCad.ToString("0.00")
+                </div>
+                <button class="ops-btn ops-btn--outline" style="width: 100%; margin-top: 8px;" @onclick="CancelSiesta">⏰ WAKE THE GUARDS NOW</button>
             }
             else
             {
-                <MudText Typo="Typo.body2" Class="helper-text">No website lock active.</MudText>
+                <div class="ops-ctl-note" style="margin-top: 0; margin-bottom: 8px;">Send the whole guard force to the mess hall. The AC eases off and every quiet minute banks food rations.</div>
+                <div class="ops-siesta-btns">
+                    <button class="ops-btn" @onclick="@(() => StartSiesta(60))">☾ 1 HOUR</button>
+                    <button class="ops-btn" @onclick="@(() => StartSiesta(120))">☾ 2 HOURS</button>
+                    <button class="ops-btn" @onclick="@(() => StartSiesta(240))">☾ 4 HOURS</button>
+                </div>
             }
-            @if (Snapshot?.FrontDoorKillSwitch.Active == true || Snapshot?.FrontDoorKillSwitch.PersonDetected == true)
+            @if (Snapshot?.FoodRations is { } pantry)
             {
-                <MudAlert Class="mt-2" Severity="Severity.Error" Variant="Variant.Filled" Dense="true">@Snapshot.FrontDoorKillSwitch.Status</MudAlert>
+                <div class="ops-ctl-note" style="margin-bottom: 0;">Pantry <strong style="color: var(--warn);">$@pantry.BalanceCad.ToString("0.00")</strong> / $@pantry.BalanceMaxCad.ToString("0.00") · earned today <strong style="color: var(--accent);">$@pantry.EarnedTodayCad.ToString("0.00")</strong></div>
             }
-        </ChildContent>
-    </SectionCard>
+        </div>
 
-    @if (Snapshot?.DefenderEnabled == true)
-    {
-    <SectionCard Title="Super Defender"
-                 Subtitle="@(Snapshot?.SuperDefender.Active == true ? "Armed" : "Watching")"
-                 Help="Detects repeated phone/Home Assistant thermostat changes and can tighten response without cutting Wi-Fi.">
-        <Actions>
-            <MudChip T="string" Color="@(Snapshot?.SuperDefender.BypassingQuietTiming == true ? Color.Error : Snapshot?.SuperDefender.Active == true ? Color.Warning : Color.Default)" Variant="Variant.Outlined" Size="Size.Small">
-                @(Snapshot?.SuperDefender.BypassingQuietTiming == true ? "Strict" : Snapshot?.SuperDefender.Active == true ? "Armed" : "Ready")
-            </MudChip>
-        </Actions>
-        <ChildContent>
-            <MudText Typo="Typo.body2">@Snapshot?.SuperDefender.Status</MudText>
-            <MudText Typo="Typo.caption" Class="helper-text">Last source: @(Snapshot?.SuperDefender.LastChangeSource ?? "none")</MudText>
-            <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@Snapshot?.SuperDefender.NetworkLockdownStatus</MudAlert>
-        </ChildContent>
-    </SectionCard>
-
-    <SectionCard Title="Desired-State Enforcer"
-                 Subtitle="@EnforcerSubtitle"
-                 Help="Makes your chosen AC state win automatically. Configure it on the Settings page (Desired-State Enforcer).">
-        <Actions>
-            <MudChip T="string" Color="@EnforcerChipColor" Variant="Variant.Outlined" Size="Size.Small">@EnforcerChipText</MudChip>
-        </Actions>
-        <ChildContent>
-            @if (Snapshot?.Enforcer is { } enforcer)
-            {
-                <MudText Typo="Typo.body2">@enforcer.Status</MudText>
-                @if (enforcer.Enabled)
-                {
-                    <MudText Typo="Typo.caption" Class="helper-text">
-                        Holding @enforcer.DesiredTargetCelsius.ToString("0.0") C ·
-                        overrides @enforcer.RecentOverrideCount ·
-                        asserts @enforcer.RecentAssertCount ·
-                        last changed by @enforcer.LastChangeUser
-                    </MudText>
-                    <MudText Typo="Typo.caption" Class="helper-text">
-                        Interference model: @(enforcer.LearningActive ? enforcer.InterferenceProbability.ToString("0.00") : "learning")
-                    </MudText>
-                    @if (enforcer.Escalated)
-                    {
-                        <MudAlert Class="mt-2" Severity="Severity.Error" Variant="Variant.Filled" Dense="true">Repeated interference detected — enforcing firmly.</MudAlert>
-                    }
-                }
-                else
-                {
-                    <MudAlert Class="mt-2" Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">Off. Turn it on under Settings → Desired-State Enforcer to make your chosen state win automatically.</MudAlert>
-                }
-            }
-        </ChildContent>
-    </SectionCard>
-
-    <SectionCard Title="Alectra Peak Power Saver"
-                 Subtitle="@(Snapshot?.PeakPowerSaver.Active == true ? "Saving" : "Watching")"
-                 Help="Uses real Alectra Hui power, price, and TOU sensors to hold only safe cooling during peak or high-load periods.">
-        <Actions>
-            <MudChip T="string" Color="@(Snapshot?.PeakPowerSaver.Holding == true ? Color.Warning : Snapshot?.PeakPowerSaver.Active == true ? Color.Info : Color.Default)" Variant="Variant.Outlined" Size="Size.Small">
-                @(Snapshot?.PeakPowerSaver.Holding == true ? "Holding" : Snapshot?.PeakPowerSaver.Active == true ? "Peak" : "Ready")
-            </MudChip>
-        </Actions>
-        <ChildContent>
-            <MudText Typo="Typo.body2">@Snapshot?.PeakPowerSaver.Status</MudText>
-            <MudText Typo="Typo.caption" Class="helper-text">
-                Power @(Snapshot?.PeakPowerSaver.CurrentPowerKilowatts?.ToString("0.00") ?? "--") kW ·
-                Price @(Snapshot?.PeakPowerSaver.CurrentPriceCentsPerKwh?.ToString("0.0") ?? "--") c/kWh ·
-                TOU @(Snapshot?.PeakPowerSaver.TouPeriod ?? "--")
-            </MudText>
-        </ChildContent>
-    </SectionCard>
-
-    <MudGrid Spacing="3">
-        <MudItem xs="12" md="6">
-            <SectionCard Title="Temp I want" Subtitle="My number" Help="Yours until you change it — the defenders hold this and never touch it themselves. Tap − / + to dial it in, just like a real thermostat.">
-                <MudGrid Spacing="2">
-                    <MudItem xs="12" Class="d-flex justify-center">
-                        <ThermostatDial Target="_targetInput"
-                                        Current="Snapshot?.HomeAssistantThermostat?.CurrentTemperatureCelsius"
-                                        Mode="@(Snapshot?.HomeAssistantThermostat?.HvacMode ?? "cool")"
-                                        Action="@(Snapshot?.HomeAssistantThermostat?.HvacAction ?? "idle")"
-                                        Min="16" Max="30" Step="0.5"
-                                        TargetChanged="OnTargetInputChanged" />
-                    </MudItem>
-                    <MudItem xs="12">
-                        <MudNumericField T="double" Value="_targetInput" ValueChanged="OnTargetInputChanged" Label="Or type it"
-                                         HelperText="Type the temperature you want." Variant="Variant.Outlined"
-                                         Min="10" Max="35" Step="0.1" Adornment="Adornment.End" AdornmentText="C" />
-                    </MudItem>
-                    <MudItem xs="6">
-                        <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ApplyTarget" StartIcon="@Icons.Material.Filled.Check">Apply</MudButton>
-                    </MudItem>
-                    <MudItem xs="6">
-                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="GenerateTarget" StartIcon="@Icons.Material.Filled.AutoAwesome">Generate</MudButton>
-                    </MudItem>
-                </MudGrid>
-            </SectionCard>
-        </MudItem>
-
-        <MudItem xs="12" md="6">
-            <SectionCard Title="Fan" Help="Send a fan mode to the real thermostat.">
-                <MudGrid Spacing="2">
-                    <MudItem xs="12">
-                        <MudSelect T="string" @bind-Value="_fanMode" Label="Fan mode" HelperText="Pick how the fan should blow air." Variant="Variant.Outlined">
-                            @foreach (var mode in FanModes)
-                            {
-                                <MudSelectItem T="string" Value="@mode">@mode</MudSelectItem>
-                            }
-                        </MudSelect>
-                    </MudItem>
-                    <MudItem xs="12">
-                        <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ApplyFanMode" StartIcon="@Icons.Material.Filled.Air">Set fan</MudButton>
-                    </MudItem>
-                </MudGrid>
-            </SectionCard>
-        </MudItem>
-    </MudGrid>
-
-    <SectionCard Title="Real thermostat actions" Help="These buttons send real Home Assistant service calls now.">
-        <MudGrid Spacing="2">
-            <MudItem xs="12" sm="4">
-                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshReal" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
-                <MudText Typo="Typo.caption" Class="helper-text">Ask Home Assistant for the newest reading.</MudText>
-            </MudItem>
-            <MudItem xs="12" sm="4">
-                <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" OnClick="ForceTarget" StartIcon="@Icons.Material.Filled.TrackChanges">Force target</MudButton>
-                <MudText Typo="Typo.caption" Class="helper-text">Set the thermostat to the exact target now.</MudText>
-            </MudItem>
-            <MudItem xs="12" sm="4">
-                <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" OnClick="ForceBoost" StartIcon="@Icons.Material.Filled.AcUnit">Force cooling</MudButton>
-                <MudText Typo="Typo.caption" Class="helper-text">Use the room-minus-1 C cooling push right now.</MudText>
-            </MudItem>
-        </MudGrid>
-    </SectionCard>
-    }
-    else
-    {
-        <SectionCard Title="Guard post standby"
-                     Subtitle="Defender is paused"
-                     Help="The live boards are covered with a tarp. Tap Activate Defender when the tiny shift is back on duty.">
-            <MudButton Class="@DefenderToggleClass" Variant="Variant.Filled" Color="@DefenderToggleColor"
-                       Size="Size.Large" StartIcon="@DefenderToggleIcon" OnClick="ToggleDefender">
-                @DefenderToggleText
-            </MudButton>
-        </SectionCard>
-    }
-
-    <SectionCard Title="Emergency" Help="Urgent quiet actions. These bypass the website lock.">
-        <MudGrid Spacing="2">
-            <MudItem xs="12" md="7">
-                <MudSelect T="string" @bind-Value="_emergencyProtocol" Label="Emergency protocol" HelperText="@EmergencyProtocolHelp" Variant="Variant.Outlined">
-                    @foreach (var option in EmergencyProtocols)
-                    {
-                        <MudSelectItem T="string" Value="@option.Value">@option.Label</MudSelectItem>
-                    }
-                </MudSelect>
-            </MudItem>
-            <MudItem xs="12" md="5" Class="d-flex align-center">
-                <SlideToConfirm Label="@($"SLIDE TO RUN {SelectedEmergencyLabel.ToUpperInvariant()}")" ConfirmedLabel="EMERGENCY RUNNING" Glyph="⚠" OnConfirmed="RunEmergencyProtocol" />
-            </MudItem>
-        </MudGrid>
-        @if (Snapshot?.Emergency.Active == true)
-        {
-            <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined">@Snapshot.Emergency.Status</MudAlert>
-        }
-    </SectionCard>
-
-    <SectionCard Title="Mess hall (siesta)"
-                 Subtitle="@SiestaSubtitle"
-                 Help="Tell the guards to sleep for a while: the AC eases off (parked or off, per Settings) and the money it would probably have spent banks as food rations. The room passing the wake band always wakes them early.">
-        @if (Snapshot?.Siesta is { Active: true } activeNap)
-        {
-            <MudStack Spacing="2">
-                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
-                    GUARDS ASLEEP — wakes @(activeNap.Until?.ToLocalTime().ToString("HH:mm") ?? "soon")
-                    (@(activeNap.SecondsRemaining / 60) min left) · rations this nap $@activeNap.FoodEarnedThisSiestaCad.ToString("0.00")
-                </MudAlert>
-                <MudButton Variant="Variant.Filled" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Alarm" OnClick="CancelSiesta">Wake the guards now</MudButton>
-            </MudStack>
-        }
-        else
-        {
-            <MudGrid Spacing="2">
-                <MudItem xs="4">
-                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Bedtime" OnClick="@(() => StartSiesta(60))">1 hour</MudButton>
-                </MudItem>
-                <MudItem xs="4">
-                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Bedtime" OnClick="@(() => StartSiesta(120))">2 hours</MudButton>
-                </MudItem>
-                <MudItem xs="4">
-                    <MudButton FullWidth="true" Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Bedtime" OnClick="@(() => StartSiesta(240))">4 hours</MudButton>
-                </MudItem>
-            </MudGrid>
-        }
-        @if (Snapshot?.FoodRations is { } pantryChip)
-        {
-            <MudText Typo="Typo.caption" Class="helper-text mt-2">
-                Pantry: $@pantryChip.BalanceCad.ToString("0.00") / $@pantryChip.BalanceMaxCad.ToString("0.00") · earned today $@pantryChip.EarnedTodayCad.ToString("0.00")
-            </MudText>
-        }
-    </SectionCard>
-
-    <SectionCard Title="Learning" Help="A machine-learning trainer learns automatically from the someone-upset button and your real Home Assistant thermostat history (retrains in the background; no action needed).">
-        <MudStack Spacing="2">
-            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="LearnFromHistory" Disabled="_learningHistory" StartIcon="@Icons.Material.Filled.ModelTraining">
-                @(_learningHistory ? "Retraining…" : "Retrain from history now")
-            </MudButton>
-            @if (Snapshot is { } learnSnapshot)
-            {
-                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">@learnSnapshot.HistoryLearning.Status</MudAlert>
-                @if (learnSnapshot.LearningModel is { } ml)
-                {
-                    <MudAlert Severity="@(ml.AngerModelTrained || ml.ComfortModelTrained ? Severity.Success : Severity.Normal)" Variant="Variant.Outlined" Dense="true">
-                        ML trainer — anger model: @(ml.AngerModelTrained ? $"trained ({ml.AngerPositiveSamples} upset / {ml.AngerNegativeSamples} benign, log-loss {ml.AngerLogLoss:0.00})" : "gathering data");
-                        comfort model: @(ml.ComfortModelTrained ? $"trained ({ml.ComfortSamples} samples, RMSE {ml.ComfortRmse:0.0} C)" : "gathering data").
-                        @if (ml.TrainedAt is { } trainedAt)
-                        {
-                            <text> Last trained @trainedAt.ToLocalTime().ToString("MMM d HH:mm").</text>
-                        }
-                    </MudAlert>
-                }
-                <MudAlert Severity="@(learnSnapshot.AngerLearning.CurrentHourSensitivity > 0 ? Severity.Warning : Severity.Normal)" Variant="Variant.Outlined" Dense="true">
-                    Anger learning: @learnSnapshot.AngerLearning.EventCount upset press(es) recorded.
-                    @if (learnSnapshot.AngerLearning.CurrentHourSensitivity > 0)
-                    {
-                        <text> This hour is @(((int)Math.Round(learnSnapshot.AngerLearning.CurrentHourSensitivity * 100)))% sensitive, adding @learnSnapshot.AngerLearning.ExtraGraceMinutes min of hands-off grace.</text>
-                    }
-                </MudAlert>
-            }
-        </MudStack>
-    </SectionCard>
-</MudStack>
+        @* ── F · learning ── *@
+        <div class="ops-ctl-card">
+            <div class="ops-ctl-label">LEARNING — THE ANGER MODEL</div>
+            <button class="ops-btn ops-btn--outline" style="width: 100%;" @onclick="LearnFromHistory" disabled="@_learningHistory">
+                @(_learningHistory ? "✦ RETRAINING…" : "✦ RETRAIN FROM HISTORY NOW")
+            </button>
+            <p class="ops-learn-p">@LearningParagraph</p>
+        </div>
+    </div>
+</div>
 
 @code {
     private double _targetInput = 22.0;
@@ -270,40 +143,24 @@
     private string? _fanMode;
     private string _emergencyProtocol = "suspicion";
 
-    private static readonly (string Value, string Label, string Help)[] EmergencyProtocols =
+    private static readonly (string Value, string Label, string Name, string Help)[] EmergencyProtocols =
     [
-        ("too-cold", "Too cold", "Pauses the defender and turns the real thermostat off."),
-        ("someone-upset", "Someone upset", "Starts quiet observe-only mode so wall changes are not fought."),
-        ("suspicion", "Suspicion quiet", "Starts a longer quiet window where corrections stand down but readings continue."),
-        ("brother-mad", "🚨 Brother mad", "Full apology: eases the AC up 1.0 C immediately, stops all corrections for 2 hours, and teaches the anger model this hour is sensitive.")
+        ("too-cold", "❄ TOO COLD", "too cold", "Pauses the defender and turns the real thermostat off (30 min)."),
+        ("someone-upset", "😠 SOMEONE UPSET", "someone upset", "Observe-only mode so wall changes are not fought (45 min)."),
+        ("suspicion", "👀 SUSPICION QUIET", "suspicion quiet", "Longer quiet window; readings continue, corrections stand down (90 min)."),
+        ("brother-mad", "🚨 BROTHER MAD", "brother mad", "Full apology: +1.0 °C peace gesture, all corrections stopped 2 h, anger model updated.")
     ];
 
     private DefenderSnapshot? Snapshot => State.Snapshot;
-    private string EmergencyProtocolHelp => EmergencyProtocols.FirstOrDefault(o => o.Value == _emergencyProtocol).Help ?? "Pick an emergency action.";
-    private string SelectedEmergencyLabel => EmergencyProtocols.FirstOrDefault(o => o.Value == _emergencyProtocol).Label ?? "emergency";
+    private string SelectedEmergencyName => EmergencyProtocols.FirstOrDefault(o => o.Value == _emergencyProtocol).Name ?? "emergency";
 
-    private string EnforcerSubtitle => Snapshot?.Enforcer switch
-    {
-        { Enabled: false } => "Off",
-        { Escalated: true } => "Escalated",
-        { Active: true, Stealth: true } => "Enforcing (stealth)",
-        { Active: true } => "Enforcing",
-        { Enabled: true } => "Watching",
-        _ => "Off"
-    };
-    private string EnforcerChipText => EnforcerSubtitle;
-    private Color EnforcerChipColor => Snapshot?.Enforcer switch
-    {
-        { Enabled: false } => Color.Default,
-        { Escalated: true } => Color.Error,
-        { Active: true } => Color.Warning,
-        _ => Color.Success
-    };
     private bool DefenderIsEnabled => Snapshot?.DefenderEnabled == true;
-    private string DefenderToggleText => DefenderIsEnabled ? "Stand Down Defender" : "Activate Defender";
-    private string DefenderToggleIcon => DefenderIsEnabled ? Icons.Material.Filled.Shield : Icons.Material.Filled.PowerSettingsNew;
-    private Color DefenderToggleColor => DefenderIsEnabled ? Color.Success : Color.Error;
-    private string DefenderToggleClass => DefenderIsEnabled ? "defender-toggle defender-toggle--active" : "defender-toggle defender-toggle--paused";
+    private string DefenderSwitchClass => DefenderIsEnabled ? "ops-defender-switch ops-defender-switch--on" : "ops-defender-switch ops-defender-switch--off";
+
+    private string TargetShort => $"{_targetInput:0.0}°";
+    private string BoostOffsetText => $"{Snapshot?.BoostOffsetCelsius ?? 1.0:0.0} °C";
+
+    private bool IsCurrentFan(string mode) => string.Equals(mode, Snapshot?.HomeAssistantThermostat?.FanMode, StringComparison.OrdinalIgnoreCase);
 
     private IReadOnlyList<string> FanModes
     {
@@ -316,8 +173,32 @@
             }
 
             return string.IsNullOrWhiteSpace(Snapshot?.HomeAssistantThermostat?.FanMode)
-                ? ["auto"]
+                ? ["auto", "low", "medium", "high"]
                 : [Snapshot.HomeAssistantThermostat.FanMode!];
+        }
+    }
+
+    private string LearningParagraph
+    {
+        get
+        {
+            var model = Snapshot?.LearningModel;
+            var anger = model is null
+                ? "gathering data"
+                : model.AngerModelTrained
+                    ? $"trained on {model.AngerPositiveSamples + model.AngerNegativeSamples} labelled moments ({model.AngerPositiveSamples} upset)"
+                    : "gathering data";
+            var comfort = model is null
+                ? "gathering data"
+                : model.ComfortModelTrained
+                    ? $"{model.ComfortSamples} samples, RMSE {model.ComfortRmse:0.0} °C"
+                    : "gathering data";
+
+            var grace = Snapshot?.AngerLearning is { CurrentHourSensitivity: > 0 } al
+                ? $" This hour is {(int)Math.Round(al.CurrentHourSensitivity * 100)}% sensitive, adding {al.ExtraGraceMinutes} min of hands-off grace."
+                : string.Empty;
+
+            return $"Anger model: {anger}. Comfort model: {comfort}.{grace}";
         }
     }
 
@@ -338,9 +219,15 @@
         InvokeAsync(StateHasChanged);
     }
 
-    private void OnTargetInputChanged(double value)
+    private void TargetUp()
     {
-        _targetInput = value;
+        _targetInput = Math.Min(35, _targetInput + 0.5);
+        _targetDirty = true;
+    }
+
+    private void TargetDown()
+    {
+        _targetInput = Math.Max(10, _targetInput - 0.5);
         _targetDirty = true;
     }
 
@@ -369,7 +256,7 @@
         State.Refresh();
         _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
-        Snackbar.Add("Target saved.", Severity.Success);
+        Snackbar.Add("Directive filed with the guards.", Severity.Success);
     }
 
     private Task ToggleDefender() => SetDefenderEnabled(!DefenderIsEnabled);
@@ -416,15 +303,6 @@
         }
     }
 
-    private string SiestaSubtitle => Snapshot?.Siesta switch
-    {
-        { Active: true } => "Guards asleep",
-        { Enabled: true } => "Guards on duty",
-        _ => "Off",
-    };
-
-    // Start = thermostat-affecting (parks or turns the unit off once) → non-bypass gate, same
-    // rule as "turn thermostat off". Cancel only clears a hold.
     private async Task StartSiesta(int minutes)
     {
         if (!TryBeginWebsiteCommand("start siesta"))
@@ -473,6 +351,7 @@
         $"emergency {_emergencyProtocol}",
         bypassDebounce: !string.Equals(_emergencyProtocol, "too-cold", StringComparison.OrdinalIgnoreCase));
     private Task TurnThermostatOff(bool bypassDebounce = false) => RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off", bypassDebounce);
+    private Task TurnOffFromControls() => TurnThermostatOff();
 
     private bool _learningHistory;
     private async Task LearnFromHistory()
@@ -499,15 +378,10 @@
         }
     }
 
-    private async Task ApplyFanMode()
+    private async Task ApplyFanModeTo(string mode)
     {
-        if (string.IsNullOrWhiteSpace(_fanMode))
-        {
-            Snackbar.Add("Pick a fan mode first.", Severity.Warning);
-            return;
-        }
-
-        await RunThermostatAction(() => Defender.ForceFanModeAsync(_fanMode, CancellationToken.None), "Fan mode sent.", $"set fan to {_fanMode}");
+        _fanMode = mode;
+        await RunThermostatAction(() => Defender.ForceFanModeAsync(mode, CancellationToken.None), $"Fan set to {mode}.", $"set fan to {mode}");
     }
 
     private bool TryBeginWebsiteCommand(string actionName, bool bypassDebounce = false)

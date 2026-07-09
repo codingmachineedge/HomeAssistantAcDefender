@@ -3,245 +3,180 @@
 @using System.Text.Json
 @inject DefenderStateProvider State
 @inject HomeAssistantClient HomeAssistant
-@inject AcDefenderService Defender
-@inject ISnackbar Snackbar
 
-<PageTitle>Logs - AC Defender</PageTitle>
+<PageTitle>Field Reports — SCP AC Defender</PageTitle>
 
-<MudStack Spacing="3">
+<div class="ops-dash-stack">
+
     @if (State.Snapshot?.AdjustmentStatistics is { } stats)
     {
         <div class="ops-panel ops-panel--pad">
             <div class="ops-panel__label">ADJUSTMENT STATISTICS — @stats.TotalAdjustments ANALYSED</div>
             <div class="helper-text" style="margin-bottom: 12px;">@stats.Insight</div>
-            <div class="ops-stat-grid">
-                @foreach (var head in new[] { "GROUP", "COUNT", "AVG SET", "AVG ROOM", "AVG OUT" })
-                {
-                    <div class="ops-stat-grid__cell ops-stat-grid__cell--head">@head</div>
-                }
-                @foreach (var row in new[] { stats.PersonHome, stats.PersonAway, stats.BedroomOccupied, stats.BedroomEmpty })
-                {
-                    <div class="ops-stat-grid__cell ops-stat-grid__cell--label">@row.Label</div>
-                    <div class="ops-stat-grid__cell">@row.Count</div>
-                    <div class="ops-stat-grid__cell">@Format.Temp(row.AverageSetPointCelsius)</div>
-                    <div class="ops-stat-grid__cell">@Format.Temp(row.AverageRoomTemperatureCelsius)</div>
-                    <div class="ops-stat-grid__cell">@Format.Temp(row.AverageOutdoorTemperatureCelsius)</div>
-                }
-                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">OVERALL</div>
-                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@stats.TotalAdjustments</div>
-                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.Temp(stats.AverageSetPointCelsius)</div>
-                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.Temp(stats.AverageRoomTemperatureCelsius)</div>
-                <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.Temp(stats.AverageOutdoorTemperatureCelsius)</div>
+            <div class="ops-stat-scroll">
+                <div class="ops-stat-grid">
+                    @foreach (var head in new[] { "GROUP", "COUNT", "AVG SET", "AVG ROOM", "AVG OUT" })
+                    {
+                        <div class="ops-stat-grid__cell ops-stat-grid__cell--head">@head</div>
+                    }
+                    @foreach (var row in new[] { stats.PersonHome, stats.PersonAway, stats.BedroomOccupied, stats.BedroomEmpty })
+                    {
+                        <div class="ops-stat-grid__cell ops-stat-grid__cell--label">@row.Label</div>
+                        <div class="ops-stat-grid__cell">@row.Count</div>
+                        <div class="ops-stat-grid__cell">@Format.TempDeg(row.AverageSetPointCelsius)</div>
+                        <div class="ops-stat-grid__cell">@Format.TempDeg(row.AverageRoomTemperatureCelsius)</div>
+                        <div class="ops-stat-grid__cell">@Format.TempDeg(row.AverageOutdoorTemperatureCelsius)</div>
+                    }
+                    <div class="ops-stat-grid__cell ops-stat-grid__cell--total">OVERALL</div>
+                    <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@stats.TotalAdjustments</div>
+                    <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.TempDeg(stats.AverageSetPointCelsius)</div>
+                    <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.TempDeg(stats.AverageRoomTemperatureCelsius)</div>
+                    <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.TempDeg(stats.AverageOutdoorTemperatureCelsius)</div>
+                </div>
             </div>
         </div>
     }
-    @* ---------- HA full history + derived algorithm ---------- *@
-    <div class="ops-panel ops-panel--pad">
-        <div class="ops-panel__label">HOME ASSISTANT FULL HISTORY — RECORDER ARCHIVE</div>
-        <div class="helper-text" style="margin-bottom: 10px;">Pulls every climate state Home Assistant still remembers (asks for 31 days; the recorder returns whatever it has, start to end) and derives the algorithm from it.</div>
-        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px;">
-            <button class="ops-btn ops-btn--solid" @onclick="FetchFullHistory" disabled="@_historyLoading">@(_historyLoading ? "PULLING ARCHIVE…" : "⇣ FETCH FULL HISTORY")</button>
-            <button class="ops-btn ops-btn--outline" @onclick="RunLearning" disabled="@_historyLoading">✦ RE-LEARN THE ALGORITHM</button>
-        </div>
 
-        @if (!string.IsNullOrWhiteSpace(_historyError))
-        {
-            <div class="ops-alert-row ops-alert-row--warn" style="margin-bottom: 10px;">
-                <span class="ops-alert-row__tag">ARCHIVE</span>
-                <span class="ops-alert-row__text">@_historyError</span>
-            </div>
-        }
-
-        @if (_history is { Count: > 0 })
-        {
-            <div class="ops-comfort-metrics" style="margin-bottom: 14px;">
-                <div class="ops-panel" style="padding: 12px 14px;">
-                    <div class="ops-panel__label">ARCHIVE SPAN</div>
-                    <div class="ops-comfort-metric__value" style="font-size: 14px;">@Format.DateTimeText(_history[0].Timestamp)<br />→ @Format.DateTimeText(_history[^1].Timestamp)</div>
-                </div>
-                <div class="ops-panel" style="padding: 12px 14px;">
-                    <div class="ops-panel__label">SAMPLES</div>
-                    <div class="ops-comfort-metric__value">@_history.Count</div>
-                    <div class="helper-text">Every state HA recorded.</div>
-                </div>
-                <div class="ops-panel" style="padding: 12px 14px;">
-                    <div class="ops-panel__label">SETPOINT CHANGES</div>
-                    <div class="ops-comfort-metric__value" style="color: var(--warn);">@SetpointChanges.Count</div>
-                    <div class="helper-text">@AppChangeCount from an app user · @(SetpointChanges.Count - AppChangeCount) wall/device/defender.</div>
-                </div>
-                <div class="ops-panel" style="padding: 12px 14px;">
-                    <div class="ops-panel__label">BUSIEST HOURS</div>
-                    <div class="ops-comfort-metric__value" style="font-size: 16px;">@BusiestHoursText</div>
-                    <div class="helper-text">When the thermostat gets touched most.</div>
-                </div>
-            </div>
-
+    @* ---------- Histogram + derived algorithm (auto-loaded from the recorder archive) ---------- *@
+    @if (_history is { Count: > 1 })
+    {
+        <div class="ops-panel ops-panel--pad">
             <div class="ops-panel__label">SETPOINT CHANGES BY HOUR OF DAY (TORONTO)</div>
             <div class="ops-usage-bars" style="height: 70px; margin-bottom: 4px;">
                 @foreach (var (hour, count) in HourHistogram)
                 {
-                    <div class="ops-usage-bars__bar @(count >= HistogramHotThreshold ? "ops-usage-bars__bar--hot" : "")"
-                         style="height: @(HistogramMax == 0 ? 2 : Math.Max(3, count * 100 / HistogramMax))%"
+                    <div class="ops-usage-bars__bar @(count >= HistogramHotThreshold && HistogramMax > 0 ? "ops-usage-bars__bar--hot" : "")"
+                         style="height: @(HistogramMax == 0 ? 4 : Math.Max(4, count * 100 / HistogramMax))%; border-radius: 2px 2px 0 0;"
                          title="@($"{hour:00}:00 — {count} changes")"></div>
                 }
             </div>
-            <div class="ops-usage-scale" style="margin-bottom: 14px;"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+            <div class="ops-usage-scale"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
 
-            <div class="ops-panel" style="padding: 14px 16px; border-left: 3px solid var(--accent); margin-bottom: 14px;">
-                <div class="ops-panel__label">THE ALGORITHM — WHAT THE DEFENDER LEARNED FROM THIS HISTORY</div>
+            <div class="ops-learned">
+                <div class="ops-learned__label">THE ALGORITHM — WHAT THE DEFENDER LEARNED</div>
                 @foreach (var line in AlgorithmLines)
                 {
-                    <div style="font-size: 11px; line-height: 1.8;">▸ @line</div>
+                    <div class="ops-learned__line">▸ @line</div>
                 }
             </div>
+        </div>
+    }
 
-            <div class="ops-panel__label">FULL SAMPLE LOG (NEWEST FIRST@(_history.Count > 400 ? ", SHOWING 400" : ""))</div>
-            <MudStack Spacing="1" Class="scroll-list tall-list" Style="margin-top: 6px;">
-                @foreach (var sample in Enumerable.Reverse(_history).Take(400))
+    @* ---------- Two-column log grid ---------- *@
+    <div class="ops-logs-grid">
+        <div class="ops-panel ops-panel--pad" style="min-width: 0;">
+            <div class="ops-panel__label">THERMOSTAT CHANGE LOG — EXTERNAL TOUCHES</div>
+            <input class="ops-input" style="width: 100%; box-sizing: border-box; margin: 0 0 10px 0;"
+                   value="@_touchSearch" @oninput="OnTouchSearchChanged"
+                   placeholder="SEARCH CHANGES…" aria-label="Search thermostat changes" />
+            <div class="ops-logs-list">
+                @if (FilteredThermostatChanges.Any())
                 {
-                    <div class="ops-log-row" style="cursor: default;">
-                        <span class="ops-log-row__change">@(sample.SetPointCelsius is { } sp ? $"{sp:0.0}°C" : "--")</span>
-                        <span class="ops-log-row__source">@(string.IsNullOrWhiteSpace(sample.ContextUserId) ? (sample.HvacMode ?? "?").ToUpperInvariant() : "APP USER")</span>
-                        <span class="ops-log-row__context">room @(sample.CurrentTemperatureCelsius is { } rt ? $"{rt:0.0}°C" : "--") · @(sample.HvacAction ?? "--")</span>
-                        <span class="ops-log-row__time">@Format.DateTimeText(sample.Timestamp)</span>
-                    </div>
+                    @foreach (var change in FilteredThermostatChanges)
+                    {
+                        <button class="ops-log-row" @onclick="@(() => SelectTouchLog(change))">
+                            <span class="ops-log-row__change">@($"{change.PreviousSetPointCelsius:0.0} → {change.NewSetPointCelsius:0.0}°C")</span>
+                            <span class="ops-log-row__source">@SourceLabel(change)</span>
+                            <span class="ops-log-row__context">@($"{Format.TempDeg(change.RoomTemperatureCelsius)} room · {Format.TempDeg(change.OutdoorTemperatureCelsius)} outdoor · {change.WeatherCondition ?? "weather --"}")</span>
+                            <span class="ops-log-row__time">@Format.ShortTime(change.Timestamp)</span>
+                        </button>
+                    }
                 }
-            </MudStack>
-        }
+                else
+                {
+                    <div class="helper-text">No external thermostat changes match.</div>
+                }
+            </div>
+        </div>
+
+        <div class="ops-panel ops-panel--pad" style="min-width: 0;">
+            <div class="ops-panel__label">ACTIVITY — WHAT THE DEFENDER HAS BEEN DOING</div>
+            <div class="ops-logs-list ops-logs-list--tall">
+                @if (Events.Count > 0)
+                {
+                    @foreach (var item in Events)
+                    {
+                        var meta = EventTagFor(item);
+                        <div class="ops-event" style="border-left-color: @EventColor(item.Level);">
+                            <div class="ops-event__top">
+                                <span class="ops-event__time">@Format.ShortTime(item.Timestamp)</span>
+                                <span class="ops-event__tag" style="border-color: @EventColor(item.Level); color: @EventColor(item.Level);">@meta.Tag</span>
+                                <span class="ops-event__spacer"></span>
+                                @if (meta.Slug is { } slug)
+                                {
+                                    <a class="ops-event__wiki" href="@($"/wiki/Algorithm-{slug}")" title="Read the wiki article for this procedure">⎘ WIKI</a>
+                                }
+                            </div>
+                            <div class="ops-event__msg">@item.Message</div>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="helper-text">No activity recorded yet.</div>
+                }
+            </div>
+        </div>
     </div>
-
-    <MudGrid Spacing="3">
-        <MudItem xs="12" lg="6">
-            <SectionCard Title="Thermostat change log"
-                         Subtitle="External thermostat changes"
-                         Help="Search by temperature, source, room, outdoor, weather, or time. Click a row for full JSON.">
-                <Actions>
-                    <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">@FilteredTouchCount</MudChip>
-                </Actions>
-                <ChildContent>
-                    <MudTextField @bind-Value="_touchSearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
-                                  Placeholder="Search thermostat changes" Adornment="Adornment.Start"
-                                  AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mb-2" />
-                    <MudStack Spacing="1" Class="scroll-list tall-list">
-                        @if (FilteredThermostatChanges.Any())
-                        {
-                            @foreach (var change in FilteredThermostatChanges)
-                            {
-                                <div class="ops-log-row" @onclick="@(() => SelectTouchLog(change))">
-                                    <span class="ops-log-row__change">@($"{change.PreviousSetPointCelsius:0.0} → {change.NewSetPointCelsius:0.0}°C")</span>
-                                    <span class="ops-log-row__source">@SourceLabel(change)</span>
-                                    <span class="ops-log-row__context">@($"{Format.Temp(change.RoomTemperatureCelsius)} room · {Format.Temp(change.OutdoorTemperatureCelsius)} outdoor · {change.WeatherCondition ?? "weather --"}")</span>
-                                    <span class="ops-log-row__time">@Format.DateTimeText(change.Timestamp)</span>
-                                </div>
-                            }
-                        }
-                        else
-                        {
-                            <MudText Class="helper-text">No external thermostat changes match.</MudText>
-                        }
-                    </MudStack>
-                </ChildContent>
-            </SectionCard>
-        </MudItem>
-
-        <MudItem xs="12" lg="6">
-            <SectionCard Title="Activity"
-                         Subtitle="What the defender has been doing"
-                         Help="Click a row for full JSON context.">
-                <MudTextField @bind-Value="_eventSearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
-                              Placeholder="Search activity" Adornment="Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mb-2" />
-                <MudStack Spacing="1" Class="scroll-list tall-list">
-                    @if (FilteredEvents.Any())
-                    {
-                        @foreach (var item in FilteredEvents)
-                        {
-                            <MudAlert Class="clickable-row" Severity="@Format.EventSeverity(item.Level)" Variant="Variant.Outlined" Dense="true" @onclick="@(() => SelectEventLog(item))">
-                                <MudText Typo="Typo.caption" Class="helper-text">@Format.DateTimeText(item.Timestamp)</MudText>
-                                <MudText Typo="Typo.body2">@item.Message</MudText>
-                            </MudAlert>
-                        }
-                    }
-                    else
-                    {
-                        <MudText Class="helper-text">No activity matches.</MudText>
-                    }
-                </MudStack>
-            </SectionCard>
-        </MudItem>
-    </MudGrid>
 
     @if (!string.IsNullOrWhiteSpace(_selectedLogJson))
     {
-        <SectionCard Title="Selected log detail" Subtitle="@_selectedLogTitle">
-            <Actions>
-                <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="ClearSelectedLog" StartIcon="@Icons.Material.Filled.Close">Clear</MudButton>
-            </Actions>
-            <ChildContent>
-                <pre class="json-detail">@_selectedLogJson</pre>
-                <MudText Typo="Typo.caption" Class="helper-text">The log item plus the latest thermostat and weather JSON the website has.</MudText>
-            </ChildContent>
-        </SectionCard>
+        <div class="ops-logs-detail">
+            <div class="ops-logs-detail__head">
+                <span class="ops-logs-detail__label">SELECTED LOG DETAIL — @_selectedLogTitle</span>
+                <button class="ops-logs-detail__clear" @onclick="ClearSelectedLog">✕ CLEAR</button>
+            </div>
+            <pre class="json-detail" style="max-height: 320px; color: #c6d2d8;">@_selectedLogJson</pre>
+            <div class="helper-text">The log item plus the latest thermostat and weather JSON the website has.</div>
+        </div>
     }
-</MudStack>
+</div>
 
 @code {
     private string _touchSearch = "";
-    private string _eventSearch = "";
     private string _selectedLogTitle = "";
     private string _selectedLogJson = "";
+    private bool _historyLoaded;
 
     private static readonly JsonSerializerOptions LogJsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
+    // Guard names → wiki slug, so activity rows can deep-link to the matching article.
+    private static readonly IReadOnlyList<(string Name, string Slug)> GuardSlugs =
+        GuardCatalog.All.Select(g => (g.Name, Format.Slugify(g.Name))).ToList();
+
     private DefenderSnapshot Snapshot => State.Snapshot;
 
-    // ---------- HA full history + derived algorithm ----------
+    private IReadOnlyList<DefenderEvent> Events => Snapshot?.Events ?? Array.Empty<DefenderEvent>();
 
-    private bool _historyLoading;
-    private string? _historyError;
+    // ---------- history archive (auto-loaded once for the histogram + learned lines) ----------
+
     private IReadOnlyList<ClimateHistorySample>? _history;
 
-    private async Task FetchFullHistory()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        var entityId = Snapshot?.HomeAssistantEntityId;
-        if (string.IsNullOrWhiteSpace(entityId))
+        if (!firstRender || _historyLoaded)
         {
-            _historyError = "No climate entity known yet — the defender has to see the thermostat once first.";
             return;
         }
 
-        _historyLoading = true;
-        _historyError = null;
-        StateHasChanged();
+        _historyLoaded = true;
+        var entityId = Snapshot?.HomeAssistantEntityId;
+        if (string.IsNullOrWhiteSpace(entityId))
+        {
+            return;
+        }
+
         try
         {
             var to = DateTimeOffset.UtcNow;
             _history = (await HomeAssistant.GetClimateHistoryAsync(entityId, to.AddDays(-31), to, CancellationToken.None))
                 .OrderBy(s => s.Timestamp)
                 .ToList();
-            if (_history.Count == 0)
-            {
-                _historyError = "Home Assistant returned no history — the recorder may be empty for this entity.";
-            }
+            await InvokeAsync(StateHasChanged);
         }
-        catch (Exception ex)
+        catch
         {
-            _historyError = $"History fetch failed: {ex.Message}";
-        }
-
-        _historyLoading = false;
-    }
-
-    private async Task RunLearning()
-    {
-        try
-        {
-            var result = await Defender.LearnFromHistoryAsync(CancellationToken.None);
-            Snackbar.Add(result.Status, Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Learning failed: {ex.Message}", Severity.Error);
+            // No recorder / no HA — the histogram section just stays hidden, which is correct here.
         }
     }
 
@@ -269,7 +204,7 @@
         }
     }
 
-    private int HistogramMax => HourHistogram.Max(h => h.Count);
+    private int HistogramMax => HourHistogram.Count == 0 ? 0 : HourHistogram.Max(h => h.Count);
     private int HistogramHotThreshold => Math.Max(1, (int)(HistogramMax * 0.7));
 
     private string BusiestHoursText => string.Join(" · ",
@@ -293,38 +228,23 @@
                     lines.Add($"Setpoint lived between {setpoints.Min():0.0} and {setpoints.Max():0.0} °C (average {setpoints.Average():0.0}); the room lived between {rooms.Min():0.0} and {rooms.Max():0.0} °C (average {rooms.Average():0.0}).");
                 }
 
-                var offSamples = h.Count(s => string.Equals(s.HvacMode, "off", StringComparison.OrdinalIgnoreCase));
-                lines.Add($"The unit was in OFF mode for {offSamples * 100.0 / h.Count:0}% of recorded states — the rest was cool/auto duty.");
-
                 if (BusiestHoursText.Length > 0)
                 {
                     lines.Add($"The thermostat war peaks around {BusiestHoursText} — the defenders treat these hours as sensitive and act extra slowly there.");
                 }
             }
 
-            if (Snapshot?.HistoryLearning is { } learning && learning.LearnedHourCount > 0)
+            if (Snapshot?.HistoryLearning is { MedianTouchIntervalMinutes: { } median })
             {
-                lines.Add($"Learned comfort profile: {learning.Status}");
-                if (learning.MedianTouchIntervalMinutes is { } median)
-                {
-                    lines.Add($"Humans in this house touch the thermostat roughly every {median:0} minutes when active — defender corrections are paced to blend under that rhythm.");
-                }
-
-                if (learning.CurrentHourPreferredSetPointCelsius is { } preferred)
-                {
-                    lines.Add($"For the current hour the house historically prefers about {preferred:0.0} °C.");
-                }
+                lines.Add($"Humans in this house touch the thermostat roughly every {median:0} minutes when active — corrections are paced to blend under that rhythm.");
             }
 
-            if (Snapshot?.LearningModel is { } model)
-            {
-                lines.Add($"Anger model: trained on {model.AngerPositiveSamples + model.AngerNegativeSamples} labelled moments ({model.AngerPositiveSamples} upset). Comfort model: {model.ComfortSamples} samples. These shape how long the defender waits before acting at each hour.");
-            }
-
-            lines.Add("Standing rules regardless of history: \"the temp I want\" is a hard floor, every command is one 0.5 °C temperature-driven step, nights are protected by the shutdown window and the 23 °C night minimum, raises earn a peace offering, and 3 h of fruitless cooling forces a rest.");
+            lines.Add("Standing rules regardless of history: \"the temp I want\" is a hard floor, every command is one 0.5 °C step, raises earn a peace offering, and 3 h of fruitless cooling forces a rest.");
             return lines;
         }
     }
+
+    private void OnTouchSearchChanged(ChangeEventArgs e) => _touchSearch = e.Value?.ToString() ?? "";
 
     private IEnumerable<ThermostatChangeAudit> FilteredThermostatChanges =>
         (Snapshot?.ThermostatChanges ?? Array.Empty<ThermostatChangeAudit>())
@@ -332,38 +252,55 @@
                 _touchSearch,
                 $"{change.PreviousSetPointCelsius:0.0}",
                 $"{change.NewSetPointCelsius:0.0}",
-                Format.DateTimeText(change.Timestamp),
-                Format.Temp(change.RoomTemperatureCelsius),
-                Format.Temp(change.OutdoorTemperatureCelsius),
+                Format.ShortTime(change.Timestamp),
+                Format.TempDeg(change.RoomTemperatureCelsius),
+                Format.TempDeg(change.OutdoorTemperatureCelsius),
                 change.WeatherCondition,
+                SourceLabel(change),
                 change.ChangeSource,
                 change.SourceDetail,
-                change.ContextUserId,
-                change.ContextParentId));
-
-    private IEnumerable<DefenderEvent> FilteredEvents =>
-        (Snapshot?.Events ?? Array.Empty<DefenderEvent>())
-            .Where(item => Format.MatchesSearch(_eventSearch, item.Level, item.Message, Format.DateTimeText(item.Timestamp)));
-
-    private string FilteredTouchCount => $"{FilteredThermostatChanges.Count()}/{Snapshot?.ThermostatChanges?.Count ?? 0}";
+                change.ContextUserId));
 
     private void SelectTouchLog(ThermostatChangeAudit change)
     {
-        _selectedLogTitle = $"Thermostat change {Format.DateTimeText(change.Timestamp)}";
+        _selectedLogTitle = $"THERMOSTAT CHANGE {Format.ShortTime(change.Timestamp)}";
         _selectedLogJson = JsonSerializer.Serialize(new { Type = "thermostat-change", Change = change, Latest = BuildLogContext() }, LogJsonOptions);
     }
 
-    private static string SourceLabel(ThermostatChangeAudit change)
+    private static string SourceLabel(ThermostatChangeAudit change) => (change.ChangeSource ?? "").ToLowerInvariant() switch
     {
-        return string.IsNullOrWhiteSpace(change.ChangeSource)
-            ? "UNKNOWN"
-            : change.ChangeSource.Replace("thermostat-device", "WALL").ToUpperInvariant();
-    }
+        "" => "UNKNOWN",
+        "thermostat-device" => "WALL",
+        "home-assistant-user" => "APP USER",
+        "rival-schedule" => "SCHEDULE",
+        var other => other.Replace("thermostat-device", "wall").ToUpperInvariant()
+    };
 
-    private void SelectEventLog(DefenderEvent item)
+    private static string EventColor(string level) => level.ToLowerInvariant() switch
     {
-        _selectedLogTitle = $"Activity {Format.DateTimeText(item.Timestamp)}";
-        _selectedLogJson = JsonSerializer.Serialize(new { Type = "activity", Event = item, Latest = BuildLogContext() }, LogJsonOptions);
+        "warning" => "var(--warn)",
+        "error" => "var(--bad)",
+        "success" or "ok" => "var(--good)",
+        _ => "var(--info)"
+    };
+
+    private static (string Tag, string? Slug) EventTagFor(DefenderEvent ev)
+    {
+        var msg = ev.Message ?? "";
+        foreach (var (name, slug) in GuardSlugs)
+        {
+            if (msg.Contains(name, StringComparison.OrdinalIgnoreCase))
+            {
+                return (name.ToUpperInvariant(), slug);
+            }
+        }
+
+        return ((ev.Level ?? "info").ToLowerInvariant() switch
+        {
+            "warning" => "NOTICE",
+            "error" => "ALERT",
+            _ => "REPORT"
+        }, null);
     }
 
     private void ClearSelectedLog()

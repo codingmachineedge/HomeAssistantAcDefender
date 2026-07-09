@@ -1,88 +1,58 @@
 @page "/guide"
 
-<PageTitle>Guide - AC Defender</PageTitle>
+<PageTitle>Field Manual — SCP AC Defender</PageTitle>
 
-<MudStack Spacing="3">
-    <SectionCard Title="How the defender thinks"
-                 Subtitle="The 24/7 decision cycle"
-                 Help="Every few seconds the worker reads real Home Assistant data and walks this sequence. The first guard that wants to wait stops the cycle until its moment arrives.">
-        <MudList T="string" Dense="true" Class="cycle-list">
-            @foreach (var (i, step) in CycleSteps.Select((s, i) => (i + 1, s)))
-            {
-                <MudListItem T="string" Icon="@Icons.Material.Filled.ArrowRight">
-                    <span class="cycle-list__n">@i.</span> @step
-                </MudListItem>
-            }
-        </MudList>
-    </SectionCard>
+<div class="ops-dash-stack">
 
-    <SectionCard Title="Warm-room cooling"
-                 Subtitle="Temperature-driven 0.5 °C steps — never snaps, never below “my temp”">
-        <MudText Typo="Typo.body2">
-            When the room is above the target, the first correction lands <strong>0.5 °C below the current room
-            temperature</strong>. Every step after that is <strong>earned by the room actually dropping</strong> to the
-            current setpoint — while the AC is still cooling, so the compressor keeps one continuous quiet run instead of
-            cycling on and off. No step is ever driven by a clock, no command ever moves the wall more than 0.5 °C from its
-            current reading (in either direction), and nothing may ever be commanded <strong>below the user's target</strong>
-            — "the temp I want" is a hard floor for every guard, boost, and learned offset.
-        </MudText>
-        <MudText Typo="Typo.body2" Class="mt-2 helper-text">
-            Example: room 25.0 °C, target 23.0 °C, wall moved to 26.0 °C → the wall is walked 25.5 → 25.0 → 24.5 as the
-            room drops, and the walk stops dead at 23.0 °C. A wall left below 23.0 is walked back UP 0.5 °C at a time.
-        </MudText>
-    </SectionCard>
-
-    <SectionCard Title="Household peace treaty"
-                 Subtitle="The rules that stop thermostat wars">
-        <MudList T="string" Dense="true" Class="cycle-list">
-            <MudListItem T="string" Icon="@Icons.Material.Filled.Handshake"><strong>Your target is yours.</strong> No guard, schedule re-assert, comfort override, or learned model ever rewrites "the temp I want" — only you change it, and it is the minimum the defender may ever command.</MudListItem>
-            <MudListItem T="string" Icon="@Icons.Material.Filled.VolunteerActivism"><strong>Peace offering.</strong> When anyone raises the setpoint (wall, Nest, or app), the defender immediately concedes a small extra step UP beyond their number and stands down for a while — they see the system agreeing, not fighting.</MudListItem>
-            <MudListItem T="string" Icon="@Icons.Material.Filled.Bedtime"><strong>Nights belong to the house.</strong> During the night window (default 01:00–08:00): cool outside → the AC is turned off once and everything stands down (manual re-enables respected). Warm outside → <em>passive watch</em>: the defender observes only and fights no wall change unless the room truly overheats, nothing below the night minimum (default 23.0 °C) may ever be commanded, and a <strong>night cooling budget</strong> (default 90 min) caps how long the AC may run inside the window — once spent it eases to a stop so it is never humming all night. Night raises also earn a triple-length peace-offering hold — ten days of history show almost every thermostat fight happened between 22:00 and 08:00.</MudListItem>
-            <MudListItem T="string" Icon="@Icons.Material.Filled.HourglassBottom"><strong>Never on forever.</strong> If the AC cools continuously past the run limit (default 3 h) without reaching the target, the defender eases the setpoint above the room and rests (default 30 min) — an unreachable target can never mean 24 hours of runtime.</MudListItem>
-            <MudListItem T="string" Icon="@Icons.Material.Filled.SentimentVeryDissatisfied"><strong>🚨 Brother mad.</strong> The emergency apology button: the AC is eased up 1.0 °C immediately, all corrections stop for 2 hours, and the anger model records this hour as sensitive so the defenders grow more hands-off at this time of day.</MudListItem>
-        </MudList>
-    </SectionCard>
-
-    <SectionCard Title="Quiet levels"
-                 Subtitle="How adaptive quietness ramps up">
-        <div class="quiet-levels">
-            <div><MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Filled">Calm</MudChip> no recent wall touches</div>
-            <div><MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled">Light</MudChip> a few touches, base settings</div>
-            <div><MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Filled">Quiet</MudChip> repeated touches, waits grow</div>
-            <div><MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Extra quiet</MudChip> smaller nudges, higher hold chance</div>
-            <div><MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Softest</MudChip> maximum quietness before safety overrides</div>
-        </div>
-    </SectionCard>
+    <div class="ops-roster-tools ops-roster-tools--sticky">
+        <input class="ops-input" value="@_search" @oninput="OnSearchChanged" placeholder="SEARCH THE MANUAL…" aria-label="Search procedures" />
+        <a class="ops-chip" href="/wiki">⎘ FULL WIKI</a>
+    </div>
 
     @foreach (var group in Groups)
     {
-        var guards = GuardCatalog.All.Where(g => g.Category == group.Category).ToList();
-        if (guards.Count == 0)
+        var entries = Filtered(group.Category).ToList();
+        if (entries.Count == 0)
         {
             continue;
         }
 
-        <MudText Typo="Typo.h6" Class="guide-group__title">@group.Title</MudText>
-        <div class="guide-grid">
-            @foreach (var guard in guards)
-            {
-                <MudPaper Class="guide-entry" Elevation="0">
-                    <MudText Typo="Typo.subtitle1" Class="guide-entry__name">@guard.Name</MudText>
-                    <MudText Typo="Typo.body2" Class="guide-entry__summary">@guard.Summary</MudText>
-                    <p><span class="guard-help__tag">Watches</span> @guard.Watches</p>
-                    <p><span class="guard-help__tag">Logic</span> @guard.Logic</p>
-                    <p><span class="guard-help__tag">Does</span> @guard.Output</p>
-                    @if (guard.Settings.Count > 0)
-                    {
-                        <p class="helper-text"><span class="guard-help__tag">Settings</span> @string.Join(" · ", guard.Settings)</p>
-                    }
-                </MudPaper>
-            }
+        <div class="ops-roster-group">
+            <div class="ops-roster-group__head">
+                <span class="ops-roster-group__title">@group.Title</span>
+                <span class="ops-roster-group__rule"></span>
+                <span class="ops-roster-group__count">@entries.Count ENTR@(entries.Count == 1 ? "Y" : "IES")</span>
+            </div>
+            <div class="guide-grid">
+                @foreach (var guard in entries)
+                {
+                    var live = guard.Project is not null;
+                    <div class="guide-entry guide-entry--v2">
+                        <div class="guide-entry__head">
+                            <span class="guide-entry__name">@guard.Name</span>
+                            <span class="@(live ? "guide-pill guide-pill--live" : "guide-pill guide-pill--manual")">@(live ? "LIVE CARD" : "MANUAL ONLY")</span>
+                        </div>
+                        <div class="guide-entry__summary">@guard.Summary</div>
+                        <p class="guide-entry__does"><span class="guard-help__tag">Does</span> @guard.Output</p>
+                    </div>
+                }
+            </div>
         </div>
     }
-</MudStack>
+
+    @if (!AnyShown)
+    {
+        <div class="ops-alert-row">
+            <span class="ops-alert-row__glyph" aria-hidden="true">∅</span>
+            <span class="ops-alert-row__tag">NO MATCH</span>
+            <span class="ops-alert-row__text">No procedure matches that search. It may be [DATA EXPUNGED].</span>
+        </div>
+    }
+</div>
 
 @code {
+    private string _search = "";
+
     private static readonly (GuardCategory Category, string Title)[] Groups =
     [
         (GuardCategory.Core, "Core cooling"),
@@ -91,24 +61,13 @@
         (GuardCategory.System, "Safety & system"),
     ];
 
-    private static readonly string[] CycleSteps =
-    [
-        "Pull weather and outdoor temperature from Home Assistant.",
-        "Pull the real dining-room climate entity.",
-        "Front-door kill switch and emergency protocols (too-cold, someone-upset, suspicion, 🚨 brother-mad) — stand down while any is active.",
-        "If the defender is paused, keep reading 24/7 but send nothing.",
-        "Night shutdown — inside the night window with cool outdoor air, turn the AC off once and stand down; manual re-enables are respected.",
-        "Peace offering — if someone raised the setpoint (wall or app), concede a small extra step UP and stand down for the hold window.",
-        "On-forever protection — after the continuous-run limit without reaching the target, ease the setpoint above the room and rest.",
-        "Cool Mode Restore — bring the HVAC mode back to cool (after a short safe delay).",
-        "Apply the active schedule target ONCE at window start (a manual change inside the window is never fought) and evaluate the weather rule.",
-        "Upstairs Comfort Guard — ADVISORY ONLY: upstairs sensors are not the thermostat and never start or deepen cooling; they may only skip quiet waits while the dining room itself is above the user's target.",
-        "Wall Settling, Conflict Quiet, Manual Comfort Grace, and Dynamic Cooldown each may hold.",
-        "Alectra Peak Power Saver and Fan Energy Saver adjust safe cooling and the fan.",
-        "Compute the expected setpoint: 0.5 °C temperature-driven steps, at most one step per command from the current wall reading, floored at \"the temp I want\" (and the night minimum during night hours).",
-        "If the setpoint needs to change, walk the timing guards (Comfort Envelope, Room Trend, Thermal Momentum, Weather Drift, Setpoint Echo, Setpoint Stillness, Remote Settling, Cooling Runway, Sensor Rhythm, HVAC Alibi, Comfort Sync, Comfort Pace, Routine Timing, Comfort Budget, Command Camouflage, Stealth Governor, Visibility Guard, Natural Cadence).",
-        "Shape the command with Natural Walkback, Touch Signature, and Human Nudge, then Repeat Quiet.",
-        "Send the corrected setpoint to Home Assistant.",
-        "Cooling Failure Watch runs alongside: a mega-alert if cooling is demanded but not real, escalating to a full-site OMEGA alert when a rising room confirms the breaker is off.",
-    ];
+    private void OnSearchChanged(ChangeEventArgs e) => _search = e.Value?.ToString() ?? "";
+
+    private IEnumerable<GuardInfo> Filtered(GuardCategory category) =>
+        GuardCatalog.All.Where(g => g.Category == category && Matches(g));
+
+    private bool Matches(GuardInfo guard) =>
+        Format.MatchesSearch(_search, guard.Name, guard.Summary, guard.Output, guard.Watches, guard.Logic);
+
+    private bool AnyShown => Groups.SelectMany(g => Filtered(g.Category)).Any();
 }

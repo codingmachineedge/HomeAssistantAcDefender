@@ -1,0 +1,146 @@
+@page "/wiki"
+@page "/wiki/{PageName}"
+@inject WikiContentService WikiContent
+@inject IJSRuntime JS
+
+<PageTitle>Site Wiki — SCP AC Defender</PageTitle>
+
+<div class="ops-wiki">
+
+    @* ── search hero ── *@
+    <div class="ops-wiki-hero">
+        <div class="ops-wiki-hero__title">AC Defender <span>Wiki</span></div>
+        <div class="ops-wiki-hero__stat">@WikiContent.DocumentCount DOCUMENTS · @WikiContent.ArticleCount ALGORITHM ARTICLES · 0 SIMULATORS</div>
+        <div class="ops-wiki-search">
+            <span class="ops-wiki-search__glyph" aria-hidden="true">⌕</span>
+            <input value="@_search" @oninput="OnSearch" placeholder="Search everything — try 'wall touch', 'rations', 'OMEGA'…" aria-label="Search the wiki" />
+            @if (!string.IsNullOrEmpty(_search))
+            {
+                <button class="ops-wiki-search__clear" @onclick="ClearSearch" aria-label="Clear search">✕</button>
+            }
+        </div>
+    </div>
+
+    @* ── global search results ── *@
+    @if (!string.IsNullOrWhiteSpace(_search))
+    {
+        <div class="ops-wiki-results">
+            <div class="ops-wiki-results__head">⌕ @_results.Count RESULT@(_results.Count == 1 ? "" : "S") ACROSS THE ARCHIVE</div>
+            @foreach (var r in _results)
+            {
+                <a class="ops-wiki-result" href="@($"/wiki/{r.Name}")">
+                    <div class="ops-wiki-result__top">
+                        <span class="ops-wiki-result__title">@r.Title</span>
+                        <span class="ops-wiki-result__section">@r.Section</span>
+                    </div>
+                    <div class="ops-wiki-result__snippet">@r.Snippet</div>
+                </a>
+            }
+            @if (_results.Count == 0)
+            {
+                <div class="helper-text">Nothing matches. It may be [DATA EXPUNGED].</div>
+            }
+        </div>
+    }
+
+    @* ── index | document | rail ── *@
+    <div class="ops-wiki-grid">
+        <aside class="ops-wiki-index">
+            <div class="ops-panel__label">ALL DOCUMENTS</div>
+            <div class="ops-wiki-index__section">Handbook</div>
+            @foreach (var p in WikiContent.Handbook)
+            {
+                <a class="@PageBtnClass(p)" href="@($"/wiki/{p.Name}")">@p.Title</a>
+            }
+            <div class="ops-wiki-index__section">Algorithm articles (@WikiContent.ArticleCount)</div>
+            @foreach (var p in WikiContent.Articles)
+            {
+                <a class="@PageBtnClass(p)" href="@($"/wiki/{p.Name}")">@p.Title</a>
+            }
+        </aside>
+
+        <main class="ops-wiki-doc-wrap">
+            <div class="ops-wiki-crumb">
+                <a href="/wiki">WIKI</a> › @CrumbSection › <strong>@CurrentTitle</strong>
+            </div>
+            @if (_doc is not null)
+            {
+                <div class="wiki-doc" @key="_doc.Name">@((MarkupString)_doc.Html)</div>
+            }
+            else
+            {
+                <div class="wiki-doc"><p>[DOCUMENT MISSING OR EXPUNGED]</p></div>
+            }
+        </main>
+
+        <aside class="ops-wiki-rail">
+            @if (_doc is { Toc.Count: > 1 })
+            {
+                <div class="ops-panel__label">ON THIS PAGE</div>
+                <nav class="ops-wiki-toc">
+                    @foreach (var t in _doc.Toc)
+                    {
+                        <a class="@(t.Level == 3 ? "ops-wiki-toc__link ops-wiki-toc__link--h3" : "ops-wiki-toc__link")" href="@($"#{t.Id}")">@Trunc(t.Text)</a>
+                    }
+                </nav>
+            }
+            <div class="ops-panel__label" style="margin-top: 12px;">EXPLORE THE HANDBOOK</div>
+            <nav class="ops-wiki-toc">
+                @foreach (var p in WikiContent.Handbook)
+                {
+                    <a class="@(p.Name == _doc?.Name ? "ops-wiki-toc__link active" : "ops-wiki-toc__link")" href="@($"/wiki/{p.Name}")">@p.Title</a>
+                }
+            </nav>
+            <div class="ops-wiki-trending">TRENDING: "why is the thermostat warm again" · "who ate the rations" · [DATA EXPUNGED]</div>
+        </aside>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string? PageName { get; set; }
+
+    private WikiDocument? _doc;
+    private string _search = "";
+    private IReadOnlyList<WikiSearchResult> _results = Array.Empty<WikiSearchResult>();
+
+    private string ResolvedName => string.IsNullOrWhiteSpace(PageName) ? WikiContent.DefaultPage : PageName;
+
+    private string CurrentTitle => _doc?.Title ?? WikiContent.Meta(ResolvedName)?.Title ?? ResolvedName;
+
+    private string CrumbSection => _doc?.Section
+        ?? (ResolvedName.StartsWith("Algorithm-", StringComparison.Ordinal) ? "Algorithm articles" : "Handbook");
+
+    protected override void OnParametersSet()
+    {
+        _doc = WikiContent.Render(ResolvedName);
+    }
+
+    private void OnSearch(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? "";
+        _results = string.IsNullOrWhiteSpace(_search) ? Array.Empty<WikiSearchResult>() : WikiContent.Search(_search);
+    }
+
+    private void ClearSearch()
+    {
+        _search = "";
+        _results = Array.Empty<WikiSearchResult>();
+    }
+
+    private string PageBtnClass(WikiPageMeta p) =>
+        p.Name == _doc?.Name ? "ops-wiki-page active" : "ops-wiki-page";
+
+    private static string Trunc(string text) => text.Length > 34 ? text[..32] + "…" : text;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("acWiki.bind");
+        }
+        catch
+        {
+            // Pre-render or JS not ready yet — the binding is idempotent and re-runs on the next render.
+        }
+    }
+}

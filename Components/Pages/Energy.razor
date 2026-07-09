@@ -1,428 +1,226 @@
 @page "/energy"
 @implements IDisposable
 @using System.Globalization
+@using HomeAssistantAcDefender.Services
 @inject DefenderStateProvider State
 @inject HomeAssistantClient HomeAssistant
 @inject DefenderStateStore Store
 @inject ISnackbar Snackbar
 
-<PageTitle>Energy - AC Defender</PageTitle>
+<PageTitle>Energy Intel — SCP AC Defender</PageTitle>
 
-<MudStack Spacing="3">
-    <SectionCard Title="Alectra Hui Command Tent"
-                 Subtitle="@AlectraStatusTitle"
-                 Help="Read-only energy intelligence from real Home Assistant Alectra Hui entities. The defender uses this to be more chill during expensive or high-load power periods.">
-        <Actions>
-            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="RefreshNow" StartIcon="@Icons.Material.Filled.Refresh">Refresh intel</MudButton>
-        </Actions>
-        <ChildContent>
-            <div class="energy-banner">
-                <div class="energy-banner__icon">
-                    <MudIcon Icon="@Icons.Material.Filled.ElectricBolt" />
+<div class="ops-dash-stack">
+
+    @* ── command tent banner ── *@
+    <div class="ops-cmd-tent">
+        <div class="ops-cmd-tent__icon" aria-hidden="true">↯</div>
+        <div class="ops-cmd-tent__main">
+            <div class="ops-cmd-tent__title">@AlectraStatusTitle</div>
+            <div class="helper-text">Read-only intel from real Alectra Hui entities. The defender gets more chill during expensive or high-load power periods.</div>
+            <div class="ops-cmd-tent__chips">
+                <span class="ops-repo-chip ops-repo-chip--@(PeakPower.Active ? "dirty" : "clean")">@AlectraGuardLabel.ToUpperInvariant()</span>
+                <span class="ops-repo-chip">@AlectraHuiEntities.Count ENTITIES</span>
+                <span class="ops-repo-chip">TOU @((PeakPower.TouPeriod ?? Cost.CurrentPeriod).ToUpperInvariant())</span>
+                <span class="ops-repo-chip">USAGE @(Format.ToToronto(_usage?.UpdatedAt ?? DateTimeOffset.UtcNow).ToString("HH:mm"))</span>
+            </div>
+        </div>
+        <div class="ops-power-meter">
+            <div class="ops-panel__label">PEAK POWER METER — LIVE</div>
+            <div class="ops-power-meter__track"><div class="ops-power-meter__fill" style="width: @PeakPowerPercent.ToString("0.#", CultureInfo.InvariantCulture)%; background: @PowerBarColor;"></div></div>
+            <div class="helper-text">@PeakPowerMeterText</div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_usageError))
+    {
+        <div class="ops-alert-row ops-alert-row--warn"><span class="ops-alert-row__tag">USAGE</span><span class="ops-alert-row__text">@_usageError</span></div>
+    }
+
+    @* ── YELL-O-METER critical banner ── *@
+    @if (ProjectedBill >= YellThreshold)
+    {
+        <div class="ops-yell-crit">
+            <div class="ops-yell-crit__bang" aria-hidden="true">❗</div>
+            <div class="ops-yell-crit__headline">@YellHeadline</div>
+            <div class="ops-yell-crit__sub">Projected bill <strong>@Cad(ProjectedBill)</strong> · yell threshold $180.00 · forecast severity: <strong>@CurrentYell.Name</strong></div>
+        </div>
+    }
+
+    @* ── YELL-O-METER main panel ── *@
+    <div class="ops-panel ops-panel--pad @(ProjectedBill >= YellThreshold ? "ops-yell--crit" : "")">
+        <div class="ops-yell__head">
+            <span class="ops-panel__label" style="color: @CurrentYell.Color; margin: 0;">📣 YELL-O-METER — MORE DOLLARS = MORE YELLING</span>
+            <span class="ops-yell__cal">CALIBRATED AGAINST O5-BROTHER · 3 SEASONS OF FIELD DATA</span>
+        </div>
+        <div class="ops-yell__baseline">
+            <span class="ops-yell__baseline-label">PROJECTED MONTH-END BILL</span>
+            <span class="ops-yell__bill" style="color: @CurrentYell.Color;">@Cad(ProjectedBill)</span>
+            <span class="ops-yell__level" style="color: @CurrentYell.Color;">@CurrentYell.Name — @CurrentYell.Db</span>
+        </div>
+        <div class="ops-yell-gauge">
+            <div class="ops-yell-gauge__needle" style="left: @NeedlePercent.ToString("0.#", CultureInfo.InvariantCulture)%;"></div>
+        </div>
+        <div class="ops-yell-gauge__scale">
+            <span>$0 SERENE</span><span>$100 HMPH</span><span>$180 YELL LINE</span><span>$250 OPERA</span><span>$300+ ULTRA OMEGA</span>
+        </div>
+        <div class="ops-yell-cards">
+            <div class="ops-yell-card">
+                <div class="ops-yell-card__head" style="color: @CurrentYell.Color;">FORECAST — WHAT THE YELLING WILL BE LIKE</div>
+                <div class="ops-yell-card__body">@CurrentYell.Forecast</div>
+            </div>
+            <div class="ops-yell-card">
+                <div class="ops-yell-card__head" style="color: var(--accent);">SURVIVAL PROTOCOL — HOW TO GET THROUGH IT</div>
+                <ul class="ops-survival">
+                    @foreach (var (title, body) in SurvivalSteps)
+                    {
+                        <li><strong>@title</strong> @body</li>
+                    }
+                </ul>
+            </div>
+        </div>
+        <div class="helper-text" style="margin-top: 10px;">Field notes: yelling is loud but survivable; it has never once lowered the outdoor temperature. The pantry (Field Kitchen, on <a href="/">Command</a>) and the budget guard both push this needle left. <a href="/wiki/Energy-and-Costs">⎘ full math in the wiki</a></div>
+    </div>
+
+    @* ── 24-hour whole-house power ── *@
+    <div class="ops-panel ops-panel--pad">
+        <div class="ops-yell__head">
+            <span class="ops-panel__label" style="margin: 0;">24-HOUR WHOLE-HOUSE POWER — RECORDER HISTORY · LIVE</span>
+            <span class="ops-usage-legend"><span style="color: var(--accent);">▮ kW</span> <span style="color: var(--warn);">▮ ON-PEAK HOUR</span></span>
+        </div>
+        @if (UsageBars.Any(b => b.Kw > 0))
+        {
+            <div class="ops-usage-bars" style="height: 120px; margin-top: 10px;">
+                @foreach (var bar in UsageBars)
+                {
+                    <div class="ops-usage-bars__bar @(bar.OnPeak ? "ops-usage-bars__bar--hot" : "")"
+                         style="height: @(UsageBarMax <= 0 ? 3 : Math.Max(3, (int)(bar.Kw / UsageBarMax * 100)))%; border-radius: 2px 2px 0 0;"
+                         title="@bar.Kw.ToString("0.00", CultureInfo.InvariantCulture) kW"></div>
+                }
+            </div>
+            <div class="ops-usage-scale"><span>-24h</span><span>-18h</span><span>-12h</span><span>-6h</span><span>NOW</span></div>
+            <div class="ops-energy-cost-tiles" style="margin-top: 12px;">
+                <div class="ops-cost-tile"><span class="ops-cost-tile__label">24H DELTA</span><span class="ops-cost-tile__value">@Format.UsageHistoryValue(_usageHistory?.Delta, _usageHistory?.Unit)</span></div>
+                <div class="ops-cost-tile"><span class="ops-cost-tile__label">24H MAX</span><span class="ops-cost-tile__value" style="color: var(--warn);">@Format.UsageHistoryValue(_usageHistory?.Max, _usageHistory?.Unit)</span></div>
+                <div class="ops-cost-tile"><span class="ops-cost-tile__label">24H MIN</span><span class="ops-cost-tile__value">@Format.UsageHistoryValue(_usageHistory?.Min, _usageHistory?.Unit)</span></div>
+                <div class="ops-cost-tile"><span class="ops-cost-tile__label">POWER NOW</span><span class="ops-cost-tile__value" style="color: var(--accent);">@PowerNowText</span></div>
+            </div>
+        }
+        else
+        {
+            <div class="helper-text" style="margin-top: 10px;">No numeric 24-hour recorder samples are available for the configured energy entity yet.</div>
+        }
+    </div>
+
+    @* ── cost + budget | calendar ── *@
+    <div class="ops-energy-grid">
+        <div class="ops-dash-stack">
+            <div class="ops-panel ops-panel--pad">
+                <div class="ops-panel__label">ELECTRICITY COST (ALECTRA TOU) — SINCE @(Cost.TrackingSince is { } since ? Format.ToToronto(since).ToString("yyyy-MM-dd") : "FIRST SAMPLE")</div>
+                <div class="ops-energy-cost-tiles">
+                    @foreach (var tile in CostTiles)
+                    {
+                        <div class="ops-cost-tile" title="@tile.Help">
+                            <span class="ops-cost-tile__label">@tile.Label</span>
+                            <span class="ops-cost-tile__value" style="color: @tile.Color;">@tile.Value</span>
+                        </div>
+                    }
                 </div>
-                <div class="energy-banner__main">
-                    <MudText Typo="Typo.h5">@AlectraStatusTitle</MudText>
-                    <MudText Class="helper-text">@State.Snapshot.PeakPowerSaver.Status</MudText>
-                    <div class="energy-chip-row">
-                        <MudChip T="string" Color="@(State.Snapshot.PeakPowerSaver.Active ? Color.Warning : Color.Success)" Variant="Variant.Filled" Size="Size.Small">@AlectraGuardLabel</MudChip>
-                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">@AlectraHuiEntities.Count entities</MudChip>
-                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">Usage @Format.ShortTime(_usage?.UpdatedAt)</MudChip>
-                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">History @Format.ShortTime(_usageHistoryUpdatedAt)</MudChip>
-                    </div>
-                    <MudText Class="helper-text">Refresh intel asks Home Assistant for current usage and recorder history again. It does not touch the thermostat.</MudText>
-                </div>
-                <div class="energy-banner__meter">
-                    <MudText Typo="Typo.overline">Peak power meter</MudText>
-                    <MudProgressLinear Color="@PeakPowerColor" Value="@PeakPowerPercent" Rounded="true" Size="Size.Large" />
-                    <MudText Class="helper-text">@PeakPowerMeterText</MudText>
-                </div>
+                <div class="helper-text" style="margin-top: 10px;">All-in = (commodity + delivery + regulatory) × (1 − OER @Cost.OntarioRebatePercent.ToString("P1")) × (1 + HST @Cost.HstPercent.ToString("P0")). Copy exact numbers from your Alectra bill for precision.</div>
             </div>
 
-            @if (!string.IsNullOrWhiteSpace(_usageError))
-            {
-                <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">@_usageError</MudAlert>
-            }
-            @if (!string.IsNullOrWhiteSpace(_usageHistoryError))
-            {
-                <MudAlert Class="mt-2" Severity="Severity.Warning" Variant="Variant.Outlined">@_usageHistoryError</MudAlert>
-            }
-        </ChildContent>
-    </SectionCard>
-
-    <MudTabs Rounded="true" Elevation="0" Class="ops-tabs">
-        <MudTabPanel Text="Overview" Icon="@Icons.Material.Filled.Dashboard">
-            <MudStack Spacing="3" Class="mt-3">
-                <SectionCard Title="Electricity cost (Alectra TOU)"
-                             Subtitle="@CostSubtitle"
-                             Help="AC Defender integrates the Alectra power sensor over time and prices each interval at the current Alectra time-of-use rate. Totals are CAD dollars of the energy commodity portion only (no delivery, regulatory, rebate, or HST unless an all-in factor is configured).">
-                    <MudGrid Spacing="2" Class="mt-1">
-                        @foreach (var metric in CostMetrics)
-                        {
-                            <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                        }
-                    </MudGrid>
-                    <MudText Class="helper-text mt-3">@AllInNote</MudText>
-                    @if (Cost.UsingMostExpensiveFallback)
-                    {
-                        <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">The time-of-use period could not be determined, so the most expensive rate (On-Peak) is being assumed so cost is never under-estimated.</MudAlert>
-                    }
-                    @if (!Cost.Enabled)
-                    {
-                        <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">Electricity-cost tracking is turned off in configuration (Defender:ElectricityCostTrackingEnabled).</MudAlert>
-                    }
-                </SectionCard>
-
-                <SectionCard Title="Monthly budget"
-                             Subtitle="@Budget.Status"
-                             Help="AC Defender compares month-to-date all-in spend against a pro-rated budget and, when running ahead, lets the room run slightly warmer to spend less — biased to the expensive on/mid-peak periods. It is a preference: a safety maximum room temperature always overrides it so dangerous heat is still cooled.">
-                    <MudGrid Spacing="2" Class="mt-1">
-                        @foreach (var metric in BudgetMetrics)
-                        {
-                            <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                        }
-                    </MudGrid>
-                    @if (Budget.SafetyOverrideActive)
-                    {
-                        <MudAlert Class="mt-3" Severity="Severity.Error" Variant="Variant.Outlined">Safety override active: the room is at/above the guardrail temperature, so cooling is ignoring the budget.</MudAlert>
-                    }
-                    else if (Budget.Enabled && Budget.CurrentSetpointOffsetCelsius > 0.01)
-                    {
-                        <MudAlert Class="mt-3" Severity="Severity.Warning" Variant="Variant.Outlined">Over the pro-rated budget pace — easing cooling by +@Budget.CurrentSetpointOffsetCelsius.ToString("0.0") C to spend less.</MudAlert>
-                    }
-                    else if (!Budget.Enabled)
-                    {
-                        <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">Budget-preferring control is off — turn it on under Settings → Electricity budget.</MudAlert>
-                    }
-                </SectionCard>
-
-                <SectionCard Title="Field kitchen — rations"
-                             Subtitle="@(Pantry?.Status ?? "Warming up…")"
-                             Help="The pantry banks the dollars the AC would probably have spent while the guards napped (siestas and cool-outdoor shutdowns). On a forecast-hot day it pays the AC's real bill so the monthly budget eases exactly when cooling matters most — and rations can summon the WinForge reactor's AI operator, one ration per hour.">
-                    @if (Pantry is { } pantry)
-                    {
-                        <MudGrid Spacing="2" Class="mt-1">
-                            <MetricCard Label="Pantry balance" Value="@($"${pantry.BalanceCad:0.00} / ${pantry.BalanceMaxCad:0.00}")" Help="Banked ration dollars against the cap. Kept across months." />
-                            <MetricCard Label="Earned today" Value="@($"${pantry.EarnedTodayCad:0.00}")" Help="Rations banked so far today." />
-                            <MetricCard Label="Released this month" Value="@($"${pantry.ReleasedThisMonthCad:0.00}")" Help="Hot-window dollars the pantry already paid off the budget." />
-                            <MetricCard Label="Hot window" Value="@(pantry.HotWindowActive ? (pantry.ForecastMaxCelsius is { } hotMax ? $"Yes ({hotMax:0.0} C)" : "Yes") : "No")" Help="@($"Releases run when the forecast peaks at or above {pantry.HotThresholdCelsius:0.0} C.")" />
-                            <MetricCard Label="Duty cycle" Value="@($"{pantry.DutyCyclePercent:0.0}%")" Help="The AC's usual share of run-time from the last week — the accrual honesty factor." />
-                            <MetricCard Label="Rations" Value="@pantry.RationsAvailable.ToString()" Help="@($"Spendable units of ${pantry.RationSizeCad:0.00} — one ration powers the WinForge reactor for an hour.")" />
-                        </MudGrid>
-                        @if (pantry.ReactorPowerActive && pantry.ReactorPowerUntil is { } poweredUntil)
-                        {
-                            <MudAlert Class="mt-3" Severity="Severity.Success" Variant="Variant.Outlined">
-                                ☢ REACTOR POWERED — the AI operator runs the WinForge reactor until @poweredUntil.ToLocalTime().ToString("HH:mm") (@pantry.ReactorHoursLifetime.ToString("0.#") lifetime reactor-hours).
-                            </MudAlert>
-                        }
-                        @if (pantry.Enabled && pantry.ReactorPowerActive == false)
-                        {
-                            <MudStack Row="true" Spacing="2" Class="mt-3" AlignItems="AlignItems.Center">
-                                <MudButton Variant="Variant.Filled" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Bolt"
-                                           Disabled="@(pantry.RationsAvailable < 1)" OnClick="@(() => SummonReactorOperator(1))">
-                                    SUMMON AI REACTOR OPERATOR — 1 ration / hour
-                                </MudButton>
-                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Disabled="@(pantry.RationsAvailable < 2)" OnClick="@(() => SummonReactorOperator(2))">2 h</MudButton>
-                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Disabled="@(pantry.RationsAvailable < 4)" OnClick="@(() => SummonReactorOperator(4))">4 h</MudButton>
-                            </MudStack>
-                        }
-                        @if (!Budget.Enabled && pantry.Enabled)
-                        {
-                            <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">Rations accrue, but they only ease the monthly budget once it is turned on under Settings → Electricity budget.</MudAlert>
-                        }
-                    }
-                    else
-                    {
-                        <MudText Class="helper-text">The field kitchen has not reported yet.</MudText>
-                    }
-                </SectionCard>
-
-                <SectionCard Title="Energy overview"
-                             Subtitle="Fast scan"
-                             Help="Main usage numbers, bill status, and Alectra guard status in one small dashboard.">
-                    <MudGrid Spacing="2" Class="mt-1">
-                        @foreach (var metric in EnergyMetrics)
-                        {
-                            <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                        }
-                    </MudGrid>
-                </SectionCard>
-
-                <SectionCard Title="Entity desks"
-                             Subtitle="What the Alectra Hui squad found"
-                             Help="Entities are grouped so the important power, bill, plan, and guard signals are not mixed into one giant pile.">
-                    @if (CategoryBreakdown.Count > 0)
-                    {
-                        <div class="energy-bar-chart">
-                            @foreach (var item in CategoryBreakdown)
-                            {
-                                <div class="energy-bar-row">
-                                    <div class="energy-bar-row__label">
-                                        <MudIcon Icon="@IconForCategory(item.Category)" Size="Size.Small" />
-                                        <span>@item.Category</span>
-                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@item.Count</MudChip>
-                                    </div>
-                                    <div class="energy-bar-track">
-                                        <div class="@($"energy-bar-fill energy-bar-fill--{CssClassForCategory(item.Category)}")" style="@PercentStyle(item.Percent)"></div>
-                                    </div>
-                                </div>
-                            }
-                        </div>
-                    }
-                    else
-                    {
-                        <MudText Class="helper-text">No Alectra Hui entities found yet.</MudText>
-                    }
-                </SectionCard>
-            </MudStack>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Alectra Hui" Icon="@Icons.Material.Filled.Bolt">
-            <MudStack Spacing="3" Class="mt-3">
-                <SectionCard Title="Alectra Hui"
-                             Subtitle="Searchable power intelligence"
-                             Help="Use search and desk filters to find the exact Alectra Hui Home Assistant entity without scrolling through everything.">
-                    <MudGrid Spacing="2" Class="mt-1">
-                        <MudItem xs="12" md="7">
-                            <MudTextField @bind-Value="_alectraSearch"
-                                          Immediate="true"
-                                          Label="Search Alectra Hui"
-                                          HelperText="Type words like power, bill, price, plan, tou, sensor, switch, or the entity ID."
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Adornment="Adornment.Start"
-                                          AdornmentIcon="@Icons.Material.Filled.Search" />
-                        </MudItem>
-                        <MudItem xs="12" md="4">
-                            <MudSelect T="string" @bind-Value="_alectraCategory" Label="Desk filter" HelperText="Pick one desk to shrink the table." Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem T="string" Value="@("All")">All desks</MudSelectItem>
-                                @foreach (var category in AlectraCategories)
-                                {
-                                    <MudSelectItem T="string" Value="@category">@category</MudSelectItem>
-                                }
-                            </MudSelect>
-                        </MudItem>
-                        <MudItem xs="12" md="1" Class="energy-clear-cell">
-                            <MudIconButton Icon="@Icons.Material.Filled.Clear" Color="Color.Default" Disabled="@string.IsNullOrWhiteSpace(_alectraSearch)" OnClick="ClearAlectraSearch" />
-                            <MudText Class="helper-text">Clear search.</MudText>
-                        </MudItem>
-                    </MudGrid>
-
-                    <div class="energy-chip-row mt-2">
-                        <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small">@FilteredAlectraEntities.Count shown</MudChip>
-                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">@_alectraCategory desk</MudChip>
-                        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">Updated @Format.ShortTime(_usage?.UpdatedAt)</MudChip>
+            <div class="ops-panel ops-panel--pad">
+                <div class="ops-panel__label">MONTHLY BUDGET — @Cad(Budget.MonthlyBudgetCad)</div>
+                <div class="ops-budget-bars">
+                    <div class="ops-budget-bar">
+                        <div class="ops-budget-bar__top"><span>SPENT THIS MONTH</span><strong>@Cad(Budget.MonthToDateAllInCad)</strong></div>
+                        <div class="ops-bar"><div class="ops-bar__fill ops-bar__fill--good" style="width: @BudgetPercent(Budget.MonthToDateAllInCad)%;"></div></div>
                     </div>
-                </SectionCard>
-
-                @if (FilteredAlectraGroups.Count > 0)
+                    <div class="ops-budget-bar">
+                        <div class="ops-budget-bar__top"><span>PRO-RATED TARGET (DAY @TorontoDay/@DaysThisMonth)</span><strong style="color: var(--sub);">@Cad(Budget.ProRatedTargetCad)</strong></div>
+                        <div class="ops-bar"><div class="ops-bar__fill ops-bar__fill--sub" style="width: @BudgetPercent(Budget.ProRatedTargetCad)%;"></div></div>
+                    </div>
+                    <div class="ops-budget-bar">
+                        <div class="ops-budget-bar__top"><span>PROJECTED MONTH-END</span><strong style="color: var(--warn);">@Cad(Budget.ProjectedMonthEndCad)</strong></div>
+                        <div class="ops-bar"><div class="ops-bar__fill ops-bar__fill--warn" style="width: @BudgetPercent(Budget.ProjectedMonthEndCad)%;"></div></div>
+                    </div>
+                </div>
+                @if (Budget.SafetyOverrideActive)
                 {
-                    @foreach (var group in FilteredAlectraGroups)
-                    {
-                        <SectionCard Title="@group.Category"
-                                     Subtitle="@($"{group.Items.Count} entities")"
-                                     Help="@HelpForCategory(group.Category)">
-                            <MudStack Spacing="1" Class="scroll-list">
-                                @foreach (var entity in group.Items)
-                                {
-                                    <div class="@($"data-row data-row--wide energy-entity energy-entity--{CssClassForCategory(group.Category)}")">
-                                        <div>
-                                            <div class="data-row__name">
-                                                <MudIcon Icon="@IconForCategory(group.Category)" Size="Size.Small" />
-                                                @entity.Name
-                                            </div>
-                                            <div class="helper-text data-row__sub">@entity.EntityId</div>
-                                            <div class="helper-text data-row__sub">@group.Category / @Format.ShortTime(entity.LastChanged)</div>
-                                        </div>
-                                        <div class="data-row__right">
-                                            <div class="data-row__value">@Format.UsageValue(entity)</div>
-                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@ColorForCategory(group.Category)">@entity.Unit</MudChip>
-                                        </div>
-                                    </div>
-                                }
-                            </MudStack>
-                        </SectionCard>
-                    }
+                    <div class="ops-budget-callout ops-budget-callout--bad">Safety override active — the room is at/above @Budget.SafetyMaxCelsius.ToString("0.0") °C, so cooling ignores the budget.</div>
                 }
-                else
+                else if (Budget.Enabled && Budget.CurrentSetpointOffsetCelsius > 0.01)
                 {
-                    <SectionCard Title="No matches"
-                                 Subtitle="Search party came back empty"
-                                 Help="Clear the search or pick All desks to see every Alectra Hui entity Home Assistant exposes.">
-                        <MudText Class="helper-text">No Alectra Hui entities match the current search and desk filter.</MudText>
-                    </SectionCard>
+                    <div class="ops-budget-callout">Over the pro-rated pace — easing cooling by <strong>+@Budget.CurrentSetpointOffsetCelsius.ToString("0.0") °C</strong> to spend less. Safety guardrail @Budget.SafetyMaxCelsius.ToString("0.0") °C always wins.</div>
                 }
-            </MudStack>
-        </MudTabPanel>
+                else if (!Budget.Enabled)
+                {
+                    <div class="helper-text" style="margin-top: 10px;">Budget-preferring control is off — turn it on under Settings → Electricity budget.</div>
+                }
+            </div>
+        </div>
 
-        <MudTabPanel Text="Charts" Icon="@Icons.Material.Filled.ShowChart">
-            <MudStack Spacing="3" Class="mt-3">
-                <SectionCard Title="24-hour usage chart"
-                             Subtitle="@(_usageHistory?.Name ?? "Recorder history")"
-                             Help="This chart uses Home Assistant recorder history for the configured energy usage entity. Times are shown in Toronto 24-hour time.">
-                    @if (UsageHistorySeries.Count > 0)
+        @* ── fare calendar ── *@
+        <div class="ops-panel ops-panel--pad">
+            <div class="ops-yell__head">
+                <span class="ops-panel__label" style="margin: 0;">AC USAGE CALENDAR — @_calMonth.ToString("MMMM yyyy", CultureInfo.InvariantCulture).ToUpperInvariant()</span>
+                <span class="ops-usage-legend">cheap 🟩 → 🟥 expensive</span>
+            </div>
+            <div class="cal-toolbar" style="margin-top: 8px;">
+                <button class="ops-step-btn" @onclick="PrevMonth" aria-label="Previous month">‹</button>
+                <button class="ops-step-btn" @onclick="NextMonth" disabled="@IsCurrentCalendarMonth" aria-label="Next month">›</button>
+                <button class="ops-btn" @onclick="GoToThisMonth" disabled="@IsCurrentCalendarMonth" style="padding: 6px 10px; font-size: 9px;">THIS MONTH</button>
+            </div>
+            <div class="helper-text">@MonthSummary Like a flight-price calendar, but for regret.</div>
+            <div class="cal-grid" role="grid" aria-label="AC usage calendar">
+                @foreach (var dow in new[] { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" })
+                {
+                    <div class="cal-dow">@dow</div>
+                }
+                @foreach (var cell in CalendarCells)
+                {
+                    @if (cell is null)
                     {
-                        <div class="energy-chart">
-                            <MudChart T="double" ChartType="ChartType.Line" ChartSeries="@UsageHistorySeries" ChartLabels="@UsageHistoryLabels" Width="100%" Height="280px" />
-                        </div>
-                        <MudGrid Spacing="2" Class="mt-2">
-                            @foreach (var metric in HistoryMetrics)
-                            {
-                                <MetricCard Label="@metric.Label" Value="@metric.Value" Help="@metric.Help" />
-                            }
-                        </MudGrid>
+                        <div class="cal-cell cal-cell--blank"></div>
                     }
                     else
                     {
-                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No numeric 24-hour recorder samples are available for the configured energy entity yet.</MudAlert>
-                    }
-                </SectionCard>
-
-                <SectionCard Title="Desk count chart"
-                             Subtitle="Alectra Hui inventory"
-                             Help="A quick bar chart showing how the Home Assistant Alectra Hui entities are split across desks.">
-                    @if (CategoryBreakdown.Count > 0)
-                    {
-                        <div class="energy-bar-chart energy-bar-chart--large">
-                            @foreach (var item in CategoryBreakdown)
+                        <button class="cal-cell @CellCss(cell)" @onclick="() => SelectDay(cell)">
+                            <div class="cal-cell__day">@cell.Day</div>
+                            @if (cell.Usage is { } u && (u.Hours > 0 || u.CostDollars > 0))
                             {
-                                <div class="energy-bar-row">
-                                    <div class="energy-bar-row__label">
-                                        <MudIcon Icon="@IconForCategory(item.Category)" Size="Size.Small" />
-                                        <span>@item.Category</span>
-                                        <strong>@item.Count</strong>
-                                    </div>
-                                    <div class="energy-bar-track">
-                                        <div class="@($"energy-bar-fill energy-bar-fill--{CssClassForCategory(item.Category)}")" style="@PercentStyle(item.Percent)"></div>
-                                    </div>
-                                </div>
+                                <div class="cal-cell__hours">@ShortHours(u.Hours)</div>
+                                <div class="cal-cell__cost">$@u.CostDollars.ToString("0.00")</div>
                             }
-                        </div>
-                    }
-                    else
-                    {
-                        <MudText Class="helper-text">No entities to chart yet.</MudText>
-                    }
-                </SectionCard>
-            </MudStack>
-        </MudTabPanel>
-
-        <MudTabPanel Text="Entity Table" Icon="@Icons.Material.Filled.TableRows">
-            <MudStack Spacing="3" Class="mt-3">
-                <SectionCard Title="Alectra Hui entity table"
-                             Subtitle="@($"{FilteredAlectraEntities.Count} shown")"
-                             Help="The same filtered data in table form for fast scanning on desktop and compact stacked rows on mobile.">
-                    <MudTable Items="@FilteredAlectraEntities" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Class="energy-table">
-                        <HeaderContent>
-                            <MudTh>Desk</MudTh>
-                            <MudTh>Name</MudTh>
-                            <MudTh>Entity ID</MudTh>
-                            <MudTh>Value</MudTh>
-                            <MudTh>Updated</MudTh>
-                        </HeaderContent>
-                        <RowTemplate>
-                            <MudTd DataLabel="Desk">
-                                <MudChip T="string" Size="Size.Small" Color="@ColorForCategory(EntityCategory(context))" Variant="Variant.Outlined">@EntityCategory(context)</MudChip>
-                            </MudTd>
-                            <MudTd DataLabel="Name">@context.Name</MudTd>
-                            <MudTd DataLabel="Entity ID"><span class="energy-entity-id">@context.EntityId</span></MudTd>
-                            <MudTd DataLabel="Value"><strong>@Format.UsageValue(context)</strong></MudTd>
-                            <MudTd DataLabel="Updated">@Format.ShortTime(context.LastChanged)</MudTd>
-                        </RowTemplate>
-                        <NoRecordsContent>
-                            <MudText Class="helper-text">No Alectra Hui entities match the current search.</MudText>
-                        </NoRecordsContent>
-                    </MudTable>
-                </SectionCard>
-            </MudStack>
-        </MudTabPanel>
-        <MudTabPanel Text="Calendar" Icon="@Icons.Material.Filled.CalendarMonth">
-            <MudStack Spacing="3" Class="mt-3">
-                <SectionCard Title="AC usage calendar"
-                             Subtitle="@CalendarSubtitle"
-                             Help="An airline fare-style calendar for the AC: every day shows real compressor hours and the estimated AC-only cost (assumed load × the Alectra time-of-use rate in force at each moment — no Alectra sensor needed). Cheap days are green, expensive days run to red, exactly like a flight price calendar. Click a day for details, use the arrows for other months, or pick a range below for totals.">
-                    <Actions>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="ReloadLedger" StartIcon="@Icons.Material.Filled.Refresh">Reload</MudButton>
-                    </Actions>
-                    <ChildContent>
-                        <div class="cal-toolbar">
-                            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small" OnClick="PrevMonth" aria-label="Previous month" />
-                            <MudText Typo="Typo.h6" Class="cal-toolbar__month">@_calMonth.ToString("MMMM yyyy", CultureInfo.InvariantCulture)</MudText>
-                            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" OnClick="NextMonth" Disabled="@IsCurrentCalendarMonth" aria-label="Next month" />
-                            <MudSpacer />
-                            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="GoToThisMonth" Disabled="@IsCurrentCalendarMonth">This month</MudButton>
-                        </div>
-                        <MudText Class="helper-text">@MonthSummary</MudText>
-                        <div class="cal-grid" role="grid" aria-label="AC usage calendar">
-                            @foreach (var dow in new[] { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" })
+                            else if (!cell.IsFuture)
                             {
-                                <div class="cal-dow">@dow</div>
+                                <div class="cal-cell__hours cal-cell__hours--zero">0h</div>
                             }
-                            @foreach (var cell in CalendarCells)
-                            {
-                                @if (cell is null)
-                                {
-                                    <div class="cal-cell cal-cell--blank"></div>
-                                }
-                                else
-                                {
-                                    <div class="cal-cell @CellCss(cell)" @onclick="() => SelectDay(cell)">
-                                        <div class="cal-cell__day">@cell.Day</div>
-                                        @if (cell.Usage is { } u && (u.Hours > 0 || u.CostDollars > 0))
-                                        {
-                                            <div class="cal-cell__hours">@ShortHours(u.Hours)</div>
-                                            <div class="cal-cell__cost">$@u.CostDollars.ToString("0.00")</div>
-                                        }
-                                        else if (!cell.IsFuture)
-                                        {
-                                            <div class="cal-cell__hours cal-cell__hours--zero">0h</div>
-                                        }
-                                    </div>
-                                }
-                            }
-                        </div>
-                        @if (SelectedUsage is { } sel)
-                        {
-                            <div class="cal-detail">
-                                <strong>@FormatDayKey(sel.Date)</strong> — AC ran <strong>@ShortHours(sel.Hours)</strong>
-                                for an estimated <strong>$@sel.CostDollars.ToString("0.00")</strong>
-                                (@(sel.Hours > 0 ? $"≈ ${sel.CostDollars / Math.Max(sel.Hours, 0.01):0.00}/h at the day's TOU mix" : "no compressor time logged")).
-                            </div>
-                        }
-                        <MudDivider Class="my-3" />
-                        <MudText Typo="Typo.subtitle2">Range totals</MudText>
-                        <MudText Class="helper-text">Pick any start and end day — a single day, a week, or whole months — and the totals below cover exactly that range.</MudText>
-                        <div class="cal-range">
-                            <MudDateRangePicker @bind-DateRange="_calRange" Margin="Margin.Dense" Variant="Variant.Outlined"
-                                                MaxDate="@DateTime.Today" Label="Start – end day" />
-                            <div class="cal-range__totals">@RangeSummary</div>
-                        </div>
-                        @if (_dailyUsage.Count == 0)
-                        {
-                            <MudAlert Class="mt-3" Severity="Severity.Info" Variant="Variant.Outlined">No per-day AC usage has been recorded yet. The calendar fills in from live tracking and the one-time recorder-history backfill.</MudAlert>
-                        }
-                    </ChildContent>
-                </SectionCard>
-            </MudStack>
-        </MudTabPanel>
-    </MudTabs>
-</MudStack>
+                        </button>
+                    }
+                }
+            </div>
+            @if (SelectedUsage is { } sel)
+            {
+                <div class="cal-detail">
+                    @FormatDayLong(sel.Date) — AC ran @sel.Hours.ToString("0.0")h for an estimated $@sel.CostDollars.ToString("0.00")
+                    (@(sel.Hours > 0 ? $"≈ ${sel.CostDollars / Math.Max(sel.Hours, 0.01):0.00}/h at the day's TOU mix" : "no compressor time logged")).
+                </div>
+            }
+        </div>
+    </div>
+</div>
 
 @code {
-    private const string AllCategories = "All";
+    private const double YellThreshold = 180.0;
 
     private UsageLiveSnapshot? _usage;
     private UsageHistorySnapshot? _usageHistory;
     private DateTimeOffset? _usageHistoryUpdatedAt;
     private string? _usageError;
-    private string? _usageHistoryError;
-    private string _alectraSearch = string.Empty;
-    private string _alectraCategory = AllCategories;
     private DateTimeOffset _nextUsageRefresh = DateTimeOffset.MinValue;
     private DateTimeOffset _nextUsageHistoryRefresh = DateTimeOffset.MinValue;
 
-    private IReadOnlyList<UsageEntityReading> AlectraHuiEntities =>
-        _usage?.AlectraHuiEntities ?? Array.Empty<UsageEntityReading>();
-
+    private IReadOnlyList<UsageEntityReading> AlectraHuiEntities => _usage?.AlectraHuiEntities ?? Array.Empty<UsageEntityReading>();
     private PeakPowerSaverSnapshot PeakPower => State.Snapshot.PeakPowerSaver;
 
     private ElectricityCostSnapshot Cost => State.Snapshot.ElectricityCost
@@ -431,242 +229,118 @@
     private ElectricityBudgetSnapshot Budget => State.Snapshot.ElectricityBudget
         ?? new ElectricityBudgetSnapshot(false, 0, 0, 0, 0, false, 0, 0, 0.5, 26, false, "Budget-preferring control is off.");
 
-    private FoodRationsSnapshot? Pantry => State.Snapshot.FoodRations;
+    // ---------- yell-o-meter ----------
 
-    // Reactor redemption moves no money and touches no thermostat → bypasses the debounce,
-    // same as target/settings saves.
-    private void SummonReactorOperator(int hours)
-    {
-        var gate = Store.TryBeginWebsiteCommand("summon reactor operator", bypassDebounce: true);
-        if (!gate.Accepted)
-        {
-            Snackbar.Add(gate.Message, Severity.Warning);
-            return;
-        }
+    private sealed record YellLevel(double Threshold, string Name, string Db, string Color, string Forecast);
 
-        var ok = Store.TryRedeemReactorPower(hours, out var message);
-        State.Refresh();
-        Snackbar.Add(message, ok ? Severity.Success : Severity.Warning);
-    }
-
-    private string CostSubtitle => Cost.TrackingSince is { } since
-        ? $"Since {Format.ToToronto(since):yyyy-MM-dd} · now {Cost.CurrentPeriod} @ {Cost.CurrentRateCentsPerKwh:0.###} c/kWh"
-        : "Waiting for the first power sample";
-
-    private static string Cad(double value) => value.ToString("C2", CultureInfo.GetCultureInfo("en-CA"));
-
-    private IReadOnlyList<MetricItem> CostMetrics =>
+    private static readonly YellLevel[] YellLevels =
     [
-        new("TOTAL (commodity)", Cad(Cost.TotalCad), $"All-time TOU energy-commodity cost since tracking began ({Cost.TotalKwh:0.###} kWh)."),
-        new("THIS MONTH (commodity)", Cad(Cost.MonthCad), $"Commodity cost so far this calendar month ({Cost.MonthKwh:0.###} kWh); resets on the 1st."),
-        new("TODAY (commodity)", Cad(Cost.TodayCad), $"Commodity cost so far today ({Cost.TodayKwh:0.###} kWh); resets at local midnight."),
-        new("TOTAL (all-in)", Cad(Cost.AllInTotalCad), "All-time out-of-pocket estimate: commodity + delivery + regulatory, less OER, plus HST."),
-        new("THIS MONTH (all-in)", Cad(Cost.AllInMonthCad), "Out-of-pocket estimate for this month so far, including delivery/regulatory/OER/HST."),
-        new("TODAY (all-in)", Cad(Cost.AllInTodayCad), "Out-of-pocket estimate for today so far, including delivery/regulatory/OER/HST."),
-        new("Current rate", $"{Cost.CurrentRateCentsPerKwh:0.###} c/kWh", $"{Cost.CurrentPeriod} rate right now. On {Cost.OnPeakCentsPerKwh:0.#} / Mid {Cost.MidPeakCentsPerKwh:0.#} / Off {Cost.OffPeakCentsPerKwh:0.#} c/kWh."),
-        new("TOU period", Cost.CurrentPeriod, "Current Alectra time-of-use period computed from Toronto local time (weekends and Ontario holidays are off-peak)."),
+        new(0, "SERENE", "≈ 35 dB — CONTENT HUMMING", "var(--good)", "A pleasant \"huh, not bad this month\" delivered from another room. The bill is opened, nodded at, and filed. No countermeasures required; enjoy it while it lasts."),
+        new(100, "HMPH", "≈ 55 dB — POINTED SIGHING", "var(--good)", "Audible sighs near the thermostat. The bill is held up to the light like a suspicious cheque. Expect one rhetorical question per day (\"do we live in a walk-in fridge?\") for about a week."),
+        new(180, "FULL YELL", "≈ 85 dB — NAMES USED IN FULL", "var(--warn)", "The classic: bill slammed on the dining table (Chamber 01), your full legal name deployed, a dramatic reading of the kWh line items, and a walking tour of every vent in the house. 20–40 minutes plus aftershocks at dinner. \"MONEY DOESN'T GROW ON TREES\" appears an average of 3.2 times."),
+        new(250, "OPERA", "≈ 95 dB — SUSTAINED ARIA", "var(--bad)", "Multi-movement performance. Movement I: disbelief (fortissimo). Movement II: the story of the 1998 heat wave survived with one fan. Movement III: threats to remove the breaker. The thermostat gets unplugged \"as a lesson\" — this is exactly how the Tamper Truce was invented."),
+        new(300, "ULTRA OMEGA YELL", "> 100 dB — GEOLOGICAL EVENT", "var(--bad)", "Sustained yelling detectable by the upstairs sensors as a 0.3 °C rise (from one person, radiating). All snacks are declared communal property. Emergency protocol BROTHER MAD auto-arms itself out of self-preservation."),
     ];
 
-    private string AllInNote =>
-        $"All-in = (commodity + delivery + regulatory) × (1 − OER {Cost.OntarioRebatePercent:P1}) × (1 + HST {Cost.HstPercent:P0}). " +
-        $"Delivery ${Cost.DeliveryFixedDollarsPerMonth:0.##}/mo fixed + {Cost.DeliveryVariableCentsPerKwh:0.##} c/kWh, regulatory {Cost.RegulatoryCentsPerKwh:0.##} c/kWh. " +
-        "Delivery and regulatory numbers vary per customer — copy the exact values from your Alectra bill for a precise figure.";
-
-    private IReadOnlyList<MetricItem> BudgetMetrics =>
+    private static readonly (string Title, string Body)[] SurvivalSteps =
     [
-        new("Monthly budget", Cad(Budget.MonthlyBudgetCad), "The preferred monthly spend set on the Settings page (Electricity budget)."),
-        new("Spent this month", Cad(Budget.MonthToDateAllInCad), $"Month-to-date spend on the effective basis ({Budget.EffectiveBasis})."),
-        new("Pro-rated target", Cad(Budget.ProRatedTargetCad), "Budget × fraction of the month elapsed — the pace you should be at today."),
-        new("Projected month-end", Cad(Budget.ProjectedMonthEndCad), "Simple projection: month-to-date spend extrapolated to the full month."),
-        new("Over / under", (Budget.OverUnderCad >= 0 ? "+" : "") + Cad(Budget.OverUnderCad), "Positive means running ahead of (over) the pro-rated budget pace."),
-        new("Cooling ease", $"+{Budget.CurrentSetpointOffsetCelsius:0.0} C", $"Current budget-driven warmer-setpoint offset. Safety guardrail: {Budget.SafetyMaxCelsius:0.0} C."),
-        new("Pacing basis", Budget.EffectiveBasis, "ac-estimate = AC-only static Alectra TOU prices (sensor-free); all-in = whole-house bill from the live Alectra sensor. All-in falls back to the estimate while the sensor is stale."),
+        ("Strike first.", "Break the news before the bill lands — mention the heat wave and TOU rates casually at breakfast. Surprise is 60% of the yell."),
+        ("Bring receipts.", "Open this page mid-yell. Point at the runtime counters and the guards' savings. Data does not stop yelling but it shortens Movement II."),
+        ("Do not argue the 1998 heat wave.", "It was survived with one fan. This is canon now. Nod."),
+        ("Deploy the peace gesture.", "Nudge the directive +1 °C in front of witnesses. Visible sacrifice reduces yell duration by a measured 31%."),
+        ("If all else fails: BROTHER MAD.", "One slide on the Controls page files a formal apology, eases the AC, and stands everything down for 2 hours. The anger model learns. You survive."),
     ];
+
+    private double ProjectedBill => Budget.ProjectedMonthEndCad;
+    private YellLevel CurrentYell => YellLevels.Last(l => ProjectedBill >= l.Threshold);
+    private double NeedlePercent => Math.Min(100, ProjectedBill / 320.0 * 100);
+    private string YellHeadline => ProjectedBill >= 300 ? "ULTRA OMEGA YELL INCOMING" : ProjectedBill >= 250 ? "OPERA-GRADE YELLING FORECAST" : "YELL THRESHOLD EXCEEDED";
+
+    // ---------- banner + meter ----------
 
     private string AlectraStatusTitle => PeakPower.Holding
         ? "Alectra Hui says: hold the icy orders"
-        : PeakPower.Active
-            ? "Alectra Hui says: power is spicy"
-            : "Alectra Hui says: power looks calm";
+        : PeakPower.Active ? "Alectra Hui says: power is spicy" : "Alectra Hui says: power looks calm";
 
     private string AlectraGuardLabel => PeakPower.Holding
         ? "Saver holding"
-        : PeakPower.Active
-            ? "Saver armed"
-            : PeakPower.Enabled ? "Saver watching" : "Saver off";
+        : PeakPower.Active ? "Saver armed" : PeakPower.Enabled ? "Saver watching" : "Saver off";
 
-    private Color PeakPowerColor => PeakPower.Active ? Color.Warning : Color.Success;
+    private double PeakPowerPercent => PeakPower.CurrentPowerKilowatts is { } kw && PeakPower.PowerThresholdKilowatts > 0
+        ? Math.Clamp(kw / PeakPower.PowerThresholdKilowatts * 100, 0, 100)
+        : 0;
 
-    private double PeakPowerPercent
-    {
-        get
-        {
-            if (PeakPower.CurrentPowerKilowatts is null || PeakPower.PowerThresholdKilowatts <= 0)
-            {
-                return 0;
-            }
-
-            return Math.Clamp(PeakPower.CurrentPowerKilowatts.Value / PeakPower.PowerThresholdKilowatts * 100, 0, 100);
-        }
-    }
+    private string PowerBarColor => PeakPowerPercent > 75 ? "var(--bad)" : PeakPowerPercent > 50 ? "var(--warn)" : "var(--accent)";
 
     private string PeakPowerMeterText => PeakPower.CurrentPowerKilowatts is null
         ? $"Waiting for current power. Threshold: {PeakPower.PowerThresholdKilowatts:0.##} kW."
-        : $"{PeakPower.CurrentPowerKilowatts.Value:0.###} kW of {PeakPower.PowerThresholdKilowatts:0.##} kW guard threshold.";
+        : $"{PeakPower.CurrentPowerKilowatts.Value:0.00} kW of {PeakPower.PowerThresholdKilowatts:0.#} kW guard threshold.";
 
-    private string UsageHistoryHelp => _usageHistory is null
-        ? "Home Assistant recorder history for the configured energy sensor."
-        : $"{_usageHistory.Name} / {_usageHistory.EntityId}";
+    private string PowerNowText => PeakPower.CurrentPowerKilowatts is { } kw ? $"{kw:0.00} kW" : Format.UsageValue(_usage?.Power);
 
-    private IReadOnlyList<MetricItem> EnergyMetrics =>
+    // ---------- 24h bars ----------
+
+    private IReadOnlyList<(double Kw, bool OnPeak)> UsageBars
+    {
+        get
+        {
+            var samples = _usageHistory?.Samples.Where(s => s.Value is not null).ToList() ?? [];
+            var now = DateTimeOffset.UtcNow;
+            var bars = new List<(double, bool)>(24);
+            for (var i = 23; i >= 0; i--)
+            {
+                var bucketStart = now.AddHours(-(i + 1));
+                var bucketEnd = now.AddHours(-i);
+                var inBucket = samples.Where(s => s.Timestamp >= bucketStart && s.Timestamp < bucketEnd).Select(s => s.Value!.Value).ToList();
+                var kw = inBucket.Count > 0 ? inBucket.Average() : 0;
+                var onPeak = AlectraTouSchedule.GetPeriod(Format.ToToronto(bucketStart).DateTime) == TouPeriod.OnPeak;
+                bars.Add((kw, onPeak));
+            }
+
+            return bars;
+        }
+    }
+
+    private double UsageBarMax => UsageBars.Select(b => b.Kw).DefaultIfEmpty(0).Max();
+
+    // ---------- cost tiles ----------
+
+    private sealed record CostTile(string Label, string Value, string Color, string Help);
+
+    private static string Cad(double value) => value.ToString("C2", CultureInfo.GetCultureInfo("en-CA"));
+
+    private IReadOnlyList<CostTile> CostTiles =>
     [
-        new("Power now", Format.UsageValue(_usage?.Power), Format.UsageHelp(_usage?.Power)),
-        new("Energy today", Format.UsageValue(_usage?.Energy), Format.UsageHelp(_usage?.Energy)),
-        new("Hourly cost", Format.UsageValue(_usage?.HourlyCost), Format.UsageHelp(_usage?.HourlyCost)),
-        new("Cost today", Format.UsageValue(_usage?.Cost), Format.UsageHelp(_usage?.Cost)),
-        new("Current bill", Format.UsageValue(_usage?.CurrentBill), Format.UsageHelp(_usage?.CurrentBill)),
-        new("Bill due", Format.UsageValue(_usage?.CurrentBillDue), Format.UsageHelp(_usage?.CurrentBillDue)),
-        new("Bill status", Format.UsageValue(_usage?.CurrentBillStatus), Format.UsageHelp(_usage?.CurrentBillStatus)),
-        new("TOU period", BlankDash(PeakPower.TouPeriod), "Alectra Hui current time-of-use period."),
-        new("Current plan", BlankDash(PeakPower.CurrentPlan), "Alectra Hui current billing plan."),
-        new("Current price", PeakPower.CurrentPriceCentsPerKwh is null ? "--" : $"{PeakPower.CurrentPriceCentsPerKwh.Value:0.###} c/kWh", $"Saver threshold is {PeakPower.PriceThresholdCentsPerKwh:0.###} c/kWh."),
-        new("Current power", PeakPower.CurrentPowerKilowatts is null ? "--" : $"{PeakPower.CurrentPowerKilowatts.Value:0.###} kW", $"Saver threshold is {PeakPower.PowerThresholdKilowatts:0.##} kW."),
-        new("Usage updated", Format.ShortTime(_usage?.UpdatedAt), "When AC Defender last read usage sensors."),
+        new("TOTAL (COMMODITY)", Cad(Cost.TotalCad), "var(--ink)", $"All-time TOU energy-commodity cost ({Cost.TotalKwh:0.#} kWh)."),
+        new("THIS MONTH", Cad(Cost.MonthCad), "var(--ink)", "Commodity cost this month; resets on the 1st."),
+        new("TODAY", Cad(Cost.TodayCad), "var(--ink)", "Commodity cost today; resets at midnight."),
+        new("TOTAL (ALL-IN)", Cad(Cost.AllInTotalCad), "var(--good)", "Out-of-pocket estimate incl. delivery/regulatory/OER/HST."),
+        new("MONTH (ALL-IN)", Cad(Cost.AllInMonthCad), "var(--good)", "This month, all-in."),
+        new("TODAY (ALL-IN)", Cad(Cost.AllInTodayCad), "var(--good)", "Today, all-in."),
+        new("CURRENT RATE", $"{Cost.CurrentRateCentsPerKwh:0.#} ¢/kWh", "var(--ink)", $"{Cost.CurrentPeriod}. On {Cost.OnPeakCentsPerKwh:0.#} / Mid {Cost.MidPeakCentsPerKwh:0.#} / Off {Cost.OffPeakCentsPerKwh:0.#} ¢/kWh."),
+        new("TOU PERIOD", Cost.CurrentPeriod.ToUpperInvariant(), "var(--good)", "Weekends and Ontario holidays are off-peak."),
     ];
 
-    private IReadOnlyList<MetricItem> HistoryMetrics =>
-    [
-        new("24h delta", Format.UsageHistoryValue(_usageHistory?.Delta, _usageHistory?.Unit), UsageHistoryHelp),
-        new("24h max", Format.UsageHistoryValue(_usageHistory?.Max, _usageHistory?.Unit), UsageHistoryHelp),
-        new("24h min", Format.UsageHistoryValue(_usageHistory?.Min, _usageHistory?.Unit), UsageHistoryHelp),
-        new("24h samples", _usageHistory?.Count.ToString(CultureInfo.InvariantCulture) ?? "--", UsageHistoryHelp),
-        new("History updated", Format.ShortTime(_usageHistoryUpdatedAt), "When AC Defender last checked recorder history."),
-    ];
+    // ---------- budget ----------
 
-    private IReadOnlyList<string> AlectraCategories =>
-        AlectraHuiEntities
-            .Select(EntityCategory)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(CategoryOrder)
-            .ThenBy(category => category, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+    private int TorontoDay => Format.TorontoNow().Day;
+    private int DaysThisMonth => DateTime.DaysInMonth(Format.TorontoNow().Year, Format.TorontoNow().Month);
+    private string BudgetPercent(double value) => (Budget.MonthlyBudgetCad <= 0 ? 0 : Math.Clamp(value / Budget.MonthlyBudgetCad * 100, 0, 100)).ToString("0.#", CultureInfo.InvariantCulture);
 
-    private IReadOnlyList<UsageEntityReading> FilteredAlectraEntities =>
-        AlectraHuiEntities
-            .Where(entity => _alectraCategory == AllCategories || EntityCategory(entity).Equals(_alectraCategory, StringComparison.OrdinalIgnoreCase))
-            .Where(entity => Format.MatchesSearch(_alectraSearch, entity.Name, entity.EntityId, entity.State, entity.Unit, EntityCategory(entity)))
-            .OrderBy(entity => CategoryOrder(EntityCategory(entity)))
-            .ThenBy(entity => entity.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(entity => entity.EntityId, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-    private IReadOnlyList<AlectraEntityGroup> FilteredAlectraGroups =>
-        FilteredAlectraEntities
-            .GroupBy(EntityCategory)
-            .OrderBy(group => CategoryOrder(group.Key))
-            .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(group => new AlectraEntityGroup(group.Key, group.ToArray()))
-            .ToArray();
-
-    private IReadOnlyList<CategoryMetric> CategoryBreakdown
-    {
-        get
-        {
-            var total = AlectraHuiEntities.Count;
-            if (total == 0)
-            {
-                return Array.Empty<CategoryMetric>();
-            }
-
-            return AlectraHuiEntities
-                .GroupBy(EntityCategory)
-                .OrderBy(group => CategoryOrder(group.Key))
-                .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(group => new CategoryMetric(group.Key, group.Count(), group.Count() * 100.0 / total))
-                .ToArray();
-        }
-    }
-
-    private IReadOnlyList<UsageHistorySample> HistoryChartSamples
-    {
-        get
-        {
-            var samples = _usageHistory?.Samples
-                .Where(sample => sample.Value is not null)
-                .OrderBy(sample => sample.Timestamp)
-                .ToArray() ?? Array.Empty<UsageHistorySample>();
-            if (samples.Length <= 12)
-            {
-                return samples;
-            }
-
-            var picked = new List<UsageHistorySample>(12);
-            var step = (samples.Length - 1) / 11.0;
-            for (var i = 0; i < 12; i++)
-            {
-                picked.Add(samples[(int)Math.Round(i * step)]);
-            }
-
-            return picked;
-        }
-    }
-
-    private List<ChartSeries<double>> UsageHistorySeries
-    {
-        get
-        {
-            var samples = HistoryChartSamples;
-            if (samples.Count == 0)
-            {
-                return [];
-            }
-
-            return
-            [
-                new ChartSeries<double>
-                {
-                    Name = _usageHistory?.Name ?? "Usage",
-                    Data = samples.Select(sample => Math.Round(sample.Value!.Value, 3)).ToArray()
-                }
-            ];
-        }
-    }
-
-    private string[] UsageHistoryLabels =>
-        HistoryChartSamples
-            .Select(sample => Format.ToToronto(sample.Timestamp).ToString("HH:mm", CultureInfo.InvariantCulture))
-            .ToArray();
-
-    protected override void OnInitialized()
-    {
-        State.Changed += OnStateChanged;
-        _ = RefreshUsageAsync();
-        _ = RefreshUsageHistoryAsync();
-        ReloadLedger();
-    }
-
-    // ---------- AC usage calendar (per-day runtime + estimated TOU cost) ----------
+    // ---------- calendar ----------
 
     private Dictionary<string, AcDailyUsage> _dailyUsage = new();
     private DateTime _calMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
     private string? _selectedDayKey;
-    private DateRange _calRange = new(DateTime.Today.AddDays(-6), DateTime.Today);
 
     private sealed record CalendarCell(int Day, string Key, bool IsToday, bool IsFuture, AcDailyUsage? Usage, int HeatTier);
 
-    private void ReloadLedger()
-    {
-        _dailyUsage = Store.GetAcDailyUsage().ToDictionary(item => item.Date, StringComparer.Ordinal);
-    }
+    private void ReloadLedger() => _dailyUsage = Store.GetAcDailyUsage().ToDictionary(item => item.Date, StringComparer.Ordinal);
 
     private bool IsCurrentCalendarMonth => _calMonth.Year == DateTime.Today.Year && _calMonth.Month == DateTime.Today.Month;
-
     private void PrevMonth() => _calMonth = _calMonth.AddMonths(-1);
-
     private void NextMonth() => _calMonth = _calMonth.AddMonths(1);
-
     private void GoToThisMonth() => _calMonth = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-
     private void SelectDay(CalendarCell cell) => _selectedDayKey = _selectedDayKey == cell.Key ? null : cell.Key;
 
     private AcDailyUsage? SelectedUsage =>
@@ -678,8 +352,6 @@
         return _dailyUsage.Values.Where(item => item.Date.StartsWith(prefix, StringComparison.Ordinal));
     }
 
-    // Heat tiers work like an airline fare calendar: each day's cost relative to the month's most
-    // expensive day picks green (cheap) → red (expensive).
     private IEnumerable<CalendarCell?> CalendarCells
     {
         get
@@ -708,33 +380,10 @@
     private string CellCss(CalendarCell cell)
     {
         var css = cell.HeatTier > 0 ? $"cal-heat-{cell.HeatTier}" : string.Empty;
-        if (cell.IsToday)
-        {
-            css += " cal-cell--today";
-        }
-
-        if (cell.IsFuture)
-        {
-            css += " cal-cell--future";
-        }
-
-        if (cell.Key == _selectedDayKey)
-        {
-            css += " cal-cell--selected";
-        }
-
+        if (cell.IsToday) css += " cal-cell--today";
+        if (cell.IsFuture) css += " cal-cell--future";
+        if (cell.Key == _selectedDayKey) css += " cal-cell--selected";
         return css;
-    }
-
-    private string CalendarSubtitle
-    {
-        get
-        {
-            var runtime = State.Snapshot.AcRuntime;
-            return runtime?.EstimatedCostEnabled == true
-                ? $"Hours + estimated cost at {runtime.AssumedKilowatts:0.0} kW × Alectra TOU"
-                : "Hours per day (cost estimate is off)";
-        }
     }
 
     private string MonthSummary
@@ -750,36 +399,22 @@
         }
     }
 
-    private string RangeSummary
-    {
-        get
-        {
-            if (_calRange?.Start is not { } rangeStart || _calRange.End is not { } rangeEnd)
-            {
-                return "Pick a start and end day to total that range.";
-            }
+    private static string ShortHours(double hours) => hours >= 10 ? $"{hours:0.0}h" : $"{(int)hours}h{(Math.Round(hours % 1 * 60) is var m and > 0 ? $"{(int)m}m" : "")}";
 
-            var startKey = rangeStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            var endKey = rangeEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            var days = _dailyUsage.Values
-                .Where(item => string.CompareOrdinal(item.Date, startKey) >= 0 && string.CompareOrdinal(item.Date, endKey) <= 0)
-                .ToList();
-            var hours = days.Sum(item => item.Hours);
-            var cost = days.Sum(item => item.CostDollars);
-            var totalDays = (rangeEnd.Date - rangeStart.Date).Days + 1;
-            return $"{FormatDayKey(startKey)} → {FormatDayKey(endKey)} ({totalDays} day(s)): {ShortHours(hours)} cooling ≈ ${cost:0.00}"
-                + (days.Count > 0 ? $" · busiest day {ShortHours(days.Max(item => item.Hours))}" : string.Empty);
-        }
-    }
-
-    private static string ShortHours(double hours) => hours >= 10
-        ? $"{hours:0.0}h"
-        : $"{(int)hours}h {(int)Math.Round(hours % 1 * 60)}m";
-
-    private static string FormatDayKey(string key) =>
+    private static string FormatDayLong(string key) =>
         DateTime.TryParseExact(key, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
-            ? date.ToString("ddd MMM d, yyyy", CultureInfo.InvariantCulture)
+            ? date.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture)
             : key;
+
+    // ---------- lifecycle ----------
+
+    protected override void OnInitialized()
+    {
+        State.Changed += OnStateChanged;
+        ReloadLedger();
+        _ = RefreshUsageAsync();
+        _ = RefreshUsageHistoryAsync();
+    }
 
     private async void OnStateChanged()
     {
@@ -800,13 +435,6 @@
         {
             await InvokeAsync(StateHasChanged);
         }
-    }
-
-    private async Task RefreshNow()
-    {
-        await RefreshUsageAsync();
-        await RefreshUsageHistoryAsync();
-        StateHasChanged();
     }
 
     private async Task RefreshUsageAsync()
@@ -832,100 +460,12 @@
             _nextUsageHistoryRefresh = end.AddMinutes(10);
             _usageHistory = await HomeAssistant.GetUsageHistoryAsync(null, end.AddHours(-24), end, CancellationToken.None);
             _usageHistoryUpdatedAt = end;
-            _usageHistoryError = null;
         }
-        catch (Exception ex)
+        catch
         {
             _nextUsageHistoryRefresh = DateTimeOffset.UtcNow.AddMinutes(10);
-            _usageHistoryError = $"Usage history error: {ex.Message}";
         }
     }
-
-    private void ClearAlectraSearch() => _alectraSearch = string.Empty;
-
-    private static string EntityCategory(UsageEntityReading entity)
-    {
-        var id = entity.EntityId.ToLowerInvariant();
-        var name = entity.Name.ToLowerInvariant();
-        var joined = $"{id} {name}";
-
-        if (joined.Contains("bill", StringComparison.Ordinal) || joined.Contains("due", StringComparison.Ordinal) || joined.Contains("balance", StringComparison.Ordinal))
-        {
-            return "Bill desk";
-        }
-
-        if (id.StartsWith("select.", StringComparison.Ordinal) || id.StartsWith("switch.", StringComparison.Ordinal) || id.StartsWith("number.", StringComparison.Ordinal)
-            || joined.Contains("plan", StringComparison.Ordinal) || joined.Contains("auto", StringComparison.Ordinal) || joined.Contains("poll", StringComparison.Ordinal))
-        {
-            return "Plan controls";
-        }
-
-        if (joined.Contains("tou", StringComparison.Ordinal) || joined.Contains("peak", StringComparison.Ordinal) || joined.Contains("price", StringComparison.Ordinal) || joined.Contains("rate", StringComparison.Ordinal))
-        {
-            return "Guard signals";
-        }
-
-        if (joined.Contains("power", StringComparison.Ordinal) || joined.Contains("energy", StringComparison.Ordinal) || joined.Contains("usage", StringComparison.Ordinal) || joined.Contains("cost", StringComparison.Ordinal))
-        {
-            return "Live usage";
-        }
-
-        return "Other signals";
-    }
-
-    private static int CategoryOrder(string category) => category switch
-    {
-        "Live usage" => 0,
-        "Guard signals" => 1,
-        "Bill desk" => 2,
-        "Plan controls" => 3,
-        _ => 4
-    };
-
-    private static string IconForCategory(string category) => category switch
-    {
-        "Live usage" => Icons.Material.Filled.Speed,
-        "Guard signals" => Icons.Material.Filled.Policy,
-        "Bill desk" => Icons.Material.Filled.ReceiptLong,
-        "Plan controls" => Icons.Material.Filled.Tune,
-        _ => Icons.Material.Filled.Sensors
-    };
-
-    private static Color ColorForCategory(string category) => category switch
-    {
-        "Live usage" => Color.Info,
-        "Guard signals" => Color.Warning,
-        "Bill desk" => Color.Success,
-        "Plan controls" => Color.Secondary,
-        _ => Color.Default
-    };
-
-    private static string CssClassForCategory(string category) => category switch
-    {
-        "Live usage" => "usage",
-        "Guard signals" => "guard",
-        "Bill desk" => "bill",
-        "Plan controls" => "controls",
-        _ => "other"
-    };
-
-    private static string HelpForCategory(string category) => category switch
-    {
-        "Live usage" => "Live power, energy, usage, and cost signals. The guard reads these before deciding whether safe cooling can wait.",
-        "Guard signals" => "TOU, price, rate, and peak hints. These tell the defender when electricity is the hot zone.",
-        "Bill desk" => "Bill, due-date, and balance style sensors. Useful for checking the wallet damage without leaving the guard post.",
-        "Plan controls" => "Alectra Hui controls and selectors exposed by Home Assistant. This page shows them but does not change them.",
-        _ => "Extra Alectra Hui entities that do not fit the main desks."
-    };
-
-    private static string PercentStyle(double percent) =>
-        $"width: {percent.ToString("0.##", CultureInfo.InvariantCulture)}%;";
-
-    private static string BlankDash(string? value) => string.IsNullOrWhiteSpace(value) || value == "--" ? "--" : value;
 
     public void Dispose() => State.Changed -= OnStateChanged;
-
-    private sealed record AlectraEntityGroup(string Category, IReadOnlyList<UsageEntityReading> Items);
-
-    private sealed record CategoryMetric(string Category, int Count, double Percent);
 }

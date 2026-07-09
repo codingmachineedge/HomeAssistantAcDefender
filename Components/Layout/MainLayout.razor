@@ -19,12 +19,12 @@
     <header class="ops-header">
         <div class="ops-brand">
             <div class="ops-brand__mark" aria-hidden="true">
-                ❆
+                SCP
                 <span class="ops-brand__ping"></span>
             </div>
             <div>
-                <div class="ops-brand__name">AC DEFENDER</div>
-                <div class="ops-brand__sub">TACTICAL OPS // DINING ROOM</div>
+                <div class="ops-brand__name">SCP AC DEFENDER</div>
+                <div class="ops-brand__sub">SECURE · CONTAIN · PROTECT THE COOL</div>
             </div>
         </div>
 
@@ -42,7 +42,7 @@
 
         <div class="ops-clock">
             <div class="ops-clock__time">@_clockText</div>
-            <div class="ops-clock__label">MISSION CLOCK · TORONTO</div>
+            <div class="ops-clock__label">SITE CLOCK · TORONTO</div>
         </div>
 
         <div class="ops-lang" role="group" aria-label="Language">
@@ -55,11 +55,14 @@
         <button class="ops-icon-btn" @onclick="ToggleTheme" aria-label="@ThemeTooltip" title="@ThemeTooltip">@ThemeGlyph</button>
     </header>
 
+    @* ═════════ CLASSIFICATION STRIP (per-page hazard ribbon) ═════════ *@
+    <div class="ops-classified" role="note">@PageStrip</div>
+
     <div class="ops-body">
 
         @* ═════════ NAV RAIL ═════════ *@
         <nav class="ops-rail" aria-label="Primary">
-            <div class="ops-rail__title">@L("STATIONS")</div>
+            <div class="ops-rail__title">@L("SITE AREAS")</div>
             @foreach (var item in Stations)
             {
                 var tag = StationTag(item);
@@ -74,7 +77,7 @@
             <div class="ops-rail__flex"></div>
 
             <div class="ops-master">
-                <div class="ops-master__label">@L("MASTER SWITCH")</div>
+                <div class="ops-master__label">@L("CONTAINMENT MASTER")</div>
                 <button class="@MasterBtnClass" @onclick="ToggleDefender">@L(MasterText)</button>
                 <div class="ops-master__help i18n-both">@L(MasterHelp)</div>
             </div>
@@ -123,6 +126,10 @@
                 <div class="ops-mobile-nav__label">@(_langMode == Lang.Cantonese ? L(item.Label) : item.Label)</div>
             </a>
         }
+        <button class="@MobileMasterClass" @onclick="ToggleDefender" aria-label="@(DefenderIsEnabled ? "Stand down" : "Re-contain")">
+            <div class="ops-mobile-nav__glyph" aria-hidden="true">@(DefenderIsEnabled ? "⛨" : "⏻")</div>
+            <div class="ops-mobile-nav__label">@(DefenderIsEnabled ? "ON DUTY" : "PAUSED")</div>
+        </button>
     </nav>
 
     @* atmosphere overlays *@
@@ -267,11 +274,11 @@
 
     private string MoodLabel => Mood switch
     {
-        "standby" => "STANDING DOWN",
-        "acting" => "GUARDS ENGAGED",
+        "standby" => "SITE STANDBY",
+        "acting" => "PROCEDURES ACTIVE",
         "alert" => "⚠ RED ALERT",
         "omega" => "☠ OMEGA ALERT",
-        _ => Snapshot?.ConnectionState == "home-assistant" ? "ON WATCH" : "HA OFFLINE"
+        _ => Snapshot?.ConnectionState == "home-assistant" ? "CONTAINMENT NOMINAL" : "HA OFFLINE"
     };
 
     private bool IsAlertMood => Mood is "alert" or "omega";
@@ -288,15 +295,16 @@
 
     private IReadOnlyList<Station> Stations =>
     [
-        new("/", "⌖", "COMMAND", "STN-01", true),
-        new("/defense", "⛨", "DEFENSE", "STN-02", true),
-        new("/comfort", "☼", "COMFORT", "STN-03", true),
-        new("/energy", "↯", "ENERGY", "STN-04", true),
-        new("/logs", "≣", "LOGS", "STN-05", true),
-        new("/controls", "⌘", "CONTROLS", "STN-06", false),
-        new("/settings", "⚙", "ORDERS", "STN-07", true),
-        new("/repository", "⇄", "REPO", "STN-08", false),
-        new("/guide", "✦", "GUIDE", "STN-09", false),
+        new("/", "⌖", "COMMAND", "AREA-01", true),
+        new("/defense", "⛨", "DEFENSE", "AREA-02", true),
+        new("/comfort", "☼", "COMFORT", "AREA-03", true),
+        new("/energy", "↯", "ENERGY", "AREA-04", true),
+        new("/logs", "≣", "LOGS", "AREA-05", true),
+        new("/controls", "⌘", "CONTROLS", "AREA-06", false),
+        new("/settings", "⚙", "ORDERS", "AREA-07", false),
+        new("/repository", "⇄", "REPO", "AREA-08", false),
+        new("/guide", "✦", "GUIDE", "AREA-09", false),
+        new("/wiki", "⎘", "WIKI", "AREA-10", true),
     ];
 
     private string CurrentPath => new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant() is { Length: > 0 } p ? p : "/";
@@ -313,12 +321,34 @@
         "/defense" when IsAlertMood => $"{BusyGuardCount}!",
         "/defense" when BusyGuardCount > 0 => $"{BusyGuardCount}",
         "/logs" when Snapshot?.ThermostatChanges is { Count: > 0 } changes => $"{Math.Min(changes.Count, 99)}",
+        "/repository" => "GIT",
+        "/wiki" => "FULL",
         _ => ""
+    };
+
+    private string MobileMasterClass => DefenderIsEnabled
+        ? "ops-mobile-nav__item ops-mobile-nav__master"
+        : "ops-mobile-nav__item ops-mobile-nav__master ops-mobile-nav__master--off";
+
+    // Per-page classification ribbon under the header (SCP flavour + a hint at the page's job).
+    private string PageStrip => CurrentPath switch
+    {
+        "/" => "Classified — Level 4 // Eyes Only // Item #: SCP-734-AC (\"The Defender\") · Object Class: THAUMIEL · Site-DR (Dining Room)",
+        "/defense" => "Containment roster — every wall touch is logged, every quiet correction accounted for · handle procedures with care",
+        "/comfort" => "Classified — Level 2 // Site-UP thermal surveillance // humans get courtesy, machines don't",
+        "/energy" => "Alectra Hui command tent — hours become dollars, dollars become yelling · full math in the WIKI",
+        "/logs" => "Incident archive — every touch, every correction, every excuse · tap a row for the raw JSON",
+        "/controls" => "Direct orders send real Home Assistant service calls · handle with Level 4 gloves",
+        "/settings" => "Standing orders — the numbers the containment team defends · saved orders are version-controlled",
+        "/repository" or "/settings/repository" => "Standing orders are version-controlled — every settings save is a commit · blame is a feature",
+        "/guide" => "Field Manual — generated from the same guard catalog that runs the live board · full articles in the WIKI",
+        "/wiki" => "Foundation wiki — every algorithm, every screenshot, one search box · zero simulators",
+        _ => "SECURE · CONTAIN · PROTECT THE COOL"
     };
 
     private string PageTitle => CurrentPath switch
     {
-        "/" => "Command Center",
+        "/" => "Site Command",
         "/defense" => "Defense Roster",
         "/comfort" => "Comfort Watch",
         "/energy" => "Energy Intel",
@@ -327,6 +357,7 @@
         "/settings" => "Standing Orders",
         "/repository" or "/settings/repository" => "Settings Repository",
         "/guide" => "Field Manual",
+        var path when path.StartsWith("/wiki", StringComparison.Ordinal) => "Site Wiki",
         var other => other.TrimStart('/') is { Length: > 0 } name
             ? char.ToUpperInvariant(name[0]) + name[1..]
             : "AC Defender"
@@ -334,24 +365,25 @@
 
     private string PageCode => CurrentPath switch
     {
-        "/" => "STN-01 · OVERVIEW",
-        "/defense" => $"STN-02 · {GuardCatalog.Live.Count()} UNITS",
-        "/comfort" => "STN-03 · UPSTAIRS",
-        "/energy" => "STN-04 · ALECTRA",
-        "/logs" => "STN-05 · ARCHIVE",
-        "/controls" => "STN-06 · DIRECT",
-        "/settings" => "STN-07 · CONFIG",
-        "/repository" or "/settings/repository" => "STN-08 · GIT",
-        "/guide" => "STN-09 · MANUAL",
+        "/" => "AREA-01 · O5 OVERVIEW",
+        "/defense" => $"AREA-02 · {GuardCatalog.Live.Count()} UNITS",
+        "/comfort" => "AREA-03 · SITE-UP (UPSTAIRS)",
+        "/energy" => "AREA-04 · ALECTRA HUI",
+        "/logs" => "AREA-05 · INCIDENT ARCHIVE",
+        "/controls" => "AREA-06 · LEVEL 4 DIRECT",
+        "/settings" => "AREA-07 · CONFIG",
+        "/repository" or "/settings/repository" => "AREA-08 · GIT MANAGER",
+        "/guide" => $"AREA-09 · {GuardCatalog.All.Count()} PROCEDURES",
+        var w when CurrentPath.StartsWith("/wiki", StringComparison.Ordinal) => "AREA-10 · FOUNDATION WIKI",
         _ => ""
     };
 
     // ---------- master switch ----------
 
     private bool DefenderIsEnabled => Snapshot?.DefenderEnabled == true;
-    private string MasterText => DefenderIsEnabled ? "⛨ STAND DOWN" : "⏻ ACTIVATE";
+    private string MasterText => DefenderIsEnabled ? "⛨ STAND DOWN" : "⏻ RE-CONTAIN";
     private string MasterBtnClass => DefenderIsEnabled ? "ops-master__btn" : "ops-master__btn ops-master__btn--off";
-    private string MasterHelp => DefenderIsEnabled ? "The guard post is awake and caffeinated." : "Paused. Tap to wake the tiny guard shift.";
+    private string MasterHelp => DefenderIsEnabled ? "The containment team is awake and caffeinated." : "Suspended. Tap to wake the tiny containment shift.";
 
     private async Task ToggleDefender()
     {
