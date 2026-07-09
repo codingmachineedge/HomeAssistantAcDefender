@@ -395,9 +395,11 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
     .ops-mobile-nav { display: flex; }
     .ops-main { padding: 14px 12px 92px 12px; }
     .ops-clock { display: none; }
-    .ops-header { gap: 8px; padding: 0 10px; }
+    .ops-header { gap: 8px; padding: 0 10px; overflow: hidden; }
+    .ops-brand { min-width: 0; flex: 1 1 auto; }
     .ops-brand__sub { display: none; }
-    .ops-brand__name { font-size: 13px; }
+    .ops-brand__name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+    .ops-lang, .ops-header .ops-icon-btn { display: none; }
     .ops-mood { padding: 5px 8px; }
     .ops-mood__label { font-size: 9.5px; letter-spacing: 0.08em; }
 
@@ -731,6 +733,7 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 .ops-floor__map {
     flex: 1;
     position: relative;
+    overflow: hidden;
     background-image:
         repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 34px),
         repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 34px);
@@ -745,6 +748,7 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
     pointer-events: none;
     opacity: 0.5;
     overflow: hidden;
+    contain: paint;
 }
 
 .ops-floor__radar-cone {
@@ -1009,7 +1013,7 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
     border-right: 1px solid var(--line);
 }
 
-.ops-ticker__viewport { flex: 1; overflow: hidden; white-space: nowrap; }
+.ops-ticker__viewport { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; contain: paint; }
 
 .ops-ticker__scroll {
     display: inline-block;
@@ -1079,6 +1083,48 @@ body { font-family: 'JetBrains Mono', Consolas, monospace; -webkit-font-smoothin
 }
 
 .ops-dial-scale { display: flex; justify-content: space-between; font-size: 8.5px; color: var(--sub); letter-spacing: 0.12em; padding: 0 24px 10px 24px; }
+.ops-weather-strip {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0 0 12px 0;
+}
+
+.ops-weather-strip__item {
+    min-width: 0;
+    border: 1px solid var(--line2);
+    background: var(--panel2);
+    padding: 8px 9px;
+}
+
+.ops-weather-strip__label,
+.ops-weather-strip__value {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.ops-weather-strip__label {
+    color: var(--sub);
+    font-size: 8px;
+    letter-spacing: 0.14em;
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+.ops-weather-strip__value {
+    color: var(--ink);
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.2;
+    margin-top: 3px;
+}
+
+.ops-weather-strip__value--sub {
+    color: var(--sub);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+}
+
 .ops-dial-controls { display: flex; gap: 6px; align-items: stretch; flex-wrap: wrap; }
 
 .ops-dial-controls input[type="number"] {

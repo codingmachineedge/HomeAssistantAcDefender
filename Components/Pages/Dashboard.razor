@@ -212,6 +212,16 @@
                     </div>
                 </div>
                 <div class="ops-dial-scale"><span>16°</span><span>LIVE WALL UNIT</span><span>30°</span></div>
+                <div class="ops-weather-strip" aria-label="Outdoor weather">
+                    <div class="ops-weather-strip__item">
+                        <span class="ops-weather-strip__label">OUTDOOR</span>
+                        <span class="ops-weather-strip__value">@OutdoorText</span>
+                    </div>
+                    <div class="ops-weather-strip__item">
+                        <span class="ops-weather-strip__label">@WeatherStatusText</span>
+                        <span class="ops-weather-strip__value ops-weather-strip__value--sub">@WeatherUpdatedText</span>
+                    </div>
+                </div>
                 <div class="ops-dial-controls__label">TEMP I WANT</div>
                 <div class="ops-dial-controls">
                     <input type="number" min="10" max="35" step="0.5" value="@TargetInputText"
@@ -513,6 +523,13 @@
     private string TargetShort => $"{Target:0.0}°";
     private string TargetInputText => _targetInput.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
     private string RoomText => Snapshot?.HomeAssistantThermostat is { } t ? $"{t.CurrentTemperatureCelsius:0.0}°C" : "--";
+    private string OutdoorText => Snapshot?.Weather?.OutdoorTemperatureCelsius is { } outdoor ? $"{outdoor:0.0}°C" : "--";
+    private string WeatherStatusText => string.IsNullOrWhiteSpace(Snapshot?.Weather?.Condition)
+        ? "WEATHER --"
+        : Snapshot.Weather.Condition.Replace('_', ' ').ToUpperInvariant();
+    private string WeatherUpdatedText => Snapshot?.Weather?.UpdatedAt is { } updated
+        ? $"UPDATED {Format.ShortTime(updated)}"
+        : "WAITING FOR HA WEATHER";
     private string HvacModeText => (Snapshot?.HomeAssistantThermostat?.HvacMode ?? "--").ToUpperInvariant();
 
     private bool Drifted => Snapshot?.HomeAssistantThermostat is { } t
