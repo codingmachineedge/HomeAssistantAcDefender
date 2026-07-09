@@ -57,6 +57,8 @@ public sealed class DefenderStateStore
     // The rival AC app's own temperature schedule, parsed once from configuration. This is the OTHER
     // side's plan — never a defender target source. See Services/RivalScheduleWatch.cs.
     private readonly IReadOnlyList<RivalScheduleBlock> rivalScheduleBlocks;
+    // Ephemeral by design: a current-cycle bypass verdict must never survive a process restart.
+    private bool rivalScheduleBypassActive;
     private DefenderRuntimeState state;
 
     public DefenderStateStore(
@@ -4315,6 +4317,10 @@ public sealed class DefenderStateStore
     {
         lock (gate)
         {
+            // This is a current-cycle signal, not a retention window. Every evaluation clears the
+            // previous verdict before checking the fresh wall, room, target, and safety evidence.
+            rivalScheduleBypassActive = false;
+
             if (!options.RivalScheduleWatchEnabled || rivalScheduleBlocks.Count == 0)
             {
                 return false;
@@ -4352,6 +4358,7 @@ public sealed class DefenderStateStore
 
             state.RivalScheduleStatus = $"AC app block '{block.Name}' holds the wall at {reading.SetPointCelsius:0.0} C above my temp "
                 + $"{state.TargetTemperatureCelsius:0.0} C; quiet waits are bypassed so the walk-back happens promptly.";
+            rivalScheduleBypassActive = true;
             SaveState();
             return true;
         }
@@ -4366,6 +4373,10 @@ public sealed class DefenderStateStore
     {
         lock (gate)
         {
+            // RunCycleAsync calls this before any guard can return early, so a previous cycle's
+            // bypass can never linger as an engaged card when the current cycle does not reach it.
+            rivalScheduleBypassActive = false;
+
             if (!options.RivalScheduleWatchEnabled || rivalScheduleBlocks.Count == 0)
             {
                 return;
@@ -11140,7 +11151,8 @@ public sealed class DefenderStateStore
             state.RivalScheduleLastMatchSetPointCelsius,
             string.IsNullOrWhiteSpace(state.RivalScheduleStatus)
                 ? "Rival schedule watch is idle."
-                : state.RivalScheduleStatus);
+                : state.RivalScheduleStatus,
+            rivalScheduleBypassActive);
     }
 
     private void AddEvent(string level, string message)

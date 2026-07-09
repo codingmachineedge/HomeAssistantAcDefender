@@ -77,7 +77,8 @@ public sealed record DefenderSnapshot(
 /// <summary>
 /// Live view of Rival Schedule Watch: the AC vendor app's own temperature schedule (the other
 /// side's plan, never a defender target), which block is in force, the next boundary, and the last
-/// wall push that was attributed to the schedule instead of a human touch.
+/// wall push that was attributed to the schedule instead of a human touch. Active is true only for
+/// the current worker cycle while real wall, room, target, and safety evidence authorizes its bypass.
 /// </summary>
 public sealed record RivalScheduleSnapshot(
     bool Enabled,
@@ -92,7 +93,8 @@ public sealed record RivalScheduleSnapshot(
     DateTimeOffset? LastMatchAt,
     string LastMatchBlockName,
     double? LastMatchSetPointCelsius,
-    string Status);
+    string Status,
+    bool Active = false);
 
 /// <summary>
 /// Live view of the Desired-State Enforcer: whether it is enforcing the owner's exact desired state,

@@ -643,8 +643,9 @@ public static class GuardCatalog
                     ]);
                 }
 
-                var recentMatch = d.LastMatchAt is { } matched && DateTimeOffset.UtcNow - matched < TimeSpan.FromHours(8);
-                return GuardLiveView.Standard(d.Enabled, recentMatch, "Answering", d.Status,
+                // Historical matches remain audit evidence; only the current cycle's real bypass
+                // verdict can put this card in the engaged roster.
+                return GuardLiveView.Standard(d.Enabled, d.Active, "Answering", d.Status,
                 [
                     new("Blocks", d.BlockCount.ToString(), "Configured AC-app temperature schedule blocks."),
                     new("Active block", d.ActiveBlockName, d.ActiveLowSetPointCelsius is { } low && d.ActiveHighSetPointCelsius is { } high
@@ -745,7 +746,7 @@ public static class GuardCatalog
                 {
                     return GuardLiveView.Standard(false, false, "Off", "The field kitchen is not available yet.",
                     [
-                        new("Pantry", "$0.00", "Banked ration dollars."),
+                        new("Pantry", "--", "Live ration evidence is unavailable."),
                     ]);
                 }
 
@@ -892,13 +893,15 @@ public static class GuardCatalog
             s =>
             {
                 var c = s.CoolingFailure;
-                var tone = c.Alerting ? GuardTone.Alert : GuardTone.Calm;
-                var label = c.OmegaAlerting ? "OMEGA" : c.Alerting ? "Alerting" : "Watching";
-                return new GuardLiveView(true, c.Alerting, label, tone, c.Status,
+                var alerting = c.Enabled && (c.Alerting || c.OmegaAlerting);
+                var tone = !c.Enabled ? GuardTone.Off : alerting ? GuardTone.Alert : GuardTone.Calm;
+                var label = !c.Enabled ? "Off" : c.OmegaAlerting ? "OMEGA" : c.Alerting ? "Alerting" : "Watching";
+                var status = c.Enabled ? c.Status : "Cooling-failure monitoring is disabled.";
+                return new GuardLiveView(c.Enabled, alerting, label, tone, status,
                 [
-                    new("Active for", c.Alerting ? $"{c.SecondsActive}s" : "Ready", "How long the alert has been raised."),
-                    new("Alerts", c.AlertCount.ToString(), "How many times it has fired."),
-                    new("Room rise", c.RoomRiseCelsius is { } r ? $"{r:+0.0;-0.0;0.0} C" : "--", "Room change over the OMEGA confirmation window."),
+                    new("Active for", !c.Enabled ? "Off" : alerting ? $"{c.SecondsActive}s" : "Ready", "How long the alert has been raised."),
+                    new("Alerts", c.Enabled ? c.AlertCount.ToString() : "Off", "How many times it has fired."),
+                    new("Room rise", !c.Enabled ? "Off" : c.RoomRiseCelsius is { } r ? $"{r:+0.0;-0.0;0.0} C" : "--", "Room change over the OMEGA confirmation window."),
                 ]);
             }),
 

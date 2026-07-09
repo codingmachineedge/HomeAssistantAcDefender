@@ -95,6 +95,7 @@ tests.BudgetPrefersLessSpendWhenOverPaceAndYieldsToSafetyMax();
 tests.BudgetBasisPacesOnAcEstimateAndFallsBackWhenSensorStale();
 tests.BudgetOffsetRaisesEffectiveTargetInSetPointCalculation();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
+tests.GuardCatalogProjectsOnlyTruthfulLiveEvidence();
 tests.OfflineUiHidesRetainedHomeAssistantEvidence();
 tests.WikiIndexMapsScheduleAndWeatherRulesToRealArticle();
 tests.WikiRenderCanonicalizesRouteCasingWithoutCachingAMiss();
@@ -243,6 +244,93 @@ internal sealed class DefenderSetPointRegressionTests
                     throw new InvalidOperationException($"Guard '{guard.Name}' has a blank live evidence metric.");
                 }
             }
+        }
+    }
+
+    public void GuardCatalogProjectsOnlyTruthfulLiveEvidence()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var snapshot = fixture.Store.GetSnapshot();
+
+        var coolingGuard = GuardCatalog.Live.Single(candidate => candidate.Name == "Cooling Failure Watch");
+        var disabledCooling = snapshot with
+        {
+            CoolingFailure = snapshot.CoolingFailure with
+            {
+                Enabled = false,
+                Alerting = true,
+                OmegaAlerting = true,
+                SecondsActive = 120,
+                AlertCount = 3,
+                RoomRiseCelsius = 0.6,
+            },
+        };
+        var coolingView = coolingGuard.Project!(disabledCooling);
+        if (coolingView.Enabled
+            || coolingView.Busy
+            || coolingView.StateLabel != "Off"
+            || coolingView.Tone != GuardTone.Off
+            || coolingView.StatusText != "Cooling-failure monitoring is disabled."
+            || coolingView.Metrics.Any(metric => metric.Value != "Off"))
+        {
+            throw new InvalidOperationException("A disabled Cooling Failure Watch must project Off state and hide retained alert evidence.");
+        }
+
+        var omegaWithoutBaseAlert = coolingGuard.Project!(snapshot with
+        {
+            CoolingFailure = snapshot.CoolingFailure with
+            {
+                Enabled = true,
+                Alerting = false,
+                OmegaAlerting = true,
+            },
+        });
+        if (!omegaWithoutBaseAlert.Busy
+            || omegaWithoutBaseAlert.StateLabel != "OMEGA"
+            || omegaWithoutBaseAlert.Tone != GuardTone.Alert)
+        {
+            throw new InvalidOperationException("An enabled OMEGA cooling failure must remain an alert even if its base alert flag is not retained.");
+        }
+
+        var rivalGuard = GuardCatalog.Live.Single(candidate => candidate.Name == "Rival Schedule Watch");
+        var historicalRivalMatch = snapshot with
+        {
+            RivalSchedule = new RivalScheduleSnapshot(
+                true,
+                true,
+                3,
+                "SLEEP",
+                24.0,
+                25.0,
+                "DEEP SLEEP",
+                DateTimeOffset.UtcNow.AddHours(1),
+                5,
+                DateTimeOffset.UtcNow.AddMinutes(-1),
+                "SLEEP",
+                25.0,
+                "A recent rival schedule push was attributed."),
+        };
+        var rivalView = rivalGuard.Project!(historicalRivalMatch);
+        if (rivalView.Busy || rivalView.StateLabel != "Watching" || rivalView.Tone != GuardTone.Calm)
+        {
+            throw new InvalidOperationException("Historical rival schedule attribution must remain evidence, not an engaged-now state.");
+        }
+
+        var activeRivalView = rivalGuard.Project!(historicalRivalMatch with
+        {
+            RivalSchedule = historicalRivalMatch.RivalSchedule! with { Active = true },
+        });
+        if (!activeRivalView.Busy || activeRivalView.StateLabel != "Answering")
+        {
+            throw new InvalidOperationException("A current rival-schedule bypass must appear as engaged without reusing historical attribution.");
+        }
+
+        var kitchenGuard = GuardCatalog.Live.Single(candidate => candidate.Name == "Field Kitchen (food rations)");
+        var unavailableKitchen = kitchenGuard.Project!(snapshot with { FoodRations = null });
+        var pantryMetric = unavailableKitchen.Metrics.Single(metric => metric.Label == "Pantry");
+        if (pantryMetric.Value != "--")
+        {
+            throw new InvalidOperationException("Missing food-ration evidence must render as unavailable instead of an invented zero-dollar balance.");
         }
     }
 
@@ -3907,20 +3995,36 @@ internal sealed class DefenderSetPointRegressionTests
             {
                 throw new InvalidOperationException("Quiet timing should be bypassed while the wall sits at the rival block's setpoint above my temp and the room is warm.");
             }
+            if (store.GetSnapshot().RivalSchedule is not { Active: true })
+            {
+                throw new InvalidOperationException("A real rival-schedule bypass must expose a current active snapshot signal.");
+            }
 
             if (store.ShouldBypassQuietTimingForRivalSchedule(scheduledWall with { CurrentTemperatureCelsius = 22.0 }, now))
             {
                 throw new InvalidOperationException("No bypass when the room is already at my temp — the schedule push is only watched.");
+            }
+            if (store.GetSnapshot().RivalSchedule is not { Active: false })
+            {
+                throw new InvalidOperationException("The current rival-schedule signal must clear when the room no longer needs cooling.");
             }
 
             if (store.ShouldBypassQuietTimingForRivalSchedule(scheduledWall with { SetPointCelsius = 24.5 }, now))
             {
                 throw new InvalidOperationException("No bypass when the wall setpoint does not match the rival block — that could be a human choice.");
             }
+            if (store.GetSnapshot().RivalSchedule is not { Active: false })
+            {
+                throw new InvalidOperationException("The current rival-schedule signal must remain clear for a non-matching wall setpoint.");
+            }
 
             if (store.ShouldBypassQuietTimingForRivalSchedule(scheduledWall with { CurrentTemperatureCelsius = 26.0 }, now))
             {
                 throw new InvalidOperationException("Above the safety band the normal hot-room comfort paths lead, not the rival bypass.");
+            }
+            if (store.GetSnapshot().RivalSchedule is not { Active: false })
+            {
+                throw new InvalidOperationException("The current rival-schedule signal must clear when hot-room comfort safety leads.");
             }
         }
         finally

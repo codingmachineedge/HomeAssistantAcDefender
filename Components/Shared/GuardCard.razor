@@ -32,6 +32,8 @@
         <MudButton Class="guard-card__more"
                    Variant="Variant.Text"
                    Size="Size.Small"
+                   aria-expanded="@(_open ? "true" : "false")"
+                   aria-controls="@HowPanelId"
                    OnClick="@(() => _open = !_open)"
                    EndIcon="@(_open ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
             @LInline("How this works")
@@ -41,15 +43,16 @@
                    Variant="Variant.Text"
                    Color="Color.Info"
                    Size="Size.Small"
+                   aria-expanded="@(_detailOpen ? "true" : "false")"
+                   aria-controls="@DetailPanelId"
                    OnClick="@(() => _detailOpen = !_detailOpen)"
-                   StartIcon="@Icons.Material.Filled.FactCheck"
                    EndIcon="@(_detailOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
             @LInline("More extra-specific info")
         </MudButton>
     </div>
 
     <MudCollapse Expanded="_open">
-        <div class="guard-help">
+        <div id="@HowPanelId" class="guard-help">
             <p class="guard-help__summary i18n-both">@L(Info.Summary)</p>
             <p class="i18n-both"><span class="guard-help__tag">@LInline("Watches")</span> @L(Info.Watches)</p>
             <p class="i18n-both"><span class="guard-help__tag">@LInline("Logic")</span> @L(Info.Logic)</p>
@@ -62,7 +65,7 @@
     </MudCollapse>
 
     <MudCollapse Expanded="_detailOpen">
-        <div class="guard-detail">
+        <div id="@DetailPanelId" class="guard-detail">
             <div class="guard-detail__brief">
                 @foreach (var item in DetailBriefItems)
                 {
@@ -77,7 +80,7 @@
             <div class="guard-detail__row guard-detail__row--next">
                 <div class="guard-detail__label">
                     <MudIcon Icon="@Icons.Material.Filled.NearMe" Size="Size.Small" />
-                    Next step in this cycle
+                    Next step for this card
                 </div>
                 <div class="guard-detail__text">@NextStepText</div>
             </div>
@@ -125,7 +128,7 @@
             <div class="guard-detail__row">
                 <div class="guard-detail__label">
                     <MudIcon Icon="@Icons.Material.Filled.SecurityUpdateGood" Size="Size.Small" />
-                    Action if this card wins
+                    Action when this rule applies
                 </div>
                 <div class="guard-detail__text">@ActionIfTriggeredText</div>
             </div>
@@ -141,7 +144,7 @@
             <div class="guard-detail__row">
                 <div class="guard-detail__label">
                     <MudIcon Icon="@Icons.Material.Filled.LowPriority" Size="Size.Small" />
-                    What can outrank this card
+                    Overrule and bypass rules
                 </div>
                 <div class="guard-detail__text">@OverrideText</div>
             </div>
@@ -149,7 +152,7 @@
             <div class="guard-detail__algorithm">
                 <div class="guard-detail__label">
                     <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" />
-                    Exact algorithm path
+                    Exact algorithm path — card scope
                 </div>
                 <ol>
                     @foreach (var step in AlgorithmSteps)
@@ -203,6 +206,9 @@
     private bool _open;
     private bool _detailOpen;
 
+    private string HowPanelId => $"guard-how-{GuardOrder}";
+    private string DetailPanelId => $"guard-detail-{GuardOrder}";
+
     private bool IsOffline =>
         !string.Equals(Snapshot.ConnectionState, "home-assistant", StringComparison.OrdinalIgnoreCase);
 
@@ -235,10 +241,10 @@
     private int GuardOrder => GetGuardOrder();
     private IReadOnlyList<DetailBriefItem> DetailBriefItems =>
     [
-        new("Card", GuardOrderText, $"Position in the visible guard reference order. Next reference stop: {NextGuardText}."),
+        new("Reference", GuardOrderText, "Position in the Defense board's reading order only; it is not AcDefenderService execution order."),
         new("Lane", CategoryName, "Which part of the defender decision board this action belongs to."),
-        new("Verdict", VerdictText, "Whether this guard is unavailable, off, quietly watching, or actively holding/shaping/alerting."),
-        new("Next check", IsOffline ? "unavailable" : Snapshot.NextActionAt is { } next ? Format.ShortTime(next) : "live loop", IsOffline ? "A fresh worker check cannot be reported until Home Assistant reconnects." : "Toronto 24-hour time for the next planned worker check or command.")
+        new("Verdict", VerdictText, "The card's projected state label, plus whether it is unavailable, disabled, or currently Busy."),
+        new("Worker time", IsOffline ? "unavailable" : Snapshot.NextActionAt is { } next ? Format.ShortTime(next) : "live loop", IsOffline ? "A fresh worker time cannot be reported until Home Assistant reconnects." : "Toronto 24-hour time attached to the worker's latest cycle-level plan; it is not specific to this card.")
     ];
 
     private string CategoryName => Info.Category switch
@@ -261,15 +267,15 @@
 
             if (!view.Enabled)
             {
-                return $"{Info.Name} is disabled. When the worker reaches this rule, it marks the action ineligible, does not send a thermostat command from this card, and keeps walking toward {NextGuardText}.";
+                return $"{Info.Name} is disabled in this snapshot, so its documented action is not currently eligible. The worker's latest cycle-level plan is shown below.";
             }
 
             if (view.Busy)
             {
-                return $"{Info.Name} is {view.StateLabel.ToLowerInvariant()} on reference card {GuardOrderText}. The next pass keeps this card's action in force, refreshes the live evidence from Home Assistant, and only releases the worker when the trigger clears, the timer expires, or a comfort/safety override wins.";
+                return $"{Info.Name}'s live projection reports '{view.StateLabel}'. That means this card is active, holding, shaping, waiting, or alerting; it does not mean this is the only active card or the rule that stopped the worker cycle. The next pass re-evaluates the coded worker pipeline from fresh Home Assistant data.";
             }
 
-            return $"{Info.Name} is watching on reference card {GuardOrderText}. On the next live loop it will re-read the evidence, compare it to the trigger rule, and pass control to {NextGuardText} unless this card becomes the winning rule.";
+            return $"{Info.Name}'s live projection reports '{view.StateLabel}'. It is enabled but does not currently report a Busy card state. The worker may evaluate other rules before or after this one because board order is not execution order.";
         }
     }
 
@@ -284,17 +290,17 @@
 
             if (!view.Enabled)
             {
-                return $"Nothing triggered it because this card is disabled. Related switches or values: {SettingsText}.";
+                return $"Disabled in the current snapshot. Related settings: {SettingsText}.";
             }
 
             return view.Busy
-                ? $"Triggered now because the live Home Assistant snapshot matches this card's trigger and the card reports '{view.StateLabel}'. Status sentence: {view.StatusText}"
-                : $"Not triggered right now. It is eligible, but the current readings do not make this card the winner. Status sentence: {view.StatusText}";
+                ? $"The card projection currently reports '{view.StateLabel}'. Busy is a card-level projected state, not a sole-winner marker. Status sentence: {view.StatusText}"
+                : $"The card projection currently reports '{view.StateLabel}' and is enabled but not busy. Status sentence: {view.StatusText}";
         }
     }
 
     private string FutureTriggerText =>
-        $"{Info.Name} will trigger when the watched signals cross this rule: {Info.Logic} The settings that change that threshold are: {SettingsText}.";
+        $"Documented activation, hold, or shaping condition: {Info.Logic} Tuned by: {SettingsText}.";
 
     private string EvidenceSourceText => IsOffline
         ? "No current evidence is shown while Home Assistant is offline. Retained thermostat, sensor, presence, and guard values are hidden until the connection returns."
@@ -321,7 +327,7 @@
                 return $"It is already active. The next meaningful change is a timer ending, a watched value leaving the trigger range, or a higher-priority comfort/safety rule taking over.";
             }
 
-            return $"It is waiting for a future live reading where {Info.Logic} Until then, the card stays quiet and the worker continues toward {NextGuardText}.";
+            return $"It is waiting for a future live reading where {Info.Logic} Until then, this card's projection stays quiet while the worker continues its coded decision pipeline.";
         }
     }
 
@@ -336,7 +342,7 @@
 
             if (!view.Enabled)
             {
-                return $"Turning the related setting back on makes this step eligible again. Until then it is skipped and the defender checks {NextGuardText}.";
+                return "Turning the related setting back on makes this step eligible again. Until then it is skipped without defining which worker rule runs next.";
             }
 
             return view.Busy
@@ -345,26 +351,11 @@
         }
     }
 
-    private string ActionIfTriggeredText
-    {
-        get
-        {
-            var passText = NextGuardText == "the real thermostat command stage"
-                ? "If it does not trigger, the defender can continue toward the real thermostat command stage."
-                : $"If it does not trigger, the next card checked is {NextGuardText}.";
+    private string ActionIfTriggeredText =>
+        $"Documented output when this rule's worker path applies: {Info.Output} A Busy card does not prove this output is the current cycle outcome; use the worker-level next action below.";
 
-            return $"If this card wins this cycle, it will do this: {Info.Output} {passText}";
-        }
-    }
-
-    private string OverrideText => Info.Category switch
-    {
-        GuardCategory.Core => "Core cooling is near the top of the stack. Emergency pause, front-door kill switch, disabled defender mode, and direct Home Assistant errors can still stop it.",
-        GuardCategory.WallTouch => "Warm-room comfort, severe upstairs heat, cooler-intent fast lane, Super Defender strict mode, emergency pause, and front-door kill switch can step ahead of this stealth/timing rule.",
-        GuardCategory.Sensor => "If the room gets too warm, upstairs heat becomes severe, or a direct cooling safety path is needed, this sensor-timing hold steps aside so comfort wins.",
-        GuardCategory.System => "A more urgent system rule can outrank it: emergency protocols, front-door kill switch, cooling-failure alert, disabled defender mode, or a comfort safety override.",
-        _ => "Higher-priority comfort and safety rules can always step ahead of this card."
-    };
+    private string OverrideText =>
+        "The card number does not define precedence. AcDefenderService's coded early-return order and method-specific bypass flags do. Front-door, peace-offering, emergency, disabled/siesta, cooling-protection, enforcer, mode, weather, and comfort gates may end or redirect a pass before the correction pipeline. Inside that pipeline, only guards coded to accept a comfort or quiet-timing bypass step aside.";
 
     private string GlobalNextActionText
     {
@@ -378,55 +369,40 @@
             var when = Snapshot.NextActionAt is null
                 ? string.Empty
                 : $" Planned Toronto time: {Format.ShortTime(Snapshot.NextActionAt)}.";
-            return $"{Snapshot.NextAction}{when} This is the actual worker label, so it may point at a different card when another guard is currently winning.";
+            return $"{Snapshot.NextAction}{when} This is the latest stored worker-level plan. It is separate from card projections, and several cards may report Busy at once.";
         }
     }
 
     private IReadOnlyList<string> AlgorithmSteps => IsOffline
         ?
         [
-            $"Locate {Info.Name} as reference card {GuardOrderText} in the {CategoryName} lane.",
-            "Wait for a fresh real Home Assistant climate, weather, sensor, and presence snapshot. Retained values are not evaluated as current evidence.",
-            $"When connected, load this card's watched signals: {Info.Watches}",
-            $"Load this card's tuning settings: {SettingsText}.",
-            $"When fresh evidence is available, evaluate the trigger formula: {Info.Logic}",
-            "Current evidence is unavailable and intentionally hidden while Home Assistant is offline.",
-            "The current card verdict and global worker action are unavailable until Home Assistant reconnects.",
-            $"No action from {Info.Name} is reported from retained evidence; after reconnection, the normal path can proceed toward {NextGuardText}.",
-            "Before any thermostat command is sent, comfort and safety overrides get a final chance to skip subtle timing so the room does not stay hot just to look natural."
+            $"Identify {Info.Name} as reference card {GuardOrderText} in the {CategoryName} lane. This is Defense-board reading order, not worker execution order.",
+            "GuardCard sees that Home Assistant is offline and substitutes its documentation-only OfflineView instead of invoking the live Project function.",
+            "Retained thermostat, weather, sensor, presence, metric, card-state, and worker-action values are hidden.",
+            $"Keep the documented watched signals available as reference text: {Info.Watches}",
+            $"Keep the documented tuning settings available as reference text: {SettingsText}.",
+            $"Keep the documented card rule available as reference text: {Info.Logic}",
+            "Report the current evidence, card verdict, worker time, and worker next action as unavailable until a fresh real snapshot reconnects.",
+            "Do not claim or send any action from this card based on retained evidence.",
+            "After reconnection, AcDefenderService refreshes real Home Assistant state and runs its coded comfort and safety gates before any thermostat command."
         ]
         :
         [
-            $"Locate {Info.Name} as reference card {GuardOrderText} in the {CategoryName} lane.",
-            "Read the current real Home Assistant climate/weather/sensor response, then merge it with stored defender memory such as recent touches, command times, hold timers, and source attribution.",
-            $"Load this card's watched signals: {Info.Watches}",
-            $"Load this card's tuning settings: {SettingsText}.",
-            $"Evaluate the trigger formula: {Info.Logic}",
-            $"Evaluate current evidence: {MetricEvidenceText}",
-            $"Card verdict right now: {VerdictText}.",
-            view.Busy
-                ? $"Because it is active, the worker applies or continues this action: {Info.Output}"
-                : $"Because it is not active, the worker does not let this card stop the cycle and proceeds toward {NextGuardText}.",
-            $"After this card, the global worker label says: {Snapshot.NextAction}",
-            "Before any thermostat command is sent, comfort and safety overrides get a final chance to skip subtle timing so the room does not stay hot just to look natural."
+            $"Identify {Info.Name} as reference card {GuardOrderText} in the {CategoryName} lane. This is Defense-board reading order, not worker execution order.",
+            "AcDefenderService refreshes the real Home Assistant reading and runs its explicit coded pipeline; GuardCatalog does not schedule that pipeline.",
+            $"This card's Project function maps snapshot state documented as: {Info.Watches}",
+            $"Load its user-facing tuning settings: {SettingsText}.",
+            $"Apply its documented card rule: {Info.Logic}",
+            $"Projection result: Enabled = {view.Enabled}; Busy = {view.Busy}; State = '{view.StateLabel}'. Busy is a normalized card state, not a sole cycle winner.",
+            $"Render this card's projected live evidence: {MetricEvidenceText}",
+            $"Documented effect when its worker path applies: {Info.Output}",
+            $"Latest worker-level next action: {Snapshot.NextAction}",
+            "AcDefenderService applies its coded comfort and safety gates before any real thermostat command."
         ];
 
     private string GuardOrderText => GuardOrder <= 0
         ? "unknown"
         : $"{GuardOrder}/{LiveCards.Count}";
-
-    private string NextGuardText
-    {
-        get
-        {
-            if (GuardOrder <= 0 || GuardOrder >= LiveCards.Count)
-            {
-                return "the real thermostat command stage";
-            }
-
-            return LiveCards[GuardOrder].Name;
-        }
-    }
 
     private string SettingsText => Info.Settings.Count == 0
         ? "no user-facing settings"
@@ -458,7 +434,7 @@
 
             return view.Busy
                 ? $"{view.StateLabel} now"
-                : "Watching";
+                : view.StateLabel;
         }
     }
 
