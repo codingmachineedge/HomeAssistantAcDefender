@@ -3,6 +3,7 @@
 @using System.Text.Json
 @inject DefenderStateProvider State
 @inject HomeAssistantClient HomeAssistant
+@inject WikiContentService WikiContent
 
 <PageTitle>Field Reports — SCP AC Defender</PageTitle>
 
@@ -34,6 +35,22 @@
                     <div class="ops-stat-grid__cell ops-stat-grid__cell--total">@Format.TempDeg(stats.AverageOutdoorTemperatureCelsius)</div>
                 </div>
             </div>
+        </div>
+    }
+
+    @if (_historyLoading)
+    {
+        <div class="ops-panel ops-panel--pad" role="status">
+            <div class="ops-panel__label">RECORDER HISTORY — LOADING</div>
+            <div class="helper-text">Reading the real Home Assistant climate archive…</div>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_historyError))
+    {
+        <div class="ops-panel ops-panel--pad" role="alert">
+            <div class="ops-panel__label">RECORDER HISTORY — UNAVAILABLE</div>
+            <div class="helper-text" style="margin-bottom: 10px;">@_historyError</div>
+            <button class="ops-btn ops-btn--outline" @onclick="RetryHistory">↻ RETRY REAL HISTORY</button>
         </div>
     }
 
@@ -91,20 +108,25 @@
 
         <div class="ops-panel ops-panel--pad" style="min-width: 0;">
             <div class="ops-panel__label">ACTIVITY — WHAT THE DEFENDER HAS BEEN DOING</div>
+            <input class="ops-input" style="width: 100%; box-sizing: border-box; margin: 0 0 10px 0;"
+                   value="@_eventSearch" @oninput="OnEventSearchChanged"
+                   placeholder="SEARCH ACTIVITY…" aria-label="Search defender activity" />
             <div class="ops-logs-list ops-logs-list--tall">
-                @if (Events.Count > 0)
+                @if (FilteredEvents.Any())
                 {
-                    @foreach (var item in Events)
+                    @foreach (var item in FilteredEvents)
                     {
                         var meta = EventTagFor(item);
-                        <div class="ops-event" style="border-left-color: @EventColor(item.Level);">
+                        <div class="ops-event clickable-row" style="border-left-color: @EventColor(item.Level);" role="button" tabindex="0"
+                             @onclick="@(() => SelectEventLog(item))" @onkeydown="@(args => OnEventKeyDown(args, item))">
                             <div class="ops-event__top">
                                 <span class="ops-event__time">@Format.ShortTime(item.Timestamp)</span>
                                 <span class="ops-event__tag" style="border-color: @EventColor(item.Level); color: @EventColor(item.Level);">@meta.Tag</span>
                                 <span class="ops-event__spacer"></span>
-                                @if (meta.Slug is { } slug)
+                                @if (meta.PageName is { } pageName)
                                 {
-                                    <a class="ops-event__wiki" href="@($"/wiki/Algorithm-{slug}")" title="Read the wiki article for this procedure">⎘ WIKI</a>
+                                    <a class="ops-event__wiki" href="@($"/wiki/{pageName}")" title="Read the wiki article for this procedure"
+                                       @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">⎘ WIKI</a>
                                 }
                             </div>
                             <div class="ops-event__msg">@item.Message</div>
@@ -113,7 +135,7 @@
                 }
                 else
                 {
-                    <div class="helper-text">No activity recorded yet.</div>
+                    <div class="helper-text">No activity matches.</div>
                 }
             </div>
         </div>
@@ -134,15 +156,14 @@
 
 @code {
     private string _touchSearch = "";
+    private string _eventSearch = "";
     private string _selectedLogTitle = "";
     private string _selectedLogJson = "";
-    private bool _historyLoaded;
 
     private static readonly JsonSerializerOptions LogJsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    // Guard names → wiki slug, so activity rows can deep-link to the matching article.
-    private static readonly IReadOnlyList<(string Name, string Slug)> GuardSlugs =
-        GuardCatalog.All.Select(g => (g.Name, Format.Slugify(g.Name))).ToList();
+    // Guard names → real wiki page names, so punctuation such as "&" cannot produce a dead link.
+    private IReadOnlyList<(string Name, string PageName)> _guardWikiPages = [];
 
     private DefenderSnapshot Snapshot => State.Snapshot;
 
@@ -151,20 +172,47 @@
     // ---------- history archive (auto-loaded once for the histogram + learned lines) ----------
 
     private IReadOnlyList<ClimateHistorySample>? _history;
+    private string? _historyEntityId;
+    private bool _historyLoading;
+    private string? _historyError;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _historyLoaded)
+        var entityId = Snapshot?.HomeAssistantEntityId;
+        if (_historyLoading
+            || string.IsNullOrWhiteSpace(entityId)
+            || string.Equals(_historyEntityId, entityId, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
-        _historyLoaded = true;
+        await LoadHistory(entityId);
+    }
+
+    private async Task RetryHistory()
+    {
         var entityId = Snapshot?.HomeAssistantEntityId;
         if (string.IsNullOrWhiteSpace(entityId))
         {
+            _historyError = "Waiting for Home Assistant to report the real climate entity.";
             return;
         }
+
+        await LoadHistory(entityId, force: true);
+    }
+
+    private async Task LoadHistory(string entityId, bool force = false)
+    {
+        if (_historyLoading
+            || (!force && string.Equals(_historyEntityId, entityId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        _historyEntityId = entityId;
+        _historyLoading = true;
+        _historyError = null;
+        await InvokeAsync(StateHasChanged);
 
         try
         {
@@ -172,11 +220,16 @@
             _history = (await HomeAssistant.GetClimateHistoryAsync(entityId, to.AddDays(-31), to, CancellationToken.None))
                 .OrderBy(s => s.Timestamp)
                 .ToList();
-            await InvokeAsync(StateHasChanged);
         }
-        catch
+        catch (Exception ex)
         {
-            // No recorder / no HA — the histogram section just stays hidden, which is correct here.
+            _history = null;
+            _historyError = $"Home Assistant recorder history failed: {ex.Message}";
+        }
+        finally
+        {
+            _historyLoading = false;
+            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -246,6 +299,8 @@
 
     private void OnTouchSearchChanged(ChangeEventArgs e) => _touchSearch = e.Value?.ToString() ?? "";
 
+    private void OnEventSearchChanged(ChangeEventArgs e) => _eventSearch = e.Value?.ToString() ?? "";
+
     private IEnumerable<ThermostatChangeAudit> FilteredThermostatChanges =>
         (Snapshot?.ThermostatChanges ?? Array.Empty<ThermostatChangeAudit>())
             .Where(change => Format.MatchesSearch(
@@ -261,10 +316,32 @@
                 change.SourceDetail,
                 change.ContextUserId));
 
+    private IEnumerable<DefenderEvent> FilteredEvents =>
+        Events.Where(item => Format.MatchesSearch(
+            _eventSearch,
+            item.Level,
+            item.Message,
+            Format.DateTimeText(item.Timestamp),
+            EventTagFor(item).Tag));
+
     private void SelectTouchLog(ThermostatChangeAudit change)
     {
         _selectedLogTitle = $"THERMOSTAT CHANGE {Format.ShortTime(change.Timestamp)}";
         _selectedLogJson = JsonSerializer.Serialize(new { Type = "thermostat-change", Change = change, Latest = BuildLogContext() }, LogJsonOptions);
+    }
+
+    private void SelectEventLog(DefenderEvent item)
+    {
+        _selectedLogTitle = $"ACTIVITY {Format.ShortTime(item.Timestamp)}";
+        _selectedLogJson = JsonSerializer.Serialize(new { Type = "activity", Event = item, Latest = BuildLogContext() }, LogJsonOptions);
+    }
+
+    private void OnEventKeyDown(KeyboardEventArgs args, DefenderEvent item)
+    {
+        if (args.Key is "Enter" or " ")
+        {
+            SelectEventLog(item);
+        }
     }
 
     private static string SourceLabel(ThermostatChangeAudit change) => (change.ChangeSource ?? "").ToLowerInvariant() switch
@@ -284,14 +361,14 @@
         _ => "var(--info)"
     };
 
-    private static (string Tag, string? Slug) EventTagFor(DefenderEvent ev)
+    private (string Tag, string? PageName) EventTagFor(DefenderEvent ev)
     {
         var msg = ev.Message ?? "";
-        foreach (var (name, slug) in GuardSlugs)
+        foreach (var (name, pageName) in _guardWikiPages)
         {
             if (msg.Contains(name, StringComparison.OrdinalIgnoreCase))
             {
-                return (name.ToUpperInvariant(), slug);
+                return (name.ToUpperInvariant(), pageName);
             }
         }
 
@@ -321,7 +398,18 @@
         Snapshot?.CoolingFailure
     };
 
-    protected override void OnInitialized() => State.Changed += OnStateChanged;
+    protected override void OnInitialized()
+    {
+        _guardWikiPages = GuardCatalog.All
+            .Select(guard =>
+            {
+                var article = WikiContent.Articles.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Title, guard.Name, StringComparison.OrdinalIgnoreCase));
+                return (guard.Name, article?.Name ?? $"Algorithm-{Format.Slugify(guard.Name)}");
+            })
+            .ToList();
+        State.Changed += OnStateChanged;
+    }
 
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
 

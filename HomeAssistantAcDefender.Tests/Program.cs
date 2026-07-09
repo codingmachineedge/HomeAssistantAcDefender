@@ -95,6 +95,10 @@ tests.BudgetPrefersLessSpendWhenOverPaceAndYieldsToSafetyMax();
 tests.BudgetBasisPacesOnAcEstimateAndFallsBackWhenSensorStale();
 tests.BudgetOffsetRaisesEffectiveTargetInSetPointCalculation();
 tests.GuardCatalogProjectsEveryLiveGuardForADefaultSnapshot();
+tests.OfflineUiHidesRetainedHomeAssistantEvidence();
+tests.WikiIndexMapsScheduleAndWeatherRulesToRealArticle();
+tests.WikiRenderCanonicalizesRouteCasingWithoutCachingAMiss();
+tests.WikiSafetyTextKeepsWarmRoomApproachAndRestoreOrderingCanonical();
 tests.RivalScheduleBlocksResolveAcrossMidnightDaysAndTolerance();
 tests.RivalScheduleChangeSkipsHumanQuietBookkeepingButHumanTouchStillCounts();
 tests.RivalScheduleBypassesQuietTimingOnlyWhileScheduledWallIsAboveMyTemp();
@@ -240,6 +244,174 @@ internal sealed class DefenderSetPointRegressionTests
                 }
             }
         }
+    }
+
+    public void OfflineUiHidesRetainedHomeAssistantEvidence()
+    {
+        var root = FindRepositoryRootForWikiCheck();
+        var guardCard = File.ReadAllText(Path.Combine(root, "Components", "Shared", "GuardCard.razor"));
+        var defense = File.ReadAllText(Path.Combine(root, "Components", "Pages", "Defense.razor"));
+        var comfort = File.ReadAllText(Path.Combine(root, "Components", "Pages", "Comfort.razor"));
+
+        AssertSourceContains(
+            guardCard,
+            "GuardCard offline evidence contract",
+            "private bool IsOffline",
+            "view = IsOffline",
+            "? OfflineView",
+            "@if (!IsOffline && view.Metrics.Count > 0)",
+            "Live evidence unavailable",
+            "Retained readings are hidden");
+
+        AssertSourceContains(
+            defense,
+            "Defense offline evidence contract",
+            "private bool HomeAssistantOnline",
+            "private string BusyCountText => HomeAssistantOnline",
+            "private string WatchingCountText => HomeAssistantOnline",
+            "private double? RoomNow => HomeAssistantOnline",
+            "private double? RoomWanted => HomeAssistantOnline",
+            "return \"WAITING\";",
+            "live room evidence unavailable");
+
+        AssertSourceContains(
+            comfort,
+            "Comfort offline evidence contract",
+            "private bool HomeAssistantOnline",
+            "? \"UNAVAILABLE\"",
+            "private string HottestUpstairsText => HomeAssistantOnline",
+            "private string PresenceText => !HomeAssistantOnline",
+            "private string SensorCountText => HomeAssistantOnline",
+            "SITE-UP SENSOR ARRAY — OFFLINE",
+            "Live presence values are unavailable");
+
+        if (comfort.Split("@if (!HomeAssistantOnline)", StringSplitOptions.None).Length - 1 < 2)
+        {
+            throw new InvalidOperationException("Comfort must gate both the Site-UP sensor list and the presence list before rendering retained rows.");
+        }
+    }
+
+    private static void AssertSourceContains(string source, string contract, params string[] requiredFragments)
+    {
+        foreach (var fragment in requiredFragments)
+        {
+            if (!source.Contains(fragment, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"{contract} is missing required source fragment '{fragment}'.");
+            }
+        }
+    }
+
+    public void WikiIndexMapsScheduleAndWeatherRulesToRealArticle()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "HomeAssistantAcDefender.csproj")))
+        {
+            directory = directory.Parent;
+        }
+
+        if (directory is null)
+        {
+            throw new InvalidOperationException("Could not locate the repository root for the wiki index regression check.");
+        }
+
+        var wiki = new WikiContentService(new TestWebHostEnvironment(directory.FullName));
+        var article = wiki.Articles.FirstOrDefault(candidate =>
+            string.Equals(candidate.Title, "Schedule & Weather Rules", StringComparison.OrdinalIgnoreCase));
+
+        if (!string.Equals(article?.Name, "Algorithm-schedule-and-weather-rules", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Schedule & Weather Rules should resolve to its real wiki article, got '{article?.Name ?? "missing"}'.");
+        }
+    }
+
+    public void WikiRenderCanonicalizesRouteCasingWithoutCachingAMiss()
+    {
+        var root = FindRepositoryRootForWikiCheck();
+        var wiki = new WikiContentService(new TestWebHostEnvironment(root));
+
+        var lowerCase = wiki.Render("home")
+            ?? throw new InvalidOperationException("Lower-case /wiki/home should resolve to the canonical Home document.");
+        if (!string.Equals(lowerCase.Name, "Home", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Lower-case wiki route should render canonical document name 'Home', got '{lowerCase.Name}'.");
+        }
+
+        var upperCase = wiki.Render("HOME")
+            ?? throw new InvalidOperationException("Upper-case /wiki/HOME should resolve to the canonical Home document.");
+        if (!ReferenceEquals(lowerCase, upperCase))
+        {
+            throw new InvalidOperationException("Case variants should share the canonical WikiDocument cache entry.");
+        }
+
+        if (wiki.Render("not-a-real-document") is not null || wiki.Render("..") is not null)
+        {
+            throw new InvalidOperationException("Unknown or unsafe wiki route names must not render a document.");
+        }
+
+        if (!ReferenceEquals(lowerCase, wiki.Render("Home")))
+        {
+            throw new InvalidOperationException("An invalid wiki route must not poison the later canonical Home cache lookup.");
+        }
+    }
+
+    public void WikiSafetyTextKeepsWarmRoomApproachAndRestoreOrderingCanonical()
+    {
+        var root = FindRepositoryRootForWikiCheck();
+        var wiki = new WikiContentService(new TestWebHostEnvironment(root));
+        var guard = GuardCatalog.All.Single(candidate => candidate.Name == "Cooler Intent Fast Lane");
+
+        AssertCanonicalWarmRoomText(guard.Logic, "GuardCatalog Cooler Intent Fast Lane logic");
+
+        var warmRoomDocs = new[]
+        {
+            "Algorithm-cooler-intent-fast-lane.md",
+            "Algorithms.md",
+            "Defender-Logic.md",
+            "Every-Guard-Explained.md",
+            "Architecture.md",
+        };
+        foreach (var fileName in warmRoomDocs)
+        {
+            var text = File.ReadAllText(Path.Combine(root, "docs", "wiki", fileName));
+            AssertCanonicalWarmRoomText(text, $"docs/wiki/{fileName}");
+        }
+
+        var renderedArticle = wiki.Render("Algorithm-cooler-intent-fast-lane")
+            ?? throw new InvalidOperationException("Cooler Intent Fast Lane wiki article should render.");
+        AssertCanonicalWarmRoomText(renderedArticle.Html, "rendered Cooler Intent Fast Lane article");
+
+        var architecture = File.ReadAllText(Path.Combine(root, "docs", "wiki", "Architecture.md"));
+        if (!architecture.Contains("after pause and intentional-off guards", StringComparison.OrdinalIgnoreCase)
+            || architecture.Contains("before pause", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Architecture.md must describe Cool Mode Restore after pause/intentional-off guards, never before pause.");
+        }
+    }
+
+    private static void AssertCanonicalWarmRoomText(string text, string source)
+    {
+        if (!text.Contains("WarmRoomApproachCelsius", StringComparison.Ordinal)
+            || !text.Contains("current room temperature", StringComparison.OrdinalIgnoreCase)
+            || !text.Contains("wall setpoint", StringComparison.OrdinalIgnoreCase)
+            || !text.Contains("website target", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("room minus 1", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("one-degree-below-room", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"{source} must describe the configured current-room approach, not a fixed or wall-anchored correction.");
+        }
+    }
+
+    private static string FindRepositoryRootForWikiCheck()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "HomeAssistantAcDefender.csproj")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new InvalidOperationException("Could not locate the repository root for the wiki regression check.");
     }
 
     public void ManualTouchWhileWarmRestartsBelowRoomByApproach()

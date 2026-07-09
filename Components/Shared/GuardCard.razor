@@ -1,4 +1,4 @@
-@* One defender guard: live state chip + plain explainer + extra-specific live field report. *@
+@* One defender guard: live state when HA is available, documentation-only while it is offline. *@
 <MudPaper Class="@($"guard-card guard-card--{Tone.Css()}")" Elevation="0">
     <div class="guard-card__head">
         <div class="guard-card__title">
@@ -13,7 +13,7 @@
 
     <MudText Typo="Typo.body2" Class="guard-card__status">@view.StatusText</MudText>
 
-    @if (view.Metrics.Count > 0)
+    @if (!IsOffline && view.Metrics.Count > 0)
     {
         <div class="guard-card__metrics">
             @foreach (var metric in view.Metrics)
@@ -159,7 +159,17 @@
                 </ol>
             </div>
 
-            @if (view.Metrics.Count > 0)
+            @if (IsOffline)
+            {
+                <div class="guard-detail__evidence">
+                    <div class="guard-detail__label">
+                        <MudIcon Icon="@Icons.Material.Filled.CloudOff" Size="Size.Small" />
+                        Live evidence unavailable
+                    </div>
+                    <div class="guard-detail__text">Home Assistant is offline. Retained readings are hidden until a fresh real snapshot arrives.</div>
+                </div>
+            }
+            else if (view.Metrics.Count > 0)
             {
                 <div class="guard-detail__evidence">
                     <div class="guard-detail__label">
@@ -193,6 +203,9 @@
     private bool _open;
     private bool _detailOpen;
 
+    private bool IsOffline =>
+        !string.Equals(Snapshot.ConnectionState, "home-assistant", StringComparison.OrdinalIgnoreCase);
+
     // Static catalog text is translated; the composed live-evidence narratives below stay
     // English (they interpolate live server data, which is data — not chrome).
     private string L(string? english) => Lang.T(LangMode, english);
@@ -210,6 +223,13 @@
         _ => Info.Category.ToString().ToUpperInvariant()
     };
     private GuardLiveView view = default!;
+    private static readonly GuardLiveView OfflineView = new(
+        false,
+        false,
+        "Unavailable",
+        GuardTone.Off,
+        "Home Assistant is offline. Live guard status and evidence are unavailable.",
+        Array.Empty<MetricItem>());
     private static readonly IReadOnlyList<GuardInfo> LiveCards = GuardCatalog.Live.ToList();
     private GuardTone Tone => view.Tone;
     private int GuardOrder => GetGuardOrder();
@@ -217,8 +237,8 @@
     [
         new("Card", GuardOrderText, $"Position in the visible guard reference order. Next reference stop: {NextGuardText}."),
         new("Lane", CategoryName, "Which part of the defender decision board this action belongs to."),
-        new("Verdict", VerdictText, "Whether this guard is off, quietly watching, or actively holding/shaping/alerting."),
-        new("Next check", Snapshot.NextActionAt is { } next ? Format.ShortTime(next) : "live loop", "Toronto 24-hour time for the next planned worker check or command.")
+        new("Verdict", VerdictText, "Whether this guard is unavailable, off, quietly watching, or actively holding/shaping/alerting."),
+        new("Next check", IsOffline ? "unavailable" : Snapshot.NextActionAt is { } next ? Format.ShortTime(next) : "live loop", IsOffline ? "A fresh worker check cannot be reported until Home Assistant reconnects." : "Toronto 24-hour time for the next planned worker check or command.")
     ];
 
     private string CategoryName => Info.Category switch
@@ -234,6 +254,11 @@
     {
         get
         {
+            if (IsOffline)
+            {
+                return $"{Info.Name} has no current verdict because Home Assistant is offline. This reference card remains available for documentation, but no guard action is reported until a fresh real snapshot arrives.";
+            }
+
             if (!view.Enabled)
             {
                 return $"{Info.Name} is disabled. When the worker reaches this rule, it marks the action ineligible, does not send a thermostat command from this card, and keeps walking toward {NextGuardText}.";
@@ -252,6 +277,11 @@
     {
         get
         {
+            if (IsOffline)
+            {
+                return "Unavailable while Home Assistant is offline. Retained guard state is intentionally not treated as a current trigger verdict.";
+            }
+
             if (!view.Enabled)
             {
                 return $"Nothing triggered it because this card is disabled. Related switches or values: {SettingsText}.";
@@ -266,8 +296,9 @@
     private string FutureTriggerText =>
         $"{Info.Name} will trigger when the watched signals cross this rule: {Info.Logic} The settings that change that threshold are: {SettingsText}.";
 
-    private string EvidenceSourceText =>
-        view.Metrics.Count == 0
+    private string EvidenceSourceText => IsOffline
+        ? "No current evidence is shown while Home Assistant is offline. Retained thermostat, sensor, presence, and guard values are hidden until the connection returns."
+        : view.Metrics.Count == 0
             ? $"This card has no dedicated mini-metrics yet. Its evidence still comes from the real Home Assistant snapshot and defender memory described here: {Info.Watches}"
             : $"The evidence came from these live fields: {MetricEvidenceText}. Those fields are derived from: {Info.Watches}";
 
@@ -275,6 +306,11 @@
     {
         get
         {
+            if (IsOffline)
+            {
+                return "It is waiting for Home Assistant to reconnect and provide a fresh real snapshot. No retained reading can activate this card while the connection is unavailable.";
+            }
+
             if (!view.Enabled)
             {
                 return $"It is waiting for the related setting to be enabled. Until then, this card cannot win the cycle.";
@@ -293,6 +329,11 @@
     {
         get
         {
+            if (IsOffline)
+            {
+                return "This card is unavailable until Home Assistant reconnects. Its normal clear, skip, and safety-overrule rules are documented here but are not evaluated against retained evidence.";
+            }
+
             if (!view.Enabled)
             {
                 return $"Turning the related setting back on makes this step eligible again. Until then it is skipped and the defender checks {NextGuardText}.";
@@ -329,6 +370,11 @@
     {
         get
         {
+            if (IsOffline)
+            {
+                return "Unavailable while Home Assistant is offline. The last worker label is not presented as a current next action.";
+            }
+
             var when = Snapshot.NextActionAt is null
                 ? string.Empty
                 : $" Planned Toronto time: {Format.ShortTime(Snapshot.NextActionAt)}.";
@@ -336,21 +382,34 @@
         }
     }
 
-    private IReadOnlyList<string> AlgorithmSteps =>
-    [
-        $"Locate {Info.Name} as reference card {GuardOrderText} in the {CategoryName} lane.",
-        "Read the current real Home Assistant climate/weather/sensor response, then merge it with stored defender memory such as recent touches, command times, hold timers, and source attribution.",
-        $"Load this card's watched signals: {Info.Watches}",
-        $"Load this card's tuning settings: {SettingsText}.",
-        $"Evaluate the trigger formula: {Info.Logic}",
-        $"Evaluate current evidence: {MetricEvidenceText}",
-        $"Card verdict right now: {VerdictText}.",
-        view.Busy
-            ? $"Because it is active, the worker applies or continues this action: {Info.Output}"
-            : $"Because it is not active, the worker does not let this card stop the cycle and proceeds toward {NextGuardText}.",
-        $"After this card, the global worker label says: {Snapshot.NextAction}",
-        "Before any thermostat command is sent, comfort and safety overrides get a final chance to skip subtle timing so the room does not stay hot just to look natural."
-    ];
+    private IReadOnlyList<string> AlgorithmSteps => IsOffline
+        ?
+        [
+            $"Locate {Info.Name} as reference card {GuardOrderText} in the {CategoryName} lane.",
+            "Wait for a fresh real Home Assistant climate, weather, sensor, and presence snapshot. Retained values are not evaluated as current evidence.",
+            $"When connected, load this card's watched signals: {Info.Watches}",
+            $"Load this card's tuning settings: {SettingsText}.",
+            $"When fresh evidence is available, evaluate the trigger formula: {Info.Logic}",
+            "Current evidence is unavailable and intentionally hidden while Home Assistant is offline.",
+            "The current card verdict and global worker action are unavailable until Home Assistant reconnects.",
+            $"No action from {Info.Name} is reported from retained evidence; after reconnection, the normal path can proceed toward {NextGuardText}.",
+            "Before any thermostat command is sent, comfort and safety overrides get a final chance to skip subtle timing so the room does not stay hot just to look natural."
+        ]
+        :
+        [
+            $"Locate {Info.Name} as reference card {GuardOrderText} in the {CategoryName} lane.",
+            "Read the current real Home Assistant climate/weather/sensor response, then merge it with stored defender memory such as recent touches, command times, hold timers, and source attribution.",
+            $"Load this card's watched signals: {Info.Watches}",
+            $"Load this card's tuning settings: {SettingsText}.",
+            $"Evaluate the trigger formula: {Info.Logic}",
+            $"Evaluate current evidence: {MetricEvidenceText}",
+            $"Card verdict right now: {VerdictText}.",
+            view.Busy
+                ? $"Because it is active, the worker applies or continues this action: {Info.Output}"
+                : $"Because it is not active, the worker does not let this card stop the cycle and proceeds toward {NextGuardText}.",
+            $"After this card, the global worker label says: {Snapshot.NextAction}",
+            "Before any thermostat command is sent, comfort and safety overrides get a final chance to skip subtle timing so the room does not stay hot just to look natural."
+        ];
 
     private string GuardOrderText => GuardOrder <= 0
         ? "unknown"
@@ -373,7 +432,9 @@
         ? "no user-facing settings"
         : string.Join(", ", Info.Settings);
 
-    private string MetricEvidenceText => view.Metrics.Count == 0
+    private string MetricEvidenceText => IsOffline
+        ? "unavailable while Home Assistant is offline"
+        : view.Metrics.Count == 0
         ? "this card has no dedicated metric yet, so use the status sentence and Home Assistant snapshot."
         : string.Join("; ", view.Metrics.Select(m =>
         {
@@ -385,6 +446,11 @@
     {
         get
         {
+            if (IsOffline)
+            {
+                return "Unavailable";
+            }
+
             if (!view.Enabled)
             {
                 return "Skipped";
@@ -411,7 +477,9 @@
 
     protected override void OnParametersSet()
     {
-        view = Info.Project is null
+        view = IsOffline
+            ? OfflineView
+            : Info.Project is null
             ? new GuardLiveView(false, false, "Reference", GuardTone.Off, Info.Summary, Array.Empty<MetricItem>())
             : Info.Project(Snapshot);
     }

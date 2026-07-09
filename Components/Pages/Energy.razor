@@ -18,14 +18,14 @@
             <div class="ops-cmd-tent__title">@AlectraStatusTitle</div>
             <div class="helper-text">Read-only intel from real Alectra Hui entities. The defender gets more chill during expensive or high-load power periods.</div>
             <div class="ops-cmd-tent__chips">
-                <span class="ops-repo-chip ops-repo-chip--@(PeakPower.Active ? "dirty" : "clean")">@AlectraGuardLabel.ToUpperInvariant()</span>
-                <span class="ops-repo-chip">@AlectraHuiEntities.Count ENTITIES</span>
-                <span class="ops-repo-chip">TOU @((PeakPower.TouPeriod ?? Cost.CurrentPeriod).ToUpperInvariant())</span>
-                <span class="ops-repo-chip">USAGE @(Format.ToToronto(_usage?.UpdatedAt ?? DateTimeOffset.UtcNow).ToString("HH:mm"))</span>
+                <span class="ops-repo-chip ops-repo-chip--@AlectraGuardChipState">@AlectraGuardLabel.ToUpperInvariant()</span>
+                <span class="ops-repo-chip">@AlectraEntityCountText ENTITIES</span>
+                <span class="ops-repo-chip">TOU @TouPeriodText</span>
+                <span class="ops-repo-chip">POWER @Format.ShortTime(PowerTelemetryAt)</span>
             </div>
         </div>
         <div class="ops-power-meter">
-            <div class="ops-panel__label">PEAK POWER METER — LIVE</div>
+            <div class="ops-panel__label">PEAK POWER METER — @PowerTelemetryStateLabel</div>
             <div class="ops-power-meter__track"><div class="ops-power-meter__fill" style="width: @PeakPowerPercent.ToString("0.#", CultureInfo.InvariantCulture)%; background: @PowerBarColor;"></div></div>
             <div class="helper-text">@PeakPowerMeterText</div>
         </div>
@@ -34,6 +34,10 @@
     @if (!string.IsNullOrWhiteSpace(_usageError))
     {
         <div class="ops-alert-row ops-alert-row--warn"><span class="ops-alert-row__tag">USAGE</span><span class="ops-alert-row__text">@_usageError</span></div>
+    }
+    @if (!string.IsNullOrWhiteSpace(_usageHistoryError))
+    {
+        <div class="ops-alert-row ops-alert-row--warn"><span class="ops-alert-row__tag">HISTORY</span><span class="ops-alert-row__text">@_usageHistoryError</span></div>
     }
 
     @* ── YELL-O-METER critical banner ── *@
@@ -84,31 +88,132 @@
     @* ── 24-hour whole-house power ── *@
     <div class="ops-panel ops-panel--pad">
         <div class="ops-yell__head">
-            <span class="ops-panel__label" style="margin: 0;">24-HOUR WHOLE-HOUSE POWER — RECORDER HISTORY · LIVE</span>
-            <span class="ops-usage-legend"><span style="color: var(--accent);">▮ kW</span> <span style="color: var(--warn);">▮ ON-PEAK HOUR</span></span>
+            <span class="ops-panel__label" style="margin: 0;">24-HOUR CONFIGURED POWER — HOME ASSISTANT RECORDER</span>
+            <span class="ops-usage-legend"><span style="color: var(--accent);">▮ @HistoryPowerLegend</span> <span style="color: var(--warn);">▮ ON-PEAK HOUR</span></span>
         </div>
-        @if (UsageBars.Any(b => b.Kw > 0))
+        @if (UsageBars.Any(b => b.Value is not null))
         {
             <div class="ops-usage-bars" style="height: 120px; margin-top: 10px;">
                 @foreach (var bar in UsageBars)
                 {
                     <div class="ops-usage-bars__bar @(bar.OnPeak ? "ops-usage-bars__bar--hot" : "")"
-                         style="height: @(UsageBarMax <= 0 ? 3 : Math.Max(3, (int)(bar.Kw / UsageBarMax * 100)))%; border-radius: 2px 2px 0 0;"
-                         title="@bar.Kw.ToString("0.00", CultureInfo.InvariantCulture) kW"></div>
+                         style="@UsageBarStyle(bar)"
+                         title="@UsageBarTitle(bar)"></div>
                 }
             </div>
             <div class="ops-usage-scale"><span>-24h</span><span>-18h</span><span>-12h</span><span>-6h</span><span>NOW</span></div>
             <div class="ops-energy-cost-tiles" style="margin-top: 12px;">
-                <div class="ops-cost-tile"><span class="ops-cost-tile__label">24H DELTA</span><span class="ops-cost-tile__value">@Format.UsageHistoryValue(_usageHistory?.Delta, _usageHistory?.Unit)</span></div>
+                <div class="ops-cost-tile"><span class="ops-cost-tile__label">24H SAMPLE AVG</span><span class="ops-cost-tile__value">@Format.UsageHistoryValue(HistorySampleAverage, _usageHistory?.Unit)</span></div>
                 <div class="ops-cost-tile"><span class="ops-cost-tile__label">24H MAX</span><span class="ops-cost-tile__value" style="color: var(--warn);">@Format.UsageHistoryValue(_usageHistory?.Max, _usageHistory?.Unit)</span></div>
                 <div class="ops-cost-tile"><span class="ops-cost-tile__label">24H MIN</span><span class="ops-cost-tile__value">@Format.UsageHistoryValue(_usageHistory?.Min, _usageHistory?.Unit)</span></div>
                 <div class="ops-cost-tile"><span class="ops-cost-tile__label">POWER NOW</span><span class="ops-cost-tile__value" style="color: var(--accent);">@PowerNowText</span></div>
             </div>
+            <div class="helper-text" style="margin-top: 10px;">@UsageHistorySourceText Each bar is the arithmetic mean of real recorder samples in that hour; hours with no samples are left blank.</div>
         }
         else
         {
-            <div class="helper-text" style="margin-top: 10px;">No numeric 24-hour recorder samples are available for the configured energy entity yet.</div>
+            <div class="helper-text" style="margin-top: 10px;">No numeric 24-hour recorder samples are available for the configured power entity yet. Missing telemetry is left blank, never filled with simulated usage.</div>
         }
+    </div>
+
+    @* ── real Alectra Hui entity browser ── *@
+    <div class="ops-panel ops-panel--pad">
+        <div class="ops-yell__head">
+            <span class="ops-panel__label" style="margin: 0;">ALECTRA HUI ENTITY BROWSER — READ ONLY</span>
+            <button class="ops-btn" @onclick="RefreshNow" style="padding: 6px 10px; font-size: 9px;">REFRESH REAL TELEMETRY</button>
+        </div>
+        <div class="helper-text" style="margin-top: 8px;">Search and filter the real Home Assistant entities returned by the Alectra Hui integration. These controls never issue entity or thermostat commands.</div>
+
+        <MudGrid Spacing="2" Class="mt-2">
+            <MudItem xs="12" md="7">
+                <MudTextField @bind-Value="_alectraSearch"
+                              Immediate="true"
+                              Label="Search Alectra Hui"
+                              Placeholder="power, bill, price, plan, entity ID…"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search" />
+            </MudItem>
+            <MudItem xs="10" md="4">
+                <MudSelect T="string" @bind-Value="_alectraCategory" Label="Desk filter" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudSelectItem T="string" Value="@AllCategories">All desks</MudSelectItem>
+                    @foreach (var category in AlectraCategories)
+                    {
+                        <MudSelectItem T="string" Value="@category">@category</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="2" md="1" Class="energy-clear-cell">
+                <MudIconButton Icon="@Icons.Material.Filled.Clear" Color="Color.Default" Disabled="@string.IsNullOrWhiteSpace(_alectraSearch)" OnClick="ClearAlectraSearch" aria-label="Clear Alectra Hui search" />
+            </MudItem>
+        </MudGrid>
+
+        <div class="energy-chip-row mt-2">
+            <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small">@EntityBrowserStatus</MudChip>
+            <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">@_alectraCategory</MudChip>
+            <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">CHECKED @Format.ShortTime(_usage?.UpdatedAt)</MudChip>
+        </div>
+
+        <MudTabs Rounded="true" Elevation="0" Class="ops-tabs mt-3">
+            <MudTabPanel Text="Entity cards" Icon="@Icons.Material.Filled.Sensors">
+                <div class="ops-dash-stack mt-3">
+                    @if (FilteredAlectraGroups.Count > 0)
+                    {
+                        @foreach (var group in FilteredAlectraGroups)
+                        {
+                            <div class="ops-panel ops-panel--pad">
+                                <div class="ops-yell__head">
+                                    <span class="ops-panel__label" style="margin: 0;">@group.Category.ToUpperInvariant()</span>
+                                    <span class="ops-usage-legend">@group.Items.Count ENTITIES</span>
+                                </div>
+                                <div class="scroll-list" style="margin-top: 8px;">
+                                    @foreach (var entity in group.Items)
+                                    {
+                                        <div class="data-row data-row--wide energy-entity energy-entity--@CssClassForCategory(group.Category)">
+                                            <div>
+                                                <div class="data-row__name"><MudIcon Icon="@IconForCategory(group.Category)" Size="Size.Small" /> @entity.Name</div>
+                                                <div class="helper-text data-row__sub">@entity.EntityId</div>
+                                                <div class="helper-text data-row__sub">Updated @Format.ShortTime(entity.LastChanged)</div>
+                                            </div>
+                                            <div class="data-row__right">
+                                                <div class="data-row__value">@Format.UsageValue(entity)</div>
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@ColorForCategory(group.Category)">@EntityUnitLabel(entity)</MudChip>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <div class="helper-text">@EntityBrowserEmptyText</div>
+                    }
+                </div>
+            </MudTabPanel>
+            <MudTabPanel Text="Entity table" Icon="@Icons.Material.Filled.TableRows">
+                <MudTable Items="@FilteredAlectraEntities" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Class="energy-table mt-3">
+                    <HeaderContent>
+                        <MudTh>Desk</MudTh>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Entity ID</MudTh>
+                        <MudTh>Value</MudTh>
+                        <MudTh>Updated</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Desk"><MudChip T="string" Size="Size.Small" Color="@ColorForCategory(EntityCategory(context))" Variant="Variant.Outlined">@EntityCategory(context)</MudChip></MudTd>
+                        <MudTd DataLabel="Name">@context.Name</MudTd>
+                        <MudTd DataLabel="Entity ID"><span class="energy-entity-id">@context.EntityId</span></MudTd>
+                        <MudTd DataLabel="Value"><strong>@Format.UsageValue(context)</strong></MudTd>
+                        <MudTd DataLabel="Updated">@Format.ShortTime(context.LastChanged)</MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Class="helper-text">@EntityBrowserEmptyText</MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            </MudTabPanel>
+        </MudTabs>
     </div>
 
     @* ── cost + budget | calendar ── *@
@@ -211,16 +316,22 @@
 </div>
 
 @code {
+    private const string AllCategories = "All";
     private const double YellThreshold = 180.0;
 
     private UsageLiveSnapshot? _usage;
     private UsageHistorySnapshot? _usageHistory;
     private DateTimeOffset? _usageHistoryUpdatedAt;
     private string? _usageError;
+    private string? _usageHistoryError;
+    private string _alectraSearch = string.Empty;
+    private string _alectraCategory = AllCategories;
     private DateTimeOffset _nextUsageRefresh = DateTimeOffset.MinValue;
     private DateTimeOffset _nextUsageHistoryRefresh = DateTimeOffset.MinValue;
 
-    private IReadOnlyList<UsageEntityReading> AlectraHuiEntities => _usage?.AlectraHuiEntities ?? Array.Empty<UsageEntityReading>();
+    private IReadOnlyList<UsageEntityReading> AlectraHuiEntities => LiveUsageAvailable
+        ? _usage?.AlectraHuiEntities ?? Array.Empty<UsageEntityReading>()
+        : Array.Empty<UsageEntityReading>();
     private PeakPowerSaverSnapshot PeakPower => State.Snapshot.PeakPowerSaver;
 
     private ElectricityCostSnapshot Cost => State.Snapshot.ElectricityCost
@@ -258,50 +369,279 @@
 
     // ---------- banner + meter ----------
 
-    private string AlectraStatusTitle => PeakPower.Holding
-        ? "Alectra Hui says: hold the icy orders"
-        : PeakPower.Active ? "Alectra Hui says: power is spicy" : "Alectra Hui says: power looks calm";
+    private bool HomeAssistantOnline =>
+        string.Equals(State.Snapshot.ConnectionState, "home-assistant", StringComparison.OrdinalIgnoreCase);
 
-    private string AlectraGuardLabel => PeakPower.Holding
-        ? "Saver holding"
-        : PeakPower.Active ? "Saver armed" : PeakPower.Enabled ? "Saver watching" : "Saver off";
+    private bool LiveUsageAvailable =>
+        HomeAssistantOnline
+        && string.IsNullOrWhiteSpace(_usageError)
+        && _usage is { HomeAssistantConfigured: true };
 
-    private double PeakPowerPercent => PeakPower.CurrentPowerKilowatts is { } kw && PeakPower.PowerThresholdKilowatts > 0
+    private bool HasPowerTelemetry =>
+        LiveUsageAvailable
+        && (PeakPower.CurrentPowerKilowatts is not null || _usage?.Power?.Value is not null);
+
+    private string AlectraStatusTitle => !HomeAssistantOnline
+        ? "Home Assistant power telemetry is offline"
+        : !string.IsNullOrWhiteSpace(_usageError)
+            ? "Alectra Hui power telemetry refresh failed"
+            : _usage is null
+                ? "Waiting for Alectra Hui power telemetry"
+                : !_usage.HomeAssistantConfigured
+                    ? "Home Assistant energy telemetry is not configured"
+                    : PeakPower.Holding
+                        ? "Alectra Hui says: hold the icy orders"
+                        : PeakPower.Active
+                            ? "Alectra Hui says: power is spicy"
+                            : HasPowerTelemetry
+                                ? "Alectra Hui says: power looks calm"
+                                : "Alectra Hui power reading is unavailable";
+
+    private string AlectraGuardLabel => !PeakPower.Enabled
+        ? "Saver off"
+        : !LiveUsageAvailable
+            ? "Saver waiting"
+            : PeakPower.Holding
+                ? "Saver holding"
+                : PeakPower.Active
+                    ? "Saver armed"
+                    : HasPowerTelemetry ? "Saver watching" : "Saver waiting";
+
+    private string AlectraGuardChipState => !LiveUsageAvailable
+        ? "waiting"
+        : PeakPower.Active ? "dirty" : HasPowerTelemetry ? "clean" : "waiting";
+
+    private string AlectraEntityCountText => LiveUsageAvailable
+        ? AlectraHuiEntities.Count.ToString(CultureInfo.InvariantCulture)
+        : "--";
+
+    private string TouPeriodText => !LiveUsageAvailable || string.IsNullOrWhiteSpace(PeakPower.TouPeriod)
+        ? "--"
+        : PeakPower.TouPeriod.ToUpperInvariant();
+
+    private DateTimeOffset? PowerTelemetryAt => LiveUsageAvailable ? _usage?.Power?.LastChanged : null;
+
+    private string PowerTelemetryStateLabel => !HomeAssistantOnline
+        ? "OFFLINE"
+        : !string.IsNullOrWhiteSpace(_usageError)
+            ? "UNAVAILABLE"
+        : HasPowerTelemetry
+            ? "LIVE"
+            : _usage is null
+                ? "WAITING"
+                : !_usage.HomeAssistantConfigured ? "NOT CONFIGURED" : "UNAVAILABLE";
+
+    private double PeakPowerPercent => LiveUsageAvailable && PeakPower.CurrentPowerKilowatts is { } kw && PeakPower.PowerThresholdKilowatts > 0
         ? Math.Clamp(kw / PeakPower.PowerThresholdKilowatts * 100, 0, 100)
         : 0;
 
     private string PowerBarColor => PeakPowerPercent > 75 ? "var(--bad)" : PeakPowerPercent > 50 ? "var(--warn)" : "var(--accent)";
 
-    private string PeakPowerMeterText => PeakPower.CurrentPowerKilowatts is null
-        ? $"Waiting for current power. Threshold: {PeakPower.PowerThresholdKilowatts:0.##} kW."
-        : $"{PeakPower.CurrentPowerKilowatts.Value:0.00} kW of {PeakPower.PowerThresholdKilowatts:0.#} kW guard threshold.";
+    private string PeakPowerMeterText => !HomeAssistantOnline
+        ? "Home Assistant is offline; no live power reading is being reported."
+        : !string.IsNullOrWhiteSpace(_usageError)
+            ? "The latest live power refresh failed; retained values are hidden."
+            : _usage is null
+                ? $"Waiting for a real power reading. Threshold: {PeakPower.PowerThresholdKilowatts:0.##} kW."
+                : !_usage.HomeAssistantConfigured
+                    ? "Home Assistant token is not configured; no live power reading is available."
+                    : PeakPower.CurrentPowerKilowatts is { } currentPower
+                        ? $"{currentPower:0.00} kW of {PeakPower.PowerThresholdKilowatts:0.#} kW guard threshold."
+                        : "The configured power entity has not returned a numeric reading.";
 
-    private string PowerNowText => PeakPower.CurrentPowerKilowatts is { } kw ? $"{kw:0.00} kW" : Format.UsageValue(_usage?.Power);
+    private string PowerNowText => !LiveUsageAvailable
+        ? "--"
+        : PeakPower.CurrentPowerKilowatts is { } kw ? $"{kw:0.00} kW" : Format.UsageValue(_usage?.Power);
 
     // ---------- 24h bars ----------
 
-    private IReadOnlyList<(double Kw, bool OnPeak)> UsageBars
+    private sealed record HourlyPowerBar(double? Value, bool OnPeak);
+
+    private IReadOnlyList<HourlyPowerBar> UsageBars
     {
         get
         {
             var samples = _usageHistory?.Samples.Where(s => s.Value is not null).ToList() ?? [];
-            var now = DateTimeOffset.UtcNow;
-            var bars = new List<(double, bool)>(24);
+            var historyEnd = _usageHistory?.To ?? DateTimeOffset.UtcNow;
+            var bars = new List<HourlyPowerBar>(24);
             for (var i = 23; i >= 0; i--)
             {
-                var bucketStart = now.AddHours(-(i + 1));
-                var bucketEnd = now.AddHours(-i);
+                var bucketStart = historyEnd.AddHours(-(i + 1));
+                var bucketEnd = historyEnd.AddHours(-i);
                 var inBucket = samples.Where(s => s.Timestamp >= bucketStart && s.Timestamp < bucketEnd).Select(s => s.Value!.Value).ToList();
-                var kw = inBucket.Count > 0 ? inBucket.Average() : 0;
+                double? sampleAverage = inBucket.Count > 0 ? inBucket.Average() : null;
                 var onPeak = AlectraTouSchedule.GetPeriod(Format.ToToronto(bucketStart).DateTime) == TouPeriod.OnPeak;
-                bars.Add((kw, onPeak));
+                bars.Add(new HourlyPowerBar(sampleAverage, onPeak));
             }
 
             return bars;
         }
     }
 
-    private double UsageBarMax => UsageBars.Select(b => b.Kw).DefaultIfEmpty(0).Max();
+    private double UsageBarMax => UsageBars
+        .Where(bar => bar.Value is not null)
+        .Select(bar => Math.Abs(bar.Value!.Value))
+        .DefaultIfEmpty(0)
+        .Max();
+
+    private double? HistorySampleAverage
+    {
+        get
+        {
+            var values = _usageHistory?.Samples
+                .Where(sample => sample.Value is not null)
+                .Select(sample => sample.Value!.Value)
+                .ToArray() ?? [];
+            return values.Length == 0 ? null : values.Average();
+        }
+    }
+
+    private string HistoryPowerLegend => string.IsNullOrWhiteSpace(_usageHistory?.Unit)
+        ? "POWER SAMPLE AVG · UNIT NOT REPORTED"
+        : $"{_usageHistory.Unit} SAMPLE AVG";
+
+    private string UsageHistorySourceText => _usageHistory is null
+        ? "Waiting for the configured power entity."
+        : $"Source: {_usageHistory.Name} / {_usageHistory.EntityId} · {_usageHistory.Count} recorder states · loaded {Format.ShortTime(_usageHistoryUpdatedAt)}.";
+
+    private string UsageBarStyle(HourlyPowerBar bar)
+    {
+        if (bar.Value is null)
+        {
+            return "height: 0; visibility: hidden; border-radius: 2px 2px 0 0;";
+        }
+
+        var height = UsageBarMax <= 0
+            ? 3
+            : Math.Max(3, (int)(Math.Abs(bar.Value.Value) / UsageBarMax * 100));
+        return $"height: {height.ToString(CultureInfo.InvariantCulture)}%; border-radius: 2px 2px 0 0;";
+    }
+
+    private string UsageBarTitle(HourlyPowerBar bar) => bar.Value is null
+        ? "No recorder sample for this hour"
+        : $"{Format.UsageHistoryValue(bar.Value, _usageHistory?.Unit)} sample average";
+
+    // ---------- read-only Alectra Hui entity browser ----------
+
+    private IReadOnlyList<string> AlectraCategories =>
+        AlectraHuiEntities
+            .Select(EntityCategory)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(CategoryOrder)
+            .ThenBy(category => category, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private IReadOnlyList<UsageEntityReading> FilteredAlectraEntities =>
+        AlectraHuiEntities
+            .Where(entity => _alectraCategory == AllCategories || EntityCategory(entity).Equals(_alectraCategory, StringComparison.OrdinalIgnoreCase))
+            .Where(entity => Format.MatchesSearch(_alectraSearch, entity.Name, entity.EntityId, entity.State, entity.Unit, EntityCategory(entity)))
+            .OrderBy(entity => CategoryOrder(EntityCategory(entity)))
+            .ThenBy(entity => entity.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entity => entity.EntityId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private IReadOnlyList<AlectraEntityGroup> FilteredAlectraGroups =>
+        FilteredAlectraEntities
+            .GroupBy(EntityCategory)
+            .OrderBy(group => CategoryOrder(group.Key))
+            .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new AlectraEntityGroup(group.Key, group.ToArray()))
+            .ToArray();
+
+    private string EntityBrowserStatus => !HomeAssistantOnline
+        ? "OFFLINE"
+        : !string.IsNullOrWhiteSpace(_usageError)
+            ? "UNAVAILABLE"
+        : _usage is null
+            ? "WAITING"
+            : !_usage.HomeAssistantConfigured
+                ? "NOT CONFIGURED"
+                : $"{FilteredAlectraEntities.Count}/{AlectraHuiEntities.Count} SHOWN";
+
+    private string EntityBrowserEmptyText => !HomeAssistantOnline
+        ? "Home Assistant is offline, so no live Alectra Hui entities are displayed."
+        : !string.IsNullOrWhiteSpace(_usageError)
+            ? "The latest Alectra Hui refresh failed, so retained entity values are hidden."
+        : _usage is null
+            ? "Waiting for Home Assistant to return real Alectra Hui entities."
+            : !_usage.HomeAssistantConfigured
+                ? "Home Assistant is not configured, so there are no real Alectra Hui entities to display."
+                : AlectraHuiEntities.Count == 0
+                    ? "Home Assistant returned no Alectra Hui entities."
+                    : "No real Alectra Hui entities match the current search and desk filter.";
+
+    private static string EntityUnitLabel(UsageEntityReading entity) =>
+        string.IsNullOrWhiteSpace(entity.Unit) ? "NO UNIT" : entity.Unit;
+
+    private void ClearAlectraSearch() => _alectraSearch = string.Empty;
+
+    private static string EntityCategory(UsageEntityReading entity)
+    {
+        var id = entity.EntityId.ToLowerInvariant();
+        var name = entity.Name.ToLowerInvariant();
+        var joined = $"{id} {name}";
+
+        if (joined.Contains("bill", StringComparison.Ordinal) || joined.Contains("due", StringComparison.Ordinal) || joined.Contains("balance", StringComparison.Ordinal))
+        {
+            return "Bill desk";
+        }
+
+        if (id.StartsWith("select.", StringComparison.Ordinal) || id.StartsWith("switch.", StringComparison.Ordinal) || id.StartsWith("number.", StringComparison.Ordinal)
+            || joined.Contains("plan", StringComparison.Ordinal) || joined.Contains("auto", StringComparison.Ordinal) || joined.Contains("poll", StringComparison.Ordinal))
+        {
+            return "Plan controls";
+        }
+
+        if (joined.Contains("tou", StringComparison.Ordinal) || joined.Contains("peak", StringComparison.Ordinal) || joined.Contains("price", StringComparison.Ordinal) || joined.Contains("rate", StringComparison.Ordinal))
+        {
+            return "Guard signals";
+        }
+
+        if (joined.Contains("power", StringComparison.Ordinal) || joined.Contains("energy", StringComparison.Ordinal) || joined.Contains("usage", StringComparison.Ordinal) || joined.Contains("cost", StringComparison.Ordinal))
+        {
+            return "Live usage";
+        }
+
+        return "Other signals";
+    }
+
+    private static int CategoryOrder(string category) => category switch
+    {
+        "Live usage" => 0,
+        "Guard signals" => 1,
+        "Bill desk" => 2,
+        "Plan controls" => 3,
+        _ => 4
+    };
+
+    private static string IconForCategory(string category) => category switch
+    {
+        "Live usage" => Icons.Material.Filled.Speed,
+        "Guard signals" => Icons.Material.Filled.Policy,
+        "Bill desk" => Icons.Material.Filled.ReceiptLong,
+        "Plan controls" => Icons.Material.Filled.Tune,
+        _ => Icons.Material.Filled.Sensors
+    };
+
+    private static Color ColorForCategory(string category) => category switch
+    {
+        "Live usage" => Color.Info,
+        "Guard signals" => Color.Warning,
+        "Bill desk" => Color.Success,
+        "Plan controls" => Color.Secondary,
+        _ => Color.Default
+    };
+
+    private static string CssClassForCategory(string category) => category switch
+    {
+        "Live usage" => "usage",
+        "Guard signals" => "guard",
+        "Bill desk" => "bill",
+        "Plan controls" => "controls",
+        _ => "other"
+    };
+
+    private sealed record AlectraEntityGroup(string Category, IReadOnlyList<UsageEntityReading> Items);
 
     // ---------- cost tiles ----------
 
@@ -448,8 +788,16 @@
         catch (Exception ex)
         {
             _nextUsageRefresh = DateTimeOffset.UtcNow.AddSeconds(30);
+            _usage = null;
             _usageError = $"Usage sensor error: {ex.Message}";
         }
+    }
+
+    private async Task RefreshNow()
+    {
+        await RefreshUsageAsync();
+        await RefreshUsageHistoryAsync();
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task RefreshUsageHistoryAsync()
@@ -458,12 +806,14 @@
         {
             var end = DateTimeOffset.UtcNow;
             _nextUsageHistoryRefresh = end.AddMinutes(10);
-            _usageHistory = await HomeAssistant.GetUsageHistoryAsync(null, end.AddHours(-24), end, CancellationToken.None);
+            _usageHistory = await HomeAssistant.GetUsagePowerHistoryAsync(end.AddHours(-24), end, CancellationToken.None);
             _usageHistoryUpdatedAt = end;
+            _usageHistoryError = null;
         }
-        catch
+        catch (Exception ex)
         {
             _nextUsageHistoryRefresh = DateTimeOffset.UtcNow.AddMinutes(10);
+            _usageHistoryError = $"Power history error: {ex.Message}";
         }
     }
 

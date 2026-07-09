@@ -8,23 +8,30 @@
 <div class="ops-tactical">
     <div class="ops-tactical__head">
         <span class="ops-tactical__title">TACTICAL PICTURE</span>
-        <span class="ops-tactical__blink" aria-hidden="true"></span>
-        <span class="ops-tactical__live">LIVE</span>
+        @if (HomeAssistantOnline)
+        {
+            <span class="ops-tactical__blink" aria-hidden="true"></span>
+            <span class="ops-tactical__live">LIVE</span>
+        }
+        else
+        {
+            <span class="ops-tactical__live">OFFLINE</span>
+        }
         <span class="ops-tactical__spacer"></span>
         <span class="ops-tactical__board">@BoardStatus</span>
     </div>
     <div class="ops-tactical__grid">
         <div class="ops-tactical__cell">
             <div class="ops-tactical__label">UNITS ACTING</div>
-            <div class="@(BusyCount > 0 ? "ops-tactical__value ops-tactical__value--warn" : "ops-tactical__value ops-tactical__value--sub")">@BusyCount</div>
+            <div class="@(BusyCount > 0 ? "ops-tactical__value ops-tactical__value--warn" : "ops-tactical__value ops-tactical__value--sub")">@BusyCountText</div>
             <div class="ops-tactical__bar">
                 <div class="@(BusyCount > 0 ? "ops-tactical__bar-fill ops-tactical__bar-fill--live" : "ops-tactical__bar-fill")"></div>
             </div>
         </div>
         <div class="ops-tactical__cell">
             <div class="ops-tactical__label">WATCHING</div>
-            <div class="ops-tactical__value ops-tactical__value--good">@WatchingCount</div>
-            <div class="ops-tactical__sub">quietly judging the wall</div>
+            <div class="@(HomeAssistantOnline ? "ops-tactical__value ops-tactical__value--good" : "ops-tactical__value ops-tactical__value--sub")">@WatchingCountText</div>
+            <div class="ops-tactical__sub">@WatchingSubText</div>
         </div>
         <div class="ops-tactical__cell">
             <div class="ops-tactical__label">ROOM VS TARGET</div>
@@ -34,7 +41,7 @@
         <div class="ops-tactical__cell">
             <div class="ops-tactical__label">NEXT WORKER CHECK</div>
             <div class="ops-tactical__value">@NextCheckText</div>
-            <div class="ops-tactical__sub">the loop never sleeps</div>
+            <div class="ops-tactical__sub">@NextCheckSub</div>
         </div>
     </div>
     <div class="ops-tactical__feed">
@@ -45,7 +52,7 @@
     </div>
 </div>
 
-@if (Snapshot?.Siesta is { Active: true } siestaBanner)
+@if (HomeAssistantOnline && Snapshot?.Siesta is { Active: true } siestaBanner)
 {
     <div class="ops-alert-row ops-alert-row--info" style="margin-bottom: 14px;">
         <span class="ops-alert-row__glyph ops-alert-row__glyph--bob" aria-hidden="true">☾</span>
@@ -169,32 +176,64 @@
     // ---------- tactical picture ----------
 
     private List<(GuardInfo Info, GuardLiveView View)> Engaged =>
-        Snapshot is null
+        !RosterOperational
             ? []
             : GuardCatalog.Live
                 .Select(g => (Info: g, View: g.Project!(Snapshot)))
-                .Where(x => x.View.Busy)
+                .Where(x => x.View.Enabled && x.View.Busy)
                 .ToList();
 
     private int BusyCount => Engaged.Count;
 
-    private int WatchingCount => Math.Max(0, GuardCatalog.Live.Count() - BusyCount);
+    private string BusyCountText => HomeAssistantOnline ? BusyCount.ToString() : "--";
 
-    private string BoardStatus => Snapshot?.DefenderEnabled == true ? "ALL SECTORS REPORTING" : "GUARD POST PAUSED";
+    private int WatchingCount => !RosterOperational
+        ? 0
+        : GuardCatalog.Live.Count(g =>
+        {
+            var view = g.Project!(Snapshot);
+            return view.Enabled && !view.Busy;
+        });
 
-    private double? RoomNow => Snapshot?.HomeAssistantThermostat?.CurrentTemperatureCelsius;
-    private double? RoomWanted => Snapshot?.TargetTemperatureCelsius;
+    private string WatchingCountText => HomeAssistantOnline ? WatchingCount.ToString() : "--";
+
+    private string WatchingSubText => HomeAssistantOnline
+        ? "quietly judging the wall"
+        : "live guard state unavailable";
+
+    private bool HomeAssistantOnline =>
+        string.Equals(Snapshot.ConnectionState, "home-assistant", StringComparison.OrdinalIgnoreCase);
+
+    private bool RosterOperational => HomeAssistantOnline && Snapshot.DefenderEnabled;
+
+    private string BoardStatus => !HomeAssistantOnline
+        ? "HOME ASSISTANT OFFLINE"
+        : Snapshot.DefenderEnabled
+            ? "ALL SECTORS REPORTING"
+            : "GUARD POST PAUSED";
+
+    private double? RoomNow => HomeAssistantOnline
+        ? Snapshot.HomeAssistantThermostat?.CurrentTemperatureCelsius
+        : null;
+
+    private double? RoomWanted => HomeAssistantOnline
+        ? Snapshot.TargetTemperatureCelsius
+        : null;
 
     private string RoomDeltaText =>
         RoomNow is { } now && RoomWanted is { } want ? $"{now - want:+0.0;-0.0;±0.0} C" : "--";
 
     private string RoomDeltaClass =>
-        RoomNow is { } now && RoomWanted is { } want && now - want > 0.05
+        !HomeAssistantOnline
+            ? "ops-tactical__value ops-tactical__value--sub"
+            : RoomNow is { } now && RoomWanted is { } want && now - want > 0.05
             ? "ops-tactical__value ops-tactical__value--warn"
             : "ops-tactical__value ops-tactical__value--good";
 
     private string RoomDeltaSub =>
-        RoomNow is { } now && RoomWanted is { } want
+        !HomeAssistantOnline
+            ? "live room evidence unavailable"
+            : RoomNow is { } now && RoomWanted is { } want
             ? $"{now:0.0} C now · {want:0.0} C wanted"
             : "waiting for Home Assistant";
 
@@ -202,6 +241,11 @@
     {
         get
         {
+            if (!HomeAssistantOnline)
+            {
+                return "WAITING";
+            }
+
             if (Snapshot?.NextActionAt is not { } next)
             {
                 return "LIVE";
@@ -219,14 +263,23 @@
         }
     }
 
+    private string NextCheckSub => HomeAssistantOnline
+        ? "the loop never sleeps"
+        : "waiting for a fresh real snapshot";
+
     private string FeedText
     {
         get
         {
             var bits = new List<string>();
-            if (Snapshot?.DefenderEnabled != true)
+            if (!HomeAssistantOnline)
             {
-                bits.Add("DEFENDER OFFLINE — THE WALL IS UNSUPERVISED");
+                bits.Add("HOME ASSISTANT OFFLINE — WAITING FOR THE REAL THERMOSTAT");
+                bits.Add("NO SIMULATED READINGS — NO GUARD ACTIONS REPORTED");
+            }
+            else if (Snapshot?.DefenderEnabled != true)
+            {
+                bits.Add("DEFENDER PAUSED — THE WALL IS UNSUPERVISED");
                 bits.Add("SNACK INVENTORY: ADEQUATE");
             }
             else
@@ -296,6 +349,11 @@
         if (string.IsNullOrWhiteSpace(_search))
         {
             return true;
+        }
+
+        if (!HomeAssistantOnline)
+        {
+            return Format.MatchesSearch(_search, guard.Name, guard.Summary, guard.Watches, guard.Logic, guard.Output);
         }
 
         var view = guard.Project!(Snapshot);

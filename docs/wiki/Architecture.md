@@ -32,7 +32,7 @@ Website command debounce is also stored in `DefenderStateStore`. Dashboard handl
 
 Comfort Sync is implemented inside `DefenderStateStore` and consumed by `AcDefenderService`. The worker still talks only to the real Home Assistant climate entity. Comfort Sync decides whether to wait, whether to hold briefly, and which real setpoint command `HomeAssistantClient` sends. Warm-room corrections are anchored to current room temperature, so a raised wall setpoint does not become the starting point for the next cooling command.
 
-Natural Walkback is part of that same state-store command selection path. It calculates touch pressure from recent external wall changes, then uses smaller safe-band setpoint steps before `AcDefenderService` sends the real Home Assistant command. It is skipped when the room needs the direct one-degree-below-room cooling correction.
+Natural Walkback is part of that same state-store command selection path. It calculates touch pressure from recent external wall changes, then uses smaller safe-band setpoint steps before `AcDefenderService` sends the real Home Assistant command. It is skipped when the room needs a direct warm-room correction anchored at the current room temperature minus configured `WarmRoomApproachCelsius` (0.5 °C by default), rather than at the wall setpoint; that correction continues toward, but never below, the website target.
 
 Touch Signature is another command-shaping layer in `DefenderStateStore`. It reads recent real external thermostat audit entries, learns a bounded wall-step size, and applies that size only to safe nudges. It does not invent state and it is skipped when direct comfort correction is needed.
 
@@ -82,7 +82,7 @@ Cooling Runway is a persisted timing guard in `DefenderStateStore` that watches 
 
 Adaptive quietness is also calculated in `DefenderStateStore`. It turns recent external thermostat touches into a quiet level and effective delay, hold chance, command gap, and nudge size. The dashboard displays those effective values so the UI matches the worker decision.
 
-Cool Mode Restore is stored in `DefenderStateStore` and evaluated by `AcDefenderService` before pause, schedule, weather, cooldown, or setpoint logic. It can delay the real `climate.set_hvac_mode` restore command while room temperature is inside the safe band, and it skips the delay when comfort safety requires cooling now.
+Cool Mode Restore is stored in `DefenderStateStore` and evaluated by `AcDefenderService` after pause and intentional-off guards, but before schedule, weather, cooldown, or setpoint logic. It can delay the real `climate.set_hvac_mode` restore command while room temperature is inside the safe band, and it skips the delay when comfort safety requires cooling now.
 
 Manual Comfort Grace is stored and evaluated in `DefenderStateStore` as well. `AcDefenderService` asks it whether a recent wall thermostat change should be left alone while room temperature is still within the configured comfort band. It never creates fake state; it only delays real correction commands.
 

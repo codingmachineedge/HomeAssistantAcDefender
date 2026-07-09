@@ -451,6 +451,25 @@ public sealed class HomeAssistantClient
         return ParseUsageHistory(document.RootElement, targetEntityId, from, to);
     }
 
+    /// <summary>
+    /// Reads recorder history for the configured instantaneous power entity. Keeping this separate
+    /// from <see cref="GetUsageHistoryAsync"/> prevents power charts from accidentally falling back
+    /// to the cumulative energy entity when no entity id is supplied.
+    /// </summary>
+    public Task<UsageHistorySnapshot> GetUsagePowerHistoryAsync(
+        DateTimeOffset from,
+        DateTimeOffset to,
+        CancellationToken cancellationToken)
+    {
+        var entityId = options.CurrentValue.UsagePowerEntityId;
+        if (string.IsNullOrWhiteSpace(entityId))
+        {
+            throw new InvalidOperationException("Usage power history entity is not configured.");
+        }
+
+        return GetUsageHistoryAsync(entityId.Trim(), from, to, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<ClimateHistorySample>> GetClimateHistoryAsync(
         string entityId,
         DateTimeOffset from,

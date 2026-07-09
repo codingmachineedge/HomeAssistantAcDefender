@@ -14,26 +14,30 @@
         </div>
         <div class="ops-panel" style="padding: 14px 16px;">
             <div class="ops-panel__label">HOTTEST UPSTAIRS</div>
-            <div class="ops-comfort-metric__value" style="color: var(--warn);">@Format.TempDeg(Up?.HottestUpstairsTemperatureCelsius)</div>
-            <div class="helper-text">The warmest Site-UP sensor right now.</div>
+            <div class="ops-comfort-metric__value" style="color: var(--warn);">@HottestUpstairsText</div>
+            <div class="helper-text">@HottestUpstairsHelp</div>
         </div>
         <div class="ops-panel" style="padding: 14px 16px;">
             <div class="ops-panel__label">PRESENCE</div>
             <div class="ops-comfort-metric__value">@PresenceText</div>
-            <div class="helper-text">@(Up?.IsHome == true ? "Someone is home to feel the heat." : "Nobody home right now.")</div>
+            <div class="helper-text">@PresenceHelp</div>
         </div>
         <div class="ops-panel" style="padding: 14px 16px;">
             <div class="ops-panel__label">SENSORS</div>
-            <div class="ops-comfort-metric__value">@(Up?.UpstairsSensors?.Count ?? 0)</div>
-            <div class="helper-text">Site-UP thermometers found.</div>
+            <div class="ops-comfort-metric__value">@SensorCountText</div>
+            <div class="helper-text">@SensorCountHelp</div>
         </div>
     </div>
 
     <div class="ops-comfort-grid">
         <div class="ops-panel ops-panel--pad">
-            <div class="ops-panel__label">SITE-UP SENSOR ARRAY — LIVE</div>
+            <div class="ops-panel__label">@SensorArrayLabel</div>
             <div class="ops-sensor-list">
-                @if (Up?.UpstairsSensors?.Count > 0)
+                @if (!HomeAssistantOnline)
+                {
+                    <div class="helper-text">Home Assistant is offline. Live Site-UP sensor readings are unavailable until a fresh real snapshot arrives.</div>
+                }
+                else if (Up?.UpstairsSensors?.Count > 0)
                 {
                     @foreach (var sensor in Up.UpstairsSensors.OrderByDescending(s => s.TemperatureCelsius ?? double.MinValue))
                     {
@@ -55,9 +59,13 @@
         </div>
 
         <div class="ops-panel ops-panel--pad">
-            <div class="ops-panel__label">PRESENCE TRACKING — PERSONNEL ON SITE</div>
+            <div class="ops-panel__label">@PresenceArrayLabel</div>
             <div class="ops-dash-stack" style="gap: 6px;">
-                @if (Up?.Presence?.Count > 0)
+                @if (!HomeAssistantOnline)
+                {
+                    <div class="helper-text">Home Assistant is offline. Live presence values are unavailable until a fresh real snapshot arrives.</div>
+                }
+                else if (Up?.Presence?.Count > 0)
                 {
                     @foreach (var person in Up.Presence)
                     {
@@ -82,21 +90,90 @@
     private ComfortSnapshot? Up => State.Snapshot?.Comfort;
     private bool DefenderEnabled => State.Snapshot?.DefenderEnabled == true;
 
-    private bool GuardOff => Up is null || !DefenderEnabled || Up.UpstairsComfortEnabled != true;
+    private bool HomeAssistantOnline =>
+        string.Equals(State.Snapshot.ConnectionState, "home-assistant", StringComparison.OrdinalIgnoreCase);
 
-    private string GuardText => GuardOff ? "OFF" : Up?.UpstairsTooHot == true ? "COOLING" : "WATCHING";
+    private bool HasUsableUpstairsReading =>
+        HomeAssistantOnline
+        && Up?.UpstairsSensors?.Any(sensor => sensor.TemperatureCelsius is not null) == true;
 
-    private string GuardColor => GuardOff ? "var(--sub)" : Up?.UpstairsTooHot == true ? "var(--warn)" : "var(--good)";
+    private bool GuardOff => HomeAssistantOnline
+        && Up is not null
+        && (!DefenderEnabled || Up.UpstairsComfortEnabled != true);
 
-    private string GuardHelp => Up is null
-        ? "Waiting for upstairs readings."
+    private bool GuardWaiting => HomeAssistantOnline
+        && !GuardOff
+        && (Up is null || !HasUsableUpstairsReading);
+
+    private string GuardText => !HomeAssistantOnline
+        ? "UNAVAILABLE"
         : GuardOff
-            ? "Comfort guard stood down with the rest of the site."
-            : Up.UpstairsTooHot == true
-                ? "Site-UP is too hot — priority cooling engaged."
-                : "Upstairs within comfort. Observing with quiet approval.";
+            ? "OFF"
+            : GuardWaiting
+                ? "WAITING"
+                : Up?.UpstairsTooHot == true
+                    ? "COOLING"
+                    : "WATCHING";
 
-    private string PresenceText => Up?.HomePresenceRequired == true ? "REQUIRED" : "OPTIONAL";
+    private string GuardColor => !HomeAssistantOnline || GuardOff || GuardWaiting
+        ? "var(--sub)"
+        : Up?.UpstairsTooHot == true
+            ? "var(--warn)"
+            : "var(--good)";
+
+    private string GuardHelp => !HomeAssistantOnline
+        ? "Home Assistant is offline. Retained comfort-guard state is hidden while the worker waits for fresh readings."
+        : Up is null
+            ? "Waiting for upstairs readings."
+            : !DefenderEnabled
+                ? "Comfort guard stood down; the worker still refreshes real Home Assistant state 24/7."
+                : Up.UpstairsComfortEnabled != true
+                    ? "Upstairs Comfort Guard is disabled."
+                    : !HasUsableUpstairsReading
+                        ? "Waiting for a real upstairs temperature reading."
+                        : Up.UpstairsTooHot == true
+                            ? "Site-UP is too hot — priority cooling engaged."
+                            : "Upstairs within comfort. Observing with quiet approval.";
+
+    private string HottestUpstairsText => HomeAssistantOnline
+        ? Format.TempDeg(Up?.HottestUpstairsTemperatureCelsius)
+        : "--";
+
+    private string HottestUpstairsHelp => HomeAssistantOnline
+        ? "The warmest Site-UP sensor right now."
+        : "Live Site-UP temperature unavailable while Home Assistant is offline.";
+
+    private string PresenceText => !HomeAssistantOnline || Up is null
+        ? "--"
+        : Up.HomePresenceRequired
+            ? "REQUIRED"
+            : "OPTIONAL";
+
+    private string PresenceHelp => !HomeAssistantOnline
+        ? "Live Home Assistant presence state unavailable."
+        : Up is null
+            ? "Waiting for real Home Assistant presence state."
+            : !Up.HomePresenceRequired
+                ? "Presence is optional for upstairs comfort."
+                : Up.Presence.Count > 0
+                    ? Up.IsHome ? "Someone is home to feel the heat." : "Nobody home right now."
+                    : "Waiting for a configured presence reading.";
+
+    private string SensorCountText => HomeAssistantOnline
+        ? (Up?.UpstairsSensors?.Count ?? 0).ToString()
+        : "--";
+
+    private string SensorCountHelp => HomeAssistantOnline
+        ? "Site-UP thermometers found."
+        : "Live sensor inventory unavailable while Home Assistant is offline.";
+
+    private string SensorArrayLabel => HomeAssistantOnline
+        ? "SITE-UP SENSOR ARRAY — LIVE"
+        : "SITE-UP SENSOR ARRAY — OFFLINE";
+
+    private string PresenceArrayLabel => HomeAssistantOnline
+        ? "PRESENCE TRACKING — PERSONNEL ON SITE"
+        : "PRESENCE TRACKING — OFFLINE";
 
     private static string BarWidth(double? temp) => temp is { } t
         ? $"{Math.Clamp((t - 20) / 8 * 100, 6, 100).ToString("0", System.Globalization.CultureInfo.InvariantCulture)}%"

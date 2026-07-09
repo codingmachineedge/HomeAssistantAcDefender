@@ -44,12 +44,19 @@
         <div class="ops-ctl-card">
             <div class="ops-ctl-label">FAN MODE</div>
             <div class="ops-fan-list">
-                @foreach (var mode in FanModes)
+                @if (FanModes.Count == 0)
                 {
-                    <button class="@(IsCurrentFan(mode) ? "ops-fan-btn ops-fan-btn--active" : "ops-fan-btn")" @onclick="@(() => ApplyFanModeTo(mode))">@mode.ToUpperInvariant()</button>
+                    <button class="ops-fan-btn" disabled aria-live="polite">WAITING FOR HOME ASSISTANT MODES</button>
+                }
+                else
+                {
+                    @foreach (var mode in FanModes)
+                    {
+                        <button class="@(IsCurrentFan(mode) ? "ops-fan-btn ops-fan-btn--active" : "ops-fan-btn")" @onclick="@(() => ApplyFanModeTo(mode))">@mode.ToUpperInvariant()</button>
+                    }
                 }
             </div>
-            <div class="ops-ctl-note">Sends climate.set_fan_mode to the real unit. The fan has no opinions; it is the only one.</div>
+            <div class="ops-ctl-note">Only modes advertised by the real Home Assistant climate entity are actionable.</div>
         </div>
 
         @* ── C · real thermostat actions ── *@
@@ -140,7 +147,6 @@
 @code {
     private double _targetInput = 22.0;
     private bool _targetDirty;
-    private string? _fanMode;
     private string _emergencyProtocol = "suspicion";
 
     private static readonly (string Value, string Label, string Name, string Help)[] EmergencyProtocols =
@@ -162,21 +168,17 @@
 
     private bool IsCurrentFan(string mode) => string.Equals(mode, Snapshot?.HomeAssistantThermostat?.FanMode, StringComparison.OrdinalIgnoreCase);
 
-    private IReadOnlyList<string> FanModes
-    {
-        get
-        {
-            var modes = Snapshot?.HomeAssistantThermostat?.AvailableFanModes;
-            if (modes is { Count: > 0 })
-            {
-                return modes;
-            }
+    private bool HomeAssistantOnline =>
+        string.Equals(Snapshot?.ConnectionState, "home-assistant", StringComparison.OrdinalIgnoreCase)
+        && Snapshot?.HomeAssistantThermostat is not null;
 
-            return string.IsNullOrWhiteSpace(Snapshot?.HomeAssistantThermostat?.FanMode)
-                ? ["auto", "low", "medium", "high"]
-                : [Snapshot.HomeAssistantThermostat.FanMode!];
-        }
-    }
+    private IReadOnlyList<string> FanModes => HomeAssistantOnline
+        ? Snapshot?.HomeAssistantThermostat?.AvailableFanModes?
+            .Where(mode => !string.IsNullOrWhiteSpace(mode))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray()
+            ?? Array.Empty<string>()
+        : Array.Empty<string>();
 
     private string LearningParagraph
     {
@@ -205,7 +207,6 @@
     protected override void OnInitialized()
     {
         _targetInput = Snapshot?.TargetTemperatureCelsius ?? 22.0;
-        _fanMode = Snapshot?.HomeAssistantThermostat?.FanMode ?? FanModes.FirstOrDefault();
         State.Changed += OnStateChanged;
     }
 
@@ -285,7 +286,7 @@
 
         if (turnOff == true)
         {
-            await TurnThermostatOff();
+            await TurnThermostatOffAfterGate();
             return;
         }
 
@@ -350,8 +351,22 @@
         "Emergency protocol started.",
         $"emergency {_emergencyProtocol}",
         bypassDebounce: !string.Equals(_emergencyProtocol, "too-cold", StringComparison.OrdinalIgnoreCase));
-    private Task TurnThermostatOff(bool bypassDebounce = false) => RunThermostatAction(() => Defender.TurnThermostatOffAsync(CancellationToken.None), "Thermostat turned off.", "turn thermostat off", bypassDebounce);
-    private Task TurnOffFromControls() => TurnThermostatOff();
+    private Task TurnThermostatOffAfterGate(string successMessage = "Thermostat turned off.") =>
+        RunThermostatActionAfterGate(() => Defender.TurnThermostatOffAsync(CancellationToken.None), successMessage);
+
+    private async Task TurnOffFromControls()
+    {
+        if (!TryBeginWebsiteCommand("stand down defender and turn thermostat off", bypassDebounce: true))
+        {
+            return;
+        }
+
+        // Persist the stand-down before the real off command. Otherwise the worker can see HVAC off
+        // while containment is still enabled and Cool Mode Restore can immediately put it back in cool.
+        StateStore.SetDefenderEnabled(false);
+        State.Refresh();
+        await TurnThermostatOffAfterGate("Defender stood down and thermostat turned off.");
+    }
 
     private bool _learningHistory;
     private async Task LearnFromHistory()
@@ -380,7 +395,12 @@
 
     private async Task ApplyFanModeTo(string mode)
     {
-        _fanMode = mode;
+        if (!FanModes.Contains(mode, StringComparer.OrdinalIgnoreCase))
+        {
+            Snackbar.Add("That fan mode is not advertised by the real Home Assistant climate entity.", Severity.Warning);
+            return;
+        }
+
         await RunThermostatAction(() => Defender.ForceFanModeAsync(mode, CancellationToken.None), $"Fan set to {mode}.", $"set fan to {mode}");
     }
 
@@ -404,6 +424,11 @@
             return;
         }
 
+        await RunThermostatActionAfterGate(action, successMessage);
+    }
+
+    private async Task RunThermostatActionAfterGate(Func<Task> action, string successMessage)
+    {
         try
         {
             await action();

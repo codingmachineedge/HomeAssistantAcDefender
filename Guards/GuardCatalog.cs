@@ -385,7 +385,7 @@ public static class GuardCatalog
             "Cooler Intent Fast Lane", GuardCategory.WallTouch,
             "When people keep dialing the wall cooler, it skips quiet waits so the room cools sooner.",
             "The net cooler movement of recent wall changes and whether the room is above target.",
-            "If repeated touches move the wall cooler by at least the cool threshold and the room is above target, it clears quiet waits (cooldown, grace, conflict quiet, cadence, repeat quiet, sensor rhythm, runway, and more) for the hold minutes. It never lowers the website target — cooling still starts at room minus 1 °C and stops at target. A room over the safety band hands control back to normal safety rules.",
+            "If repeated touches move the wall cooler by at least the cool threshold and the room is above target, it clears quiet waits (cooldown, grace, conflict quiet, cadence, repeat quiet, sensor rhythm, runway, and more) for the hold minutes. It never lowers the website target — warm-room cooling still starts at the current room temperature minus the configured WarmRoomApproachCelsius (0.5 °C by default), rather than subtracting the approach from the wall setpoint, and continues toward—but never below—the website target. A room over the safety band hands control back to normal safety rules.",
             "Bypasses the quiet timing guards for a short window.",
             ["CoolerIntentFastLaneEnabled", "CoolerIntentMinimumTouches", "CoolerIntentWindowMinutes", "CoolerIntentHoldMinutes", "CoolerIntentNetCoolThresholdCelsius", "CoolerIntentSafetyBandCelsius"],
             s =>

@@ -84,7 +84,14 @@ public sealed class WikiContentService
     public WikiPageMeta? Meta(string name) =>
         Pages.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
 
-    public WikiDocument? Render(string name) => _cache.GetOrAdd(name, RenderUncached);
+    public WikiDocument? Render(string name)
+    {
+        // Resolve through the indexed metadata first so route casing cannot select a
+        // different filesystem path (Linux is case-sensitive) or poison the
+        // case-insensitive cache with a null result.
+        var canonicalName = Meta(name)?.Name;
+        return canonicalName is null ? null : _cache.GetOrAdd(canonicalName, RenderUncached);
+    }
 
     public IReadOnlyList<WikiSearchResult> Search(string query, int max = 10)
     {

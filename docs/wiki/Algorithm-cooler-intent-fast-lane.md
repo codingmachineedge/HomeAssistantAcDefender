@@ -36,7 +36,7 @@ The net cooler movement of recent wall changes and whether the room is above tar
 
 ## How it decides
 
-If repeated touches move the wall cooler by at least the cool threshold and the room is above target, it clears quiet waits (cooldown, grace, conflict quiet, cadence, repeat quiet, sensor rhythm, runway, and more) for the hold minutes. It never lowers the website target — cooling still starts at room minus 1 °C and stops at target. A room over the safety band hands control back to normal safety rules.
+If repeated touches move the wall cooler by at least the cool threshold and the room is above target, it clears quiet waits (cooldown, grace, conflict quiet, cadence, repeat quiet, sensor rhythm, runway, and more) for the hold minutes. It never lowers the website target — warm-room cooling still starts at the current room temperature minus the configured `WarmRoomApproachCelsius` (0.5 °C by default), rather than subtracting the approach from the wall setpoint, and continues toward—but never below—the website target. A room over the safety band hands control back to normal safety rules.
 
 ## What it changes
 

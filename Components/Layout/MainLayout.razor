@@ -283,9 +283,21 @@
 
     private bool IsAlertMood => Mood is "alert" or "omega";
 
-    private int BusyGuardCount => Snapshot is null
-        ? 0
-        : GuardCatalog.Live.Count(g => g.Project!(Snapshot).Busy);
+    private int BusyGuardCount
+    {
+        get
+        {
+            var snapshot = Snapshot;
+            if (snapshot is null
+                || !snapshot.DefenderEnabled
+                || !string.Equals(snapshot.ConnectionState, "home-assistant", StringComparison.OrdinalIgnoreCase))
+            {
+                return 0;
+            }
+
+            return GuardCatalog.Live.Count(guard => guard.Project!(snapshot) is { Enabled: true, Busy: true });
+        }
+    }
 
     private string RootClass => $"ops-root {(_isDarkMode ? "theme-dark" : "theme-light")} mood-{Mood}";
 
@@ -301,7 +313,7 @@
         new("/energy", "↯", "ENERGY", "AREA-04", true),
         new("/logs", "≣", "LOGS", "AREA-05", true),
         new("/controls", "⌘", "CONTROLS", "AREA-06", false),
-        new("/settings", "⚙", "ORDERS", "AREA-07", false),
+        new("/settings", "⚙", "ORDERS", "AREA-07", true),
         new("/repository", "⇄", "REPO", "AREA-08", false),
         new("/guide", "✦", "GUIDE", "AREA-09", false),
         new("/wiki", "⎘", "WIKI", "AREA-10", true),
