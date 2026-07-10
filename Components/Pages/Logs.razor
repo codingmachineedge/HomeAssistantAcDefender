@@ -111,6 +111,22 @@
             <input class="ops-input" style="width: 100%; box-sizing: border-box; margin: 0 0 10px 0;"
                    value="@_eventSearch" @oninput="OnEventSearchChanged"
                    placeholder="SEARCH ACTIVITY…" aria-label="Search defender activity" />
+            <div class="ops-log-filterbar" role="group" aria-label="Filter defender activity">
+                @foreach (var option in EventFilterOptions)
+                {
+                    <button type="button" class="@EventFilterClass(option.Value)" @onclick="@(() => SetEventFilter(option.Value))" title="@option.Help">
+                        <span>@option.Label</span>
+                        <span class="ops-log-filterbar__count">@EventFilterCount(option.Value)</span>
+                    </button>
+                }
+                @if (HasActivityFilter)
+                {
+                    <button type="button" class="ops-log-filterbar__clear" @onclick="ClearActivityFilters">CLEAR</button>
+                }
+            </div>
+            <div class="ops-log-filterbar__summary">
+                SHOWING @FilteredEvents.Count OF @Events.Count ACTIVITY EVENT@(Events.Count == 1 ? "" : "S")
+            </div>
             <div class="ops-logs-list ops-logs-list--tall">
                 @if (FilteredEvents.Any())
                 {
@@ -155,10 +171,23 @@
 </div>
 
 @code {
+    private const string AllEventFilter = "all";
+
     private string _touchSearch = "";
     private string _eventSearch = "";
+    private string _eventFilter = AllEventFilter;
     private string _selectedLogTitle = "";
     private string _selectedLogJson = "";
+
+    private static readonly (string Value, string Label, string Help)[] EventFilterOptions =
+    [
+        (AllEventFilter, "ALL", "Show every defender activity event."),
+        ("report", "REPORTS", "Routine informational activity."),
+        ("notice", "NOTICES", "Warnings and quiet-timing holds that need attention."),
+        ("alert", "ALERTS", "Error-level activity such as Home Assistant or cooling-failure problems."),
+        ("success", "SUCCESS", "Success or OK activity."),
+        ("wiki", "WIKI", "Events linked to a guard wiki article.")
+    ];
 
     private static readonly JsonSerializerOptions LogJsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -301,6 +330,23 @@
 
     private void OnEventSearchChanged(ChangeEventArgs e) => _eventSearch = e.Value?.ToString() ?? "";
 
+    private bool HasActivityFilter =>
+        !string.Equals(_eventFilter, AllEventFilter, StringComparison.Ordinal)
+        || !string.IsNullOrWhiteSpace(_eventSearch);
+
+    private void SetEventFilter(string filter) => _eventFilter = filter;
+
+    private void ClearActivityFilters()
+    {
+        _eventSearch = "";
+        _eventFilter = AllEventFilter;
+    }
+
+    private string EventFilterClass(string filter) =>
+        string.Equals(_eventFilter, filter, StringComparison.Ordinal) ? "ops-log-filter active" : "ops-log-filter";
+
+    private int EventFilterCount(string filter) => Events.Count(item => MatchesEventFilter(item, filter));
+
     private IEnumerable<ThermostatChangeAudit> FilteredThermostatChanges =>
         (Snapshot?.ThermostatChanges ?? Array.Empty<ThermostatChangeAudit>())
             .Where(change => Format.MatchesSearch(
@@ -316,13 +362,35 @@
                 change.SourceDetail,
                 change.ContextUserId));
 
-    private IEnumerable<DefenderEvent> FilteredEvents =>
-        Events.Where(item => Format.MatchesSearch(
-            _eventSearch,
-            item.Level,
-            item.Message,
-            Format.DateTimeText(item.Timestamp),
-            EventTagFor(item).Tag));
+    private IReadOnlyList<DefenderEvent> FilteredEvents =>
+        Events
+            .Where(item => MatchesEventFilter(item, _eventFilter))
+            .Where(item => Format.MatchesSearch(
+                _eventSearch,
+                item.Level,
+                item.Message,
+                Format.DateTimeText(item.Timestamp),
+                EventTagFor(item).Tag))
+            .ToList();
+
+    private bool MatchesEventFilter(DefenderEvent item, string filter)
+    {
+        if (string.Equals(filter, AllEventFilter, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var level = (item.Level ?? "").ToLowerInvariant();
+        return filter switch
+        {
+            "alert" => level == "error",
+            "notice" => level == "warning",
+            "success" => level is "success" or "ok",
+            "wiki" => EventTagFor(item).PageName is not null,
+            "report" => level is not ("error" or "warning" or "success" or "ok"),
+            _ => true
+        };
+    }
 
     private void SelectTouchLog(ThermostatChangeAudit change)
     {
