@@ -44,6 +44,7 @@ const PAGES = [
   ['/logs', 'logs'],
   ['/settings', 'settings'],
   ['/guide', 'guide'],
+  ['/api-docs', 'api-docs'],
 ];
 
 const slug = (r) => (r === '/' ? 'dashboard' : r.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, ''));

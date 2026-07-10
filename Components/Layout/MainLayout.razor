@@ -317,6 +317,7 @@
         new("/repository", "⇄", "REPO", "AREA-08", false),
         new("/guide", "✦", "GUIDE", "AREA-09", false),
         new("/wiki", "⎘", "WIKI", "AREA-10", true),
+        new("/api-docs", "{}", "API DOCS", "AREA-11", true),
     ];
 
     private string CurrentPath => new Uri(Nav.Uri).AbsolutePath.TrimEnd('/').ToLowerInvariant() is { Length: > 0 } p ? p : "/";
@@ -335,6 +336,7 @@
         "/logs" when Snapshot?.ThermostatChanges is { Count: > 0 } changes => $"{Math.Min(changes.Count, 99)}",
         "/repository" => "GIT",
         "/wiki" => "FULL",
+        "/api-docs" => "DOC",
         _ => ""
     };
 
@@ -355,6 +357,7 @@
         "/repository" or "/settings/repository" => "Standing orders are version-controlled — every settings save is a commit · blame is a feature",
         "/guide" => "Field Manual — generated from the same guard catalog that runs the live board · full articles in the WIKI",
         "/wiki" => "Foundation wiki — every algorithm, every screenshot, one search box · zero simulators",
+        "/api-docs" => "API documentation — session-gated JSON routes, real thermostat commands, public reactor voucher · zero simulators",
         _ => "SECURE · CONTAIN · PROTECT THE COOL"
     };
 
@@ -369,6 +372,7 @@
         "/settings" => "Standing Orders",
         "/repository" or "/settings/repository" => "Settings Repository",
         "/guide" => "Field Manual",
+        "/api-docs" => "API Documentation",
         var path when path.StartsWith("/wiki", StringComparison.Ordinal) => "Site Wiki",
         var other => other.TrimStart('/') is { Length: > 0 } name
             ? char.ToUpperInvariant(name[0]) + name[1..]
@@ -387,6 +391,7 @@
         "/repository" or "/settings/repository" => "AREA-08 · GIT MANAGER",
         "/guide" => $"AREA-09 · {GuardCatalog.All.Count()} PROCEDURES",
         var w when CurrentPath.StartsWith("/wiki", StringComparison.Ordinal) => "AREA-10 · FOUNDATION WIKI",
+        "/api-docs" => "AREA-11 · API REFERENCE",
         _ => ""
     };
 

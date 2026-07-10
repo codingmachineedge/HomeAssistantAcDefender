@@ -1,0 +1,841 @@
+@page "/api-docs"
+@using System.Reflection
+
+<PageTitle>API Documentation - SCP AC Defender</PageTitle>
+
+<div class="ops-dash-stack api-docs">
+    <section class="api-hero">
+        <div class="api-hero__main">
+            <div class="api-hero__eyebrow">AUTHENTICATED MINIMAL API</div>
+            <div class="api-hero__title">AC Defender API</div>
+            <p class="api-hero__copy">
+                Every private endpoint below is mapped under <code>/api</code> in the running app and requires the same signed-in session as the dashboard.
+                Command routes use the real defender state store and, where noted, the real configured Home Assistant climate entity.
+            </p>
+        </div>
+        <div class="api-hero__stats">
+            <div class="api-stat">
+                <span class="api-stat__value">@Endpoints.Count</span>
+                <span class="api-stat__label">ENDPOINTS</span>
+            </div>
+            <div class="api-stat">
+                <span class="api-stat__value">@SchemaDocs.Count</span>
+                <span class="api-stat__label">SCHEMAS</span>
+            </div>
+            <div class="api-stat">
+                <span class="api-stat__value">1</span>
+                <span class="api-stat__label">PUBLIC GET</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="api-info-grid">
+        <div class="api-info-card">
+            <div class="ops-panel__label">AUTHENTICATION</div>
+            <p>Private routes use the app's cookie-auth session. Same-origin JavaScript calls should include credentials; external callers need to sign in first and preserve the session cookie.</p>
+        </div>
+        <div class="api-info-card api-info-card--warn">
+            <div class="ops-panel__label">THERMOSTAT SAFETY</div>
+            <p>Thermostat endpoints do not mock HVAC. They call Home Assistant or return a real error. Repeated thermostat-affecting commands can return <code>429</code> with the current snapshot.</p>
+        </div>
+        <div class="api-info-card">
+            <div class="ops-panel__label">CONTENT TYPE</div>
+            <p>JSON endpoints accept and return <code>application/json</code>. <code>/api/status/stream</code> returns Server-Sent Events, and <code>/api/camera/webrtc</code> exchanges SDP strings.</p>
+        </div>
+    </section>
+
+    <div class="ops-roster-tools ops-roster-tools--sticky api-tools">
+        <input class="ops-input" value="@_search" @oninput="OnSearchChanged" placeholder="SEARCH ENDPOINTS OR MODELS..." aria-label="Search API docs" />
+        @foreach (var filter in Filters)
+        {
+            <button class="@FilterChipClass(filter)" @onclick="@(() => SetFilter(filter))">@filter.ToUpperInvariant()</button>
+        }
+    </div>
+
+    <div class="api-docs-grid">
+        <aside class="api-toc">
+            <div class="ops-panel__label">ENDPOINT GROUPS</div>
+            @foreach (var group in EndpointGroups)
+            {
+                var count = FilteredEndpoints.Count(e => e.Group == group);
+                if (count == 0)
+                {
+                    continue;
+                }
+
+                <a href="@($"#{Slug(group)}")" class="api-toc__link">
+                    <span>@group</span>
+                    <span>@count</span>
+                </a>
+            }
+
+            <div class="ops-panel__label api-toc__schema-label">SCHEMAS</div>
+            <a href="#request-schemas" class="api-toc__link"><span>Request payloads</span><span>@RequestSchemaCount</span></a>
+            <a href="#model-schemas" class="api-toc__link"><span>Response models</span><span>@ResponseSchemaCount</span></a>
+        </aside>
+
+        <main class="api-main">
+            @if (!FilteredEndpoints.Any())
+            {
+                <div class="ops-alert-row">
+                    <span class="ops-alert-row__glyph" aria-hidden="true">0</span>
+                    <span class="ops-alert-row__tag">NO MATCH</span>
+                    <span class="ops-alert-row__text">No endpoint matches that API search.</span>
+                </div>
+            }
+
+            @foreach (var group in EndpointGroups)
+            {
+                var endpoints = FilteredEndpoints.Where(e => e.Group == group).ToList();
+                if (endpoints.Count == 0)
+                {
+                    continue;
+                }
+
+                <section class="api-group" id="@Slug(group)">
+                    <div class="ops-roster-group__head">
+                        <span class="ops-roster-group__title">@group</span>
+                        <span class="ops-roster-group__rule"></span>
+                        <span class="ops-roster-group__count">@endpoints.Count ROUTE@(endpoints.Count == 1 ? "" : "S")</span>
+                    </div>
+
+                    <div class="api-endpoint-list">
+                        @foreach (var endpoint in endpoints)
+                        {
+                            <article class="api-endpoint-card" id="@endpoint.Anchor">
+                                <header class="api-endpoint-card__head">
+                                    <span class="@MethodClass(endpoint.Method)">@endpoint.Method</span>
+                                    <code class="api-path">@endpoint.Path</code>
+                                    <span class="api-endpoint-card__auth">@endpoint.Auth</span>
+                                </header>
+
+                                <p class="api-endpoint-card__summary">@endpoint.Summary</p>
+
+                                <div class="api-meta-grid">
+                                    <div>
+                                        <div class="api-meta__label">BODY</div>
+                                        <div class="api-meta__value">@endpoint.Body</div>
+                                    </div>
+                                    <div>
+                                        <div class="api-meta__label">RESPONSE</div>
+                                        <div class="api-meta__value">@endpoint.Response</div>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(endpoint.Query))
+                                    {
+                                        <div>
+                                            <div class="api-meta__label">QUERY</div>
+                                            <div class="api-meta__value">@endpoint.Query</div>
+                                        </div>
+                                    }
+                                    <div>
+                                        <div class="api-meta__label">SAFETY</div>
+                                        <div class="api-meta__value">@endpoint.Safety</div>
+                                    </div>
+                                </div>
+
+                                <div class="api-status-row">
+                                    @foreach (var status in endpoint.Statuses)
+                                    {
+                                        <span class="api-status">@status</span>
+                                    }
+                                </div>
+
+                                @if (endpoint.Notes.Count > 0)
+                                {
+                                    <ul class="api-notes">
+                                        @foreach (var note in endpoint.Notes)
+                                        {
+                                            <li>@note</li>
+                                        }
+                                    </ul>
+                                }
+
+                                <pre class="api-example"><code>@endpoint.Example</code></pre>
+                            </article>
+                        }
+                    </div>
+                </section>
+            }
+
+            <section class="api-group" id="request-schemas">
+                <div class="ops-roster-group__head">
+                    <span class="ops-roster-group__title">Request Payloads</span>
+                    <span class="ops-roster-group__rule"></span>
+                    <span class="ops-roster-group__count">@RequestSchemaCount MODELS</span>
+                </div>
+                <div class="api-schema-grid">
+                    @foreach (var doc in RequestSchemas)
+                    {
+                        <details class="api-schema-card">
+                            <summary>
+                                <span class="api-schema-card__name">@doc.Name</span>
+                                <span class="api-schema-card__group">@doc.Group</span>
+                            </summary>
+                            @if (doc.EnumValues.Count > 0)
+                            {
+                                <div class="api-enum-values">@string.Join(", ", doc.EnumValues)</div>
+                            }
+                            else
+                            {
+                                <table class="api-field-table">
+                                    <thead>
+                                        <tr><th>JSON field</th><th>Type</th><th>State</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var field in doc.Fields)
+                                        {
+                                            <tr><td><code>@field.Name</code></td><td>@field.Type</td><td>@field.State</td></tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+                        </details>
+                    }
+                </div>
+            </section>
+
+            <section class="api-group" id="model-schemas">
+                <div class="ops-roster-group__head">
+                    <span class="ops-roster-group__title">Response And State Models</span>
+                    <span class="ops-roster-group__rule"></span>
+                    <span class="ops-roster-group__count">@ResponseSchemaCount MODELS</span>
+                </div>
+                <div class="api-schema-grid">
+                    @foreach (var doc in ResponseSchemas)
+                    {
+                        <details class="api-schema-card">
+                            <summary>
+                                <span class="api-schema-card__name">@doc.Name</span>
+                                <span class="api-schema-card__group">@doc.Group</span>
+                            </summary>
+                            @if (doc.EnumValues.Count > 0)
+                            {
+                                <div class="api-enum-values">@string.Join(", ", doc.EnumValues)</div>
+                            }
+                            else
+                            {
+                                <table class="api-field-table">
+                                    <thead>
+                                        <tr><th>JSON field</th><th>Type</th><th>State</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var field in doc.Fields)
+                                        {
+                                            <tr><td><code>@field.Name</code></td><td>@field.Type</td><td>@field.State</td></tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+                        </details>
+                    }
+                </div>
+            </section>
+        </main>
+    </div>
+</div>
+
+@code {
+    private const string AllFilter = "All";
+    private string _search = "";
+    private string _filter = AllFilter;
+
+    private static readonly string[] Filters = [AllFilter, "Read", "Command", "Settings", "Stream", "Public"];
+    private static readonly string[] EndpointGroups = ["State", "Usage", "Targets", "Settings", "Thermostat", "Emergency And Learning", "Camera", "Public Voucher"];
+
+    private static readonly IReadOnlyList<ApiEndpoint> Endpoints =
+    [
+        new(
+            "GET",
+            "/api/status",
+            "State",
+            "Returns the full defender snapshot used by dashboards, guard cards, logs, settings, and status panels.",
+            "Session cookie",
+            "None",
+            "DefenderSnapshot",
+            null,
+            "Read-only state.",
+            ["200 OK"],
+            ["Read"],
+            "fetch('/api/status', { credentials: 'include' }).then(r => r.json())",
+            ["The payload includes the current target, Home Assistant connection state, guard snapshots, settings, schedule, audit logs, events, and optional runtime/budget/forecast sections."]),
+        new(
+            "GET",
+            "/api/settings",
+            "State",
+            "Compatibility read route that returns the same current defender snapshot as /api/status.",
+            "Session cookie",
+            "None",
+            "DefenderSnapshot",
+            null,
+            "Read-only state.",
+            ["200 OK"],
+            ["Read", "Settings"],
+            "fetch('/api/settings', { credentials: 'include' }).then(r => r.json())",
+            ["The mutable settings object is available at the snapshot field named settings."]),
+        new(
+            "GET",
+            "/api/status/stream",
+            "State",
+            "Server-Sent Events stream that emits the full defender snapshot once per second.",
+            "Session cookie",
+            "None",
+            "text/event-stream with DefenderSnapshot JSON in each data frame",
+            null,
+            "Read-only state.",
+            ["200 OK"],
+            ["Read", "Stream"],
+            """
+const stream = new EventSource('/api/status/stream');
+stream.onmessage = event => console.log(JSON.parse(event.data));
+""",
+            ["The stream keeps the connection open and sends a data frame every second until the client disconnects."]),
+        new(
+            "GET",
+            "/api/usage/live",
+            "Usage",
+            "Reads the configured Home Assistant usage sensors and the discovered Alectra Hui entities.",
+            "Session cookie",
+            "None",
+            "UsageLiveSnapshot or { error }",
+            null,
+            "Read-only Home Assistant telemetry.",
+            ["200 OK", "400 Bad Request"],
+            ["Read"],
+            "fetch('/api/usage/live', { credentials: 'include' }).then(r => r.json())",
+            ["Returns a real Home Assistant error instead of simulated usage when the integration or token is unavailable."]),
+        new(
+            "GET",
+            "/api/usage/alectra-hui",
+            "Usage",
+            "Returns only the full Alectra Hui entity list used by the Energy page browser.",
+            "Session cookie",
+            "None",
+            "UsageEntityReading[] or { error }",
+            null,
+            "Read-only Home Assistant telemetry.",
+            ["200 OK", "400 Bad Request"],
+            ["Read"],
+            "fetch('/api/usage/alectra-hui', { credentials: 'include' }).then(r => r.json())",
+            ["Entity IDs, names, state, unit, numeric value, and last-changed timestamps come from Home Assistant."]),
+        new(
+            "GET",
+            "/api/usage/history",
+            "Usage",
+            "Reads Home Assistant recorder history for the configured energy entity, or for an entity supplied in the query string.",
+            "Session cookie",
+            "None",
+            "UsageHistorySnapshot or { error }",
+            "entityId, from, to, hours",
+            "Read-only Home Assistant recorder history.",
+            ["200 OK", "400 Bad Request"],
+            ["Read"],
+            "fetch('/api/usage/history?hours=24', { credentials: 'include' }).then(r => r.json())",
+            ["If from/to are omitted, the endpoint uses a window ending now and defaults to 24 hours. Hours is clamped to at least 0.1."]),
+        new(
+            "POST",
+            "/api/target/generate",
+            "Targets",
+            "Generates and stores a new website target temperature using the defender state store.",
+            "Session cookie",
+            "None",
+            "DefenderSnapshot",
+            null,
+            "Changes the website target only; worker still handles real thermostat movement.",
+            ["200 OK", "429 Too Many Requests"],
+            ["Command"],
+            "fetch('/api/target/generate', { method: 'POST', credentials: 'include' })",
+            ["This route bypasses the website command debounce gate in the current implementation."]),
+        new(
+            "POST",
+            "/api/target",
+            "Targets",
+            "Sets the website target temperature to an explicit Celsius value.",
+            "Session cookie",
+            "TargetTemperatureRequest",
+            "DefenderSnapshot",
+            null,
+            "Changes the website target only; worker still handles real thermostat movement.",
+            ["200 OK", "429 Too Many Requests"],
+            ["Command"],
+            """
+fetch('/api/target', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ temperatureCelsius: 22.0 })
+})
+""",
+            ["This route bypasses the website command debounce gate in the current implementation."]),
+        new(
+            "POST",
+            "/api/defender",
+            "Targets",
+            "Enables or pauses the defender. Pausing also attempts to park the thermostat for stand-down.",
+            "Session cookie",
+            "DefenderEnabledRequest",
+            "DefenderSnapshot",
+            null,
+            "May call Home Assistant when disabling, but parking is best-effort.",
+            ["200 OK", "429 Too Many Requests"],
+            ["Command"],
+            """
+fetch('/api/defender', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ enabled: false })
+})
+""",
+            ["Parking failures are swallowed after the defender state is changed, matching the UI master switch behavior."]),
+        new(
+            "POST",
+            "/api/settings",
+            "Settings",
+            "Saves the full standing-orders settings object, including schedule, guards, budget, energy, presence, and learning options.",
+            "Session cookie",
+            "SettingsRequest",
+            "DefenderSnapshot",
+            null,
+            "Updates server-side settings; it does not send a direct thermostat command.",
+            ["200 OK", "429 Too Many Requests"],
+            ["Command", "Settings"],
+            """
+const snapshot = await fetch('/api/status', { credentials: 'include' }).then(r => r.json());
+const settings = { ...snapshot.settings, schedule: snapshot.schedule ?? [] };
+settings.scheduleEnabled = true;
+
+fetch('/api/settings', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(settings)
+})
+""",
+            ["The full SettingsRequest schema is generated below. Non-null nullable enforcer and advanced settings are applied when present."]),
+        new(
+            "POST",
+            "/api/thermostat/refresh",
+            "Thermostat",
+            "Refreshes the real thermostat state from Home Assistant and returns the updated snapshot.",
+            "Session cookie",
+            "None",
+            "DefenderSnapshot",
+            null,
+            "Calls Home Assistant read APIs only.",
+            ["200 OK", "400 Bad Request", "429 Too Many Requests"],
+            ["Command"],
+            "fetch('/api/thermostat/refresh', { method: 'POST', credentials: 'include' })",
+            ["Home Assistant errors are recorded into the defender snapshot and returned with status 400."]),
+        new(
+            "POST",
+            "/api/thermostat/force-target",
+            "Thermostat",
+            "Forces the real thermostat to the current website target immediately.",
+            "Session cookie",
+            "None",
+            "DefenderSnapshot",
+            null,
+            "Sends a real Home Assistant climate service call.",
+            ["200 OK", "400 Bad Request", "429 Too Many Requests"],
+            ["Command"],
+            "fetch('/api/thermostat/force-target', { method: 'POST', credentials: 'include' })",
+            ["Subject to the website command gate unless the state store accepts the command."]),
+        new(
+            "POST",
+            "/api/thermostat/force-boost",
+            "Thermostat",
+            "Forces cooling by sending the configured boost correction to the real thermostat.",
+            "Session cookie",
+            "None",
+            "DefenderSnapshot",
+            null,
+            "Sends a real Home Assistant climate service call.",
+            ["200 OK", "400 Bad Request", "429 Too Many Requests"],
+            ["Command"],
+            "fetch('/api/thermostat/force-boost', { method: 'POST', credentials: 'include' })",
+            ["Home Assistant failures are recorded as unavailable state and returned with status 400."]),
+        new(
+            "POST",
+            "/api/thermostat/fan",
+            "Thermostat",
+            "Sets the real thermostat fan mode through Home Assistant.",
+            "Session cookie",
+            "FanModeRequest",
+            "DefenderSnapshot",
+            null,
+            "Sends a real Home Assistant climate service call.",
+            ["200 OK", "400 Bad Request", "429 Too Many Requests"],
+            ["Command"],
+            """
+fetch('/api/thermostat/fan', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ fanMode: 'auto' })
+})
+""",
+            ["The UI limits fan options to modes advertised by the real Home Assistant climate entity. API callers should do the same."]),
+        new(
+            "POST",
+            "/api/thermostat/off",
+            "Thermostat",
+            "Turns the real thermostat off through Home Assistant.",
+            "Session cookie",
+            "None",
+            "DefenderSnapshot",
+            null,
+            "Sends a real Home Assistant climate service call.",
+            ["200 OK", "400 Bad Request", "429 Too Many Requests"],
+            ["Command"],
+            "fetch('/api/thermostat/off', { method: 'POST', credentials: 'include' })",
+            ["Only call this when the defender state and safety conditions make standing down intentional."]),
+        new(
+            "POST",
+            "/api/learn-history",
+            "Emergency And Learning",
+            "Runs thermostat-history learning from Home Assistant recorder data.",
+            "Session cookie",
+            "None",
+            "HistoryLearningSnapshot or { error }",
+            null,
+            "Reads real Home Assistant history and updates learning state.",
+            ["200 OK", "400 Bad Request"],
+            ["Command"],
+            "fetch('/api/learn-history', { method: 'POST', credentials: 'include' })",
+            ["No fake history is created; missing recorder data returns a real error or an empty learning result."]),
+        new(
+            "POST",
+            "/api/emergency",
+            "Emergency And Learning",
+            "Applies an emergency quiet protocol.",
+            "Session cookie",
+            "EmergencyProtocolRequest",
+            "DefenderSnapshot",
+            null,
+            "The too-cold protocol can affect the thermostat; other protocols mainly alter quiet state.",
+            ["200 OK", "400 Bad Request", "429 Too Many Requests"],
+            ["Command"],
+            """
+fetch('/api/emergency', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ protocol: 'suspicion' })
+})
+""",
+            ["Supported protocol values are too-cold, someone-upset, suspicion, and brother-mad."]),
+        new(
+            "POST",
+            "/api/siesta",
+            "Emergency And Learning",
+            "Starts or cancels a siesta hold. Start may park or turn off the real thermostat depending on settings.",
+            "Session cookie",
+            "SiestaRequest",
+            "DefenderSnapshot or { error }",
+            null,
+            "Start can call Home Assistant; cancel only clears the hold.",
+            ["200 OK", "400 Bad Request", "429 Too Many Requests"],
+            ["Command"],
+            """
+fetch('/api/siesta', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ action: 'start', minutes: 120 })
+})
+""",
+            ["Action must be start or cancel. Start minutes default to 60 when omitted."]),
+        new(
+            "POST",
+            "/api/reactor-power",
+            "Emergency And Learning",
+            "Redeems food rations into a reactor-power voucher for the WinForge AI operator.",
+            "Session cookie",
+            "ReactorPowerRequest",
+            "DefenderSnapshot or { error }",
+            null,
+            "Moves no money and sends no thermostat command.",
+            ["200 OK", "400 Bad Request", "429 Too Many Requests"],
+            ["Command"],
+            """
+fetch('/api/reactor-power', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ hours: 1 })
+})
+""",
+            ["One ration buys one hour; redemption is rejected when the pantry does not have enough available rations."]),
+        new(
+            "POST",
+            "/api/camera/webrtc",
+            "Camera",
+            "Exchanges a browser WebRTC offer SDP for Google's answer SDP through the configured SDM camera bridge.",
+            "Session cookie",
+            "CameraWebRtcRequest",
+            "{ answerSdp } or { error }",
+            null,
+            "Does not control HVAC; exposes the configured front-door stream only to signed-in users.",
+            ["200 OK", "502 Bad Gateway", "503 Service Unavailable"],
+            ["Stream"],
+            """
+fetch('/api/camera/webrtc', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ offerSdp })
+})
+""",
+            ["Returns 503 when the camera bridge is not configured and 502 when stream negotiation fails."]),
+        new(
+            "GET",
+            "/api/reactor-power",
+            "Public Voucher",
+            "Public read-only voucher endpoint for WinForge polling.",
+            "Anonymous",
+            "None",
+            "{ active, until, secondsRemaining, mode }",
+            null,
+            "Read-only; exposes no defender state, balances, or thermostat controls.",
+            ["200 OK"],
+            ["Read", "Public"],
+            "fetch('/api/reactor-power').then(r => r.json())",
+            ["This route deliberately allows anonymous reads and sets Access-Control-Allow-Origin to *."])
+    ];
+
+    private static readonly NullabilityInfoContext Nullability = new();
+    private static readonly IReadOnlyList<SchemaDoc> SchemaDocs = BuildSchemaDocs();
+    private static IReadOnlyList<SchemaDoc> RequestSchemas => SchemaDocs.Where(s => s.Group == "Request payloads").ToList();
+    private static IReadOnlyList<SchemaDoc> ResponseSchemas => SchemaDocs.Where(s => s.Group != "Request payloads").ToList();
+    private static int RequestSchemaCount => RequestSchemas.Count;
+    private static int ResponseSchemaCount => ResponseSchemas.Count;
+
+    private IEnumerable<ApiEndpoint> FilteredEndpoints => Endpoints.Where(MatchesEndpoint);
+
+    private void OnSearchChanged(ChangeEventArgs e) => _search = e.Value?.ToString() ?? "";
+
+    private void SetFilter(string filter) => _filter = filter;
+
+    private string FilterChipClass(string filter) =>
+        string.Equals(_filter, filter, StringComparison.OrdinalIgnoreCase) ? "ops-chip active" : "ops-chip";
+
+    private bool MatchesEndpoint(ApiEndpoint endpoint)
+    {
+        var filterMatches = string.Equals(_filter, AllFilter, StringComparison.OrdinalIgnoreCase)
+            || endpoint.Tags.Any(tag => string.Equals(tag, _filter, StringComparison.OrdinalIgnoreCase));
+
+        if (!filterMatches)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_search))
+        {
+            return true;
+        }
+
+        return Format.MatchesSearch(
+            _search,
+            endpoint.Method,
+            endpoint.Path,
+            endpoint.Group,
+            endpoint.Summary,
+            endpoint.Body,
+            endpoint.Response,
+            endpoint.Query ?? "",
+            endpoint.Safety,
+            string.Join(" ", endpoint.Notes));
+    }
+
+    private static string MethodClass(string method) => $"api-method api-method--{method.ToLowerInvariant()}";
+
+    private static string Slug(string value)
+    {
+        var chars = value.ToLowerInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')
+            .ToArray();
+        return string.Join("", new string(chars).Split('-', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static IReadOnlyList<SchemaDoc> BuildSchemaDocs()
+    {
+        var models = typeof(DefenderSnapshot).Assembly.GetTypes()
+            .Where(IncludeApiModel)
+            .Select(type => new SchemaDoc(type.Name, SchemaGroup(type), SchemaFields(type), EnumValues(type)))
+            .OrderBy(doc => SchemaSort(doc.Group))
+            .ThenBy(doc => doc.Name, StringComparer.Ordinal)
+            .ToList();
+
+        return models;
+    }
+
+    private static bool IncludeApiModel(Type type)
+    {
+        if (type.Namespace != "HomeAssistantAcDefender.Models" || !type.IsPublic)
+        {
+            return false;
+        }
+
+        if (type == typeof(WebsiteCommandGateResult) || type == typeof(ScheduleEntry))
+        {
+            return true;
+        }
+
+        return type.IsEnum
+            || type.Name.EndsWith("Request", StringComparison.Ordinal)
+            || type.Name.EndsWith("Snapshot", StringComparison.Ordinal)
+            || type.Name.EndsWith("Reading", StringComparison.Ordinal)
+            || type.Name.EndsWith("Entry", StringComparison.Ordinal)
+            || type.Name.EndsWith("Audit", StringComparison.Ordinal)
+            || type.Name.EndsWith("Event", StringComparison.Ordinal)
+            || type.Name.EndsWith("Settings", StringComparison.Ordinal)
+            || type.Name.EndsWith("Sample", StringComparison.Ordinal)
+            || type.Name.EndsWith("State", StringComparison.Ordinal)
+            || type.Name.EndsWith("Result", StringComparison.Ordinal)
+            || type.Name.EndsWith("Usage", StringComparison.Ordinal)
+            || type.Name == nameof(EntityActivation);
+    }
+
+    private static string SchemaGroup(Type type)
+    {
+        if (type.Name.EndsWith("Request", StringComparison.Ordinal))
+        {
+            return "Request payloads";
+        }
+
+        if (type.Name.EndsWith("Snapshot", StringComparison.Ordinal) || type.Name.EndsWith("Settings", StringComparison.Ordinal))
+        {
+            return "State responses";
+        }
+
+        if (type.Name.Contains("Usage", StringComparison.Ordinal) || type.Name.Contains("Alectra", StringComparison.Ordinal))
+        {
+            return "Usage responses";
+        }
+
+        return "Shared models";
+    }
+
+    private static int SchemaSort(string group) => group switch
+    {
+        "Request payloads" => 0,
+        "State responses" => 1,
+        "Usage responses" => 2,
+        _ => 3
+    };
+
+    private static IReadOnlyList<string> EnumValues(Type type) =>
+        type.IsEnum ? Enum.GetNames(type) : Array.Empty<string>();
+
+    private static IReadOnlyList<SchemaField> SchemaFields(Type type)
+    {
+        if (type.IsEnum)
+        {
+            return Array.Empty<SchemaField>();
+        }
+
+        var ctor = type.GetConstructors()
+            .OrderByDescending(c => c.GetParameters().Length)
+            .FirstOrDefault(c => c.GetParameters().Length > 0);
+
+        if (ctor is not null)
+        {
+            return ctor.GetParameters()
+                .Select(p => new SchemaField(ToJsonName(p.Name ?? ""), DisplayType(p.ParameterType, IsNullable(p)), FieldState(p)))
+                .ToList();
+        }
+
+        return type.GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Where(p => p.GetMethod is not null)
+            .Select(p => new SchemaField(ToJsonName(p.Name), DisplayType(p.PropertyType, IsNullable(p)), FieldState(p)))
+            .ToList();
+    }
+
+    private static bool IsNullable(ParameterInfo parameter) =>
+        Nullable.GetUnderlyingType(parameter.ParameterType) is not null
+        || Nullability.Create(parameter).ReadState == NullabilityState.Nullable;
+
+    private static bool IsNullable(PropertyInfo property) =>
+        Nullable.GetUnderlyingType(property.PropertyType) is not null
+        || Nullability.Create(property).ReadState == NullabilityState.Nullable;
+
+    private static string FieldState(ParameterInfo parameter) =>
+        parameter.HasDefaultValue ? "optional" : IsNullable(parameter) ? "nullable" : "required";
+
+    private static string FieldState(PropertyInfo property) => IsNullable(property) ? "nullable" : "required";
+
+    private static string DisplayType(Type type, bool nullable)
+    {
+        var name = DisplayTypeCore(Nullable.GetUnderlyingType(type) ?? type);
+        return nullable && !name.EndsWith('?') ? $"{name}?" : name;
+    }
+
+    private static string DisplayTypeCore(Type type)
+    {
+        if (type == typeof(string))
+        {
+            return "string";
+        }
+
+        if (type == typeof(bool))
+        {
+            return "boolean";
+        }
+
+        if (type == typeof(int) || type == typeof(long))
+        {
+            return "integer";
+        }
+
+        if (type == typeof(double) || type == typeof(float) || type == typeof(decimal))
+        {
+            return "number";
+        }
+
+        if (type == typeof(DateTimeOffset) || type == typeof(DateTime))
+        {
+            return "string(date-time)";
+        }
+
+        if (type.IsArray)
+        {
+            return $"{DisplayTypeCore(type.GetElementType() ?? typeof(object))}[]";
+        }
+
+        if (type.IsGenericType)
+        {
+            var definition = type.GetGenericTypeDefinition();
+            if (definition == typeof(IReadOnlyList<>) || definition == typeof(List<>) || definition == typeof(IEnumerable<>))
+            {
+                return $"{DisplayTypeCore(type.GetGenericArguments()[0])}[]";
+            }
+        }
+
+        return type.Name;
+    }
+
+    private static string ToJsonName(string name) =>
+        string.IsNullOrEmpty(name) ? name : char.ToLowerInvariant(name[0]) + name[1..];
+
+    private sealed record ApiEndpoint(
+        string Method,
+        string Path,
+        string Group,
+        string Summary,
+        string Auth,
+        string Body,
+        string Response,
+        string? Query,
+        string Safety,
+        IReadOnlyList<string> Statuses,
+        IReadOnlyList<string> Tags,
+        string Example,
+        IReadOnlyList<string> Notes)
+    {
+        public string Anchor => $"api-{Method.ToLowerInvariant()}-{Slug(Path)}";
+    }
+
+    private sealed record SchemaDoc(string Name, string Group, IReadOnlyList<SchemaField> Fields, IReadOnlyList<string> EnumValues);
+
+    private sealed record SchemaField(string Name, string Type, string State);
+}
