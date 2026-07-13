@@ -28,7 +28,8 @@ public sealed class AcDefenderService
 
     /// <summary>
     /// The 24/7 decision cycle. Reads real Home Assistant data, then walks the defender guards in order
-    /// (emergency → cool-mode restore → schedule/weather → upstairs comfort → wall-touch holds →
+    /// (emergency → deliberate shutdowns → schedule/weather → upstairs/outdoor comfort →
+    /// cool-mode restore → wall-touch holds →
     /// expected setpoint → sensor-timing holds → command shaping → send). The first guard that wants to
     /// wait stops the cycle and records the next action. See <c>Guards/GuardCatalog.cs</c> and
     /// <c>docs/wiki/Defender-Logic.md</c> for the full per-algorithm reference.
@@ -203,6 +204,27 @@ public sealed class AcDefenderService
                 return;
             }
 
+            // Resolve target/comfort context and the outdoor power rule BEFORE either the
+            // Desired-State Enforcer or ordinary cool-mode restore can send a command. When the
+            // thermostat is already off and it is cold enough outside to stand down, checking the
+            // rule later would restore COOL now and only silence the defender on the next five-second
+            // poll. That creates a real, brief AC activation even though this cycle already has the
+            // outdoor reading needed to avoid it.
+            var rules = stateStore.ApplyScheduleAndWeatherRules(reading);
+            var comfort = stateStore.ApplyComfortRules(reading);
+            var quietBypassNow = DateTimeOffset.UtcNow;
+            var coolerIntentBypass = stateStore.ShouldBypassQuietTimingForCoolerIntent(reading, quietBypassNow);
+            var superDefenderBypass = stateStore.ShouldBypassQuietTimingForSuperDefender(reading, quietBypassNow);
+            var rivalScheduleBypass = stateStore.ShouldBypassQuietTimingForRivalSchedule(reading, quietBypassNow);
+            var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass || superDefenderBypass || rivalScheduleBypass;
+
+            // Outdoor power rule: silence when it is cold outside (<20 C), lite mode between 20-22 C.
+            if (stateStore.TryRespectOutdoorPowerRule(reading, bypassQuietTiming, quietBypassNow, out var outdoorUntil, out var outdoorMessage))
+            {
+                stateStore.SetNextAction(outdoorMessage, outdoorUntil);
+                return;
+            }
+
             // Desired-State Enforcer: the assertive layer that makes the owner's chosen state win. When it
             // acts (or holds), it short-circuits the cycle; when Inactive it falls through to the stealth
             // pipeline unchanged.
@@ -253,24 +275,9 @@ public sealed class AcDefenderService
                 return;
             }
 
-            var rules = stateStore.ApplyScheduleAndWeatherRules(reading);
-            var comfort = stateStore.ApplyComfortRules(reading);
             if (!rules.WeatherAllowsDefender && !comfort.Active)
             {
                 stateStore.SetNextAction($"Weather rule '{rules.WeatherActivationMode}' is not met; checking again.", nextCheck);
-                return;
-            }
-
-            var quietBypassNow = DateTimeOffset.UtcNow;
-            var coolerIntentBypass = stateStore.ShouldBypassQuietTimingForCoolerIntent(reading, quietBypassNow);
-            var superDefenderBypass = stateStore.ShouldBypassQuietTimingForSuperDefender(reading, quietBypassNow);
-            var rivalScheduleBypass = stateStore.ShouldBypassQuietTimingForRivalSchedule(reading, quietBypassNow);
-            var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass || superDefenderBypass || rivalScheduleBypass;
-
-            // Outdoor power rule: silence when it is cold outside (<20 C), lite mode between 20-22 C.
-            if (stateStore.TryRespectOutdoorPowerRule(reading, bypassQuietTiming, quietBypassNow, out var outdoorUntil, out var outdoorMessage))
-            {
-                stateStore.SetNextAction(outdoorMessage, outdoorUntil);
                 return;
             }
 

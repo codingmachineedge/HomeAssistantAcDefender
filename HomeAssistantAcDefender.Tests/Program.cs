@@ -39,6 +39,7 @@ tests.HistoryLearningBuildsHumanComfortProfileAndCadence();
 tests.MachineLearningTrainerLearnsAngerAndComfortPatterns();
 tests.AdjustmentStatisticsSplitByPresenceAndBedroomOccupancy();
 tests.OutdoorPowerRuleSilencesWhenColdLiteWhenMildButYieldsToHotRoom();
+await tests.ColdOutdoorRulePreventsFiveSecondCoolModeBlipAsync();
 tests.AccountSignupOwnerThenCodeGatedAndValidates();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
@@ -3101,6 +3102,76 @@ internal sealed class DefenderSetPointRegressionTests
         }
     }
 
+    public async Task ColdOutdoorRulePreventsFiveSecondCoolModeBlipAsync()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var defenderOptions = new DefenderOptions
+            {
+                OutdoorPowerRuleEnabled = true,
+                OutdoorSilenceBelowCelsius = 20.0,
+                OutdoorLiteBelowCelsius = 22.0,
+                PollIntervalSeconds = 5,
+            };
+            using var fixture = DefenderStoreFixture.Create(contentRoot, defenderOptions);
+
+            // Isolate the ordinary cold-outdoor power rule. The thermostat starts OFF and the
+            // five-second worker cycle must not briefly restore COOL before noticing 18 C outdoors.
+            var settings = fixture.Store.GetSettings();
+            settings.NightShutdownEnabled = false;
+            settings.CoolOutdoorShutdownEnabled = false;
+            settings.CoolingRestEnabled = false;
+            settings.SiestaEnabled = false;
+            settings.FrontDoorKillSwitchEnabled = false;
+            settings.CoolingFailureWatchEnabled = false;
+            settings.CoolModeRestoreDelayEnabled = false;
+            settings.EnforcerModeEnabled = false;
+            SetRuntimeProperty(fixture.Store, "Settings", settings);
+
+            var homeAssistantOptions = new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room",
+                OutdoorTemperatureEntityId = "sensor.outdoor_temperature",
+                UsagePowerEntityId = "",
+            };
+            var defenderMonitor = new FixedOptionsMonitor<DefenderOptions>(defenderOptions);
+            var homeAssistantMonitor = new FixedOptionsMonitor<HomeAssistantOptions>(homeAssistantOptions);
+            var handler = new ColdOutdoorHomeAssistantHandler();
+            using var httpClient = new HttpClient(handler);
+            var homeAssistantClient = new HomeAssistantClient(
+                httpClient,
+                homeAssistantMonitor,
+                NullLogger<HomeAssistantClient>.Instance);
+            var service = new AcDefenderService(
+                fixture.Store,
+                homeAssistantClient,
+                defenderMonitor,
+                homeAssistantMonitor,
+                NullLogger<AcDefenderService>.Instance);
+
+            await service.RunCycleAsync(CancellationToken.None);
+
+            if (handler.ClimateServiceCalls.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    $"Cold-outdoor silence must not turn the real thermostat on between five-second polls; calls: {string.Join(", ", handler.ClimateServiceCalls)}");
+            }
+
+            var snapshot = fixture.Store.GetSnapshot();
+            if (!snapshot.NextAction.Contains("Silenced", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Cold-outdoor cycle should report the silence decision, got: {snapshot.NextAction}");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
     public void AccountSignupOwnerThenCodeGatedAndValidates()
     {
         var dir = Path.Combine(Path.GetTempPath(), "acd_acct_" + Guid.NewGuid().ToString("N"));
@@ -4830,4 +4901,66 @@ internal sealed class TestWebHostEnvironment(string contentRootPath) : IWebHostE
     public string WebRootPath { get; set; } = contentRootPath;
 
     public IFileProvider WebRootFileProvider { get; set; } = new PhysicalFileProvider(contentRootPath);
+}
+
+internal sealed class FixedOptionsMonitor<T>(T value) : IOptionsMonitor<T>
+{
+    public T CurrentValue => value;
+
+    public T Get(string? name) => value;
+
+    public IDisposable OnChange(Action<T, string?> listener) => NoopDisposable.Instance;
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public static readonly NoopDisposable Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
+}
+
+internal sealed class ColdOutdoorHomeAssistantHandler : HttpMessageHandler
+{
+    public List<string> ClimateServiceCalls { get; } = [];
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var path = request.RequestUri?.AbsolutePath.TrimStart('/') ?? string.Empty;
+        if (request.Method == HttpMethod.Post
+            && path.StartsWith("api/services/climate/", StringComparison.OrdinalIgnoreCase))
+        {
+            ClimateServiceCalls.Add(path);
+            return Task.FromResult(JsonResponse("[]"));
+        }
+
+        if (request.Method == HttpMethod.Post)
+        {
+            return Task.FromResult(JsonResponse("{}"));
+        }
+
+        var body = path switch
+        {
+            "api/states" => "[]",
+            "api/states/climate.dining_room" =>
+                "{\"entity_id\":\"climate.dining_room\",\"state\":\"off\",\"attributes\":{\"current_temperature\":22.3,\"temperature\":22.0,\"hvac_action\":\"off\",\"fan_modes\":[],\"min_temp\":16.0,\"max_temp\":30.0},\"context\":{\"id\":\"test-context\",\"parent_id\":null,\"user_id\":null}}",
+            "api/states/sensor.outdoor_temperature" =>
+                "{\"entity_id\":\"sensor.outdoor_temperature\",\"state\":\"18.0\",\"attributes\":{\"friendly_name\":\"Outdoor temperature\",\"unit_of_measurement\":\"°C\"}}",
+            _ when path.StartsWith("api/history/period/", StringComparison.OrdinalIgnoreCase) => "[]",
+            _ => string.Empty,
+        };
+
+        return Task.FromResult(string.IsNullOrEmpty(body)
+            ? JsonResponse("{}", System.Net.HttpStatusCode.NotFound)
+            : JsonResponse(body));
+    }
+
+    private static HttpResponseMessage JsonResponse(
+        string json,
+        System.Net.HttpStatusCode statusCode = System.Net.HttpStatusCode.OK)
+        => new(statusCode)
+        {
+            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+        };
 }
