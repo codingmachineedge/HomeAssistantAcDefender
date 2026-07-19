@@ -6,11 +6,11 @@
             <div class="section-card__heading">
                 @if (!string.IsNullOrWhiteSpace(Title))
                 {
-                    <MudText Typo="Typo.overline" Class="i18n-both">@Lang.T(LangMode, Title)</MudText>
+                    <MudText Typo="Typo.overline" HtmlTag="h2" Class="i18n-both">@Lang.T(LangMode, Title)</MudText>
                 }
                 @if (!string.IsNullOrWhiteSpace(Subtitle))
                 {
-                    <MudText Typo="Typo.h6" Class="i18n-both">@Lang.T(LangMode, Subtitle)</MudText>
+                    <MudText Typo="Typo.h6" HtmlTag="h3" Class="i18n-both">@Lang.T(LangMode, Subtitle)</MudText>
                 }
                 @if (!string.IsNullOrWhiteSpace(Help))
                 {

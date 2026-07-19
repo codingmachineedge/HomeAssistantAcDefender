@@ -12,7 +12,8 @@ The application is one ASP.NET Core process with two responsibilities:
 
 ## Main Components
 
-- `HomeAssistantClient`: Calls Home Assistant REST endpoints for climate, weather, temperature, and fan services.
+- `HomeAssistantClient`: Calls Home Assistant REST endpoints for climate, weather, temperature, and fan services. It also caches the installation coordinates returned by `/api/config`.
+- `OpenMeteoWeatherClient`: A credential-isolated, key-free backup for real current weather and a 48-hour hourly forecast. Home Assistant remains primary; the backup is cached for at least ten minutes and never receives an HA token. Weather data is provided by [Open-Meteo](https://open-meteo.com/) under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - `DefenderStateStore`: Persists target, settings, schedule, weather, audit log, cooldown state, Comfort Sync timing, and command tracking.
 - `AcDefenderService`: Runs the defender cycle and executes real Home Assistant corrections.
 - `AcDefenderWorker`: Runs `AcDefenderService` continuously using the configured polling interval.

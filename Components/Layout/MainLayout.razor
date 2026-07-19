@@ -14,6 +14,7 @@
 
 <CascadingValue Value="_langMode" Name="LangMode">
 <div class="@RootClass">
+    <a class="ops-skip-link" href="#main-content">Skip to main content</a>
 
     @* ═════════ COMMAND BAR ═════════ *@
     <header class="ops-header">
@@ -46,17 +47,17 @@
         </div>
 
         <div class="ops-lang" role="group" aria-label="Language">
-            <button class="@LangBtnClass(Lang.English)" @onclick="@(() => SetLangMode(Lang.English))" title="English">EN</button>
-            <button class="@LangBtnClass(Lang.Cantonese)" @onclick="@(() => SetLangMode(Lang.Cantonese))" title="口語廣東話">粵</button>
-            <button class="@LangBtnClass(Lang.Both)" @onclick="@(() => SetLangMode(Lang.Both))" title="English + 廣東話">EN+粵</button>
+            <button class="@LangBtnClass(Lang.English)" @onclick="@(() => SetLangMode(Lang.English))" aria-label="English" aria-pressed="@(_langMode == Lang.English ? "true" : "false")" title="English">EN</button>
+            <button class="@LangBtnClass(Lang.Cantonese)" @onclick="@(() => SetLangMode(Lang.Cantonese))" aria-label="Cantonese" aria-pressed="@(_langMode == Lang.Cantonese ? "true" : "false")" title="口語廣東話">粵</button>
+            <button class="@LangBtnClass(Lang.Both)" @onclick="@(() => SetLangMode(Lang.Both))" aria-label="EN+粵 — English and Cantonese" aria-pressed="@(_langMode == Lang.Both ? "true" : "false")" title="English + 廣東話">EN+粵</button>
         </div>
 
         <button class="ops-icon-btn" @onclick="SignOut" aria-label="Sign out" title="Sign out">⏻</button>
-        <button class="ops-icon-btn" @onclick="ToggleTheme" aria-label="@ThemeTooltip" title="@ThemeTooltip">@ThemeGlyph</button>
+        <button class="ops-icon-btn" @onclick="ToggleTheme" aria-label="Dark theme" aria-pressed="@(_isDarkMode ? "true" : "false")" title="@ThemeTooltip">@ThemeGlyph</button>
     </header>
 
     @* ═════════ CLASSIFICATION STRIP (per-page hazard ribbon) ═════════ *@
-    <div class="ops-classified" role="note">@PageStrip</div>
+    <aside class="ops-classified" aria-label="Page classification">@PageStrip</aside>
 
     <div class="ops-body">
 
@@ -66,7 +67,7 @@
             @foreach (var item in Stations)
             {
                 var tag = StationTag(item);
-                <a href="@item.Href" class="@RailClass(item)">
+                <a href="@item.Href" class="@RailClass(item)" aria-current="@(IsActive(item) ? "page" : null)">
                     <span class="ops-rail__glyph" aria-hidden="true">@item.Glyph</span>
                     <span class="i18n-both">@L(item.Label)</span>
                     <span class="ops-rail__spacer"></span>
@@ -78,13 +79,13 @@
 
             <div class="ops-master">
                 <div class="ops-master__label">@L("CONTAINMENT MASTER")</div>
-                <button class="@MasterBtnClass" @onclick="ToggleDefender">@L(MasterText)</button>
+                <button class="@MasterBtnClass" @onclick="ToggleDefender" aria-pressed="@(DefenderIsEnabled ? "true" : "false")">@L(MasterText)</button>
                 <div class="ops-master__help i18n-both">@L(MasterHelp)</div>
             </div>
         </nav>
 
         @* ═════════ MAIN ═════════ *@
-        <main class="ops-main">
+        <main id="main-content" class="ops-main" tabindex="-1">
 
             @if (BannerVisible)
             {
@@ -121,12 +122,12 @@
     <nav class="ops-mobile-nav" aria-label="Primary mobile">
         @foreach (var item in Stations.Where(s => s.Mobile))
         {
-            <a href="@item.Href" class="@MobileClass(item)">
+            <a href="@item.Href" class="@MobileClass(item)" aria-current="@(IsActive(item) ? "page" : null)">
                 <div class="ops-mobile-nav__glyph" aria-hidden="true">@item.Glyph</div>
                 <div class="ops-mobile-nav__label">@(_langMode == Lang.Cantonese ? L(item.Label) : item.Label)</div>
             </a>
         }
-        <button class="@MobileMasterClass" @onclick="ToggleDefender" aria-label="@(DefenderIsEnabled ? "Stand down" : "Re-contain")">
+        <button class="@MobileMasterClass" @onclick="ToggleDefender" aria-label="@(DefenderIsEnabled ? "Stand down" : "Re-contain")" aria-pressed="@(DefenderIsEnabled ? "true" : "false")">
             <div class="ops-mobile-nav__glyph" aria-hidden="true">@(DefenderIsEnabled ? "⛨" : "⏻")</div>
             <div class="ops-mobile-nav__label">@(DefenderIsEnabled ? "ON DUTY" : "PAUSED")</div>
         </button>
@@ -186,11 +187,17 @@
         try
         {
             await JS.InvokeVoidAsync("localStorage.setItem", "ac-defender-lang", _langMode);
+            await UpdateDocumentLanguageAsync();
         }
         catch
         {
         }
     }
+
+    private ValueTask UpdateDocumentLanguageAsync() =>
+        JS.InvokeVoidAsync(
+            "acAccessibility.setDocumentLanguage",
+            _langMode == Lang.Cantonese ? "yue-Hant" : "en");
 
     private const int BootDoneStep = 14;
 
@@ -211,7 +218,7 @@
         PaletteLight = new PaletteLight
         {
             Primary = "#0e7a52",
-            Secondary = "#68737b",
+            Secondary = "#566169",
             Info = "#0e7a52",
             Success = "#0e7a52",
             Warning = "#9a6605",
@@ -223,14 +230,14 @@
             DrawerBackground = "#f7f5ef",
             DrawerText = "#1c2429",
             TextPrimary = "#1c2429",
-            TextSecondary = "#68737b",
-            ActionDefault = "#68737b",
+            TextSecondary = "#566169",
+            ActionDefault = "#566169",
             LinesDefault = "#c9c3b2"
         },
         PaletteDark = new PaletteDark
         {
             Primary = "#3ddc97",
-            Secondary = "#6d7c86",
+            Secondary = "#82939e",
             Info = "#4fc3ff",
             Success = "#3ddc97",
             Warning = "#ffb347",
@@ -242,8 +249,8 @@
             DrawerBackground = "#0d1116",
             DrawerText = "#d9e2e6",
             TextPrimary = "#d9e2e6",
-            TextSecondary = "#6d7c86",
-            ActionDefault = "#6d7c86",
+            TextSecondary = "#82939e",
+            ActionDefault = "#82939e",
             LinesDefault = "#2a3742"
         },
         Typography = new Typography
@@ -413,7 +420,16 @@
             return;
         }
 
-        StateStore.SetDefenderEnabled(enable);
+        try
+        {
+            await Defender.SetDefenderEnabledAsync(enable, CancellationToken.None);
+        }
+        catch (ThermostatOperationSupersededException)
+        {
+            State.Refresh();
+            Snackbar.Add("A newer defender switch action won; refreshed the live state.", Severity.Info);
+            return;
+        }
         State.Refresh();
         Snackbar.Add(enable ? "Defender turned on." : "Defender paused. The real thermostat can be turned off from Controls.", Severity.Info);
 
@@ -513,6 +529,8 @@
             {
                 _langMode = Lang.NormalizeMode(savedLang);
             }
+
+            await UpdateDocumentLanguageAsync();
 
             StateHasChanged();
         }

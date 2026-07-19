@@ -8,22 +8,22 @@
 
     <div class="ops-comfort-metrics">
         <div class="ops-panel" style="padding: 14px 16px;">
-            <div class="ops-panel__label">GUARD</div>
+            <h2 class="ops-panel__label">GUARD</h2>
             <div class="ops-comfort-metric__value" style="color: @GuardColor;">@GuardText</div>
             <div class="helper-text">@GuardHelp</div>
         </div>
         <div class="ops-panel" style="padding: 14px 16px;">
-            <div class="ops-panel__label">HOTTEST UPSTAIRS</div>
+            <h2 class="ops-panel__label">HOTTEST UPSTAIRS</h2>
             <div class="ops-comfort-metric__value" style="color: var(--warn);">@HottestUpstairsText</div>
             <div class="helper-text">@HottestUpstairsHelp</div>
         </div>
         <div class="ops-panel" style="padding: 14px 16px;">
-            <div class="ops-panel__label">PRESENCE</div>
+            <h2 class="ops-panel__label">PRESENCE</h2>
             <div class="ops-comfort-metric__value">@PresenceText</div>
             <div class="helper-text">@PresenceHelp</div>
         </div>
         <div class="ops-panel" style="padding: 14px 16px;">
-            <div class="ops-panel__label">SENSORS</div>
+            <h2 class="ops-panel__label">SENSORS</h2>
             <div class="ops-comfort-metric__value">@SensorCountText</div>
             <div class="helper-text">@SensorCountHelp</div>
         </div>
@@ -31,7 +31,7 @@
 
     <div class="ops-comfort-grid">
         <div class="ops-panel ops-panel--pad">
-            <div class="ops-panel__label">@SensorArrayLabel</div>
+            <h2 class="ops-panel__label">@SensorArrayLabel</h2>
             <div class="ops-sensor-list">
                 @if (!HomeAssistantOnline)
                 {
@@ -59,7 +59,7 @@
         </div>
 
         <div class="ops-panel ops-panel--pad">
-            <div class="ops-panel__label">@PresenceArrayLabel</div>
+            <h2 class="ops-panel__label">@PresenceArrayLabel</h2>
             <div class="ops-dash-stack" style="gap: 6px;">
                 @if (!HomeAssistantOnline)
                 {

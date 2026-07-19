@@ -15,6 +15,7 @@ public class TwoFactorAuth
     private readonly string _authConfigFilePath;
     private readonly IConfiguration _configuration;
     private readonly ILogger<TwoFactorAuth> _logger;
+    private readonly object _gate = new();
 
     private bool _passwordEnabled;
     private byte[]? _passwordHash;
@@ -35,20 +36,38 @@ public class TwoFactorAuth
         public DateTimeOffset CreatedAt { get; set; }
     }
 
-    public bool HasAnyAccount => _accounts.Count > 0;
-    public bool HasRegistrationCode => !string.IsNullOrEmpty(_registrationCode);
-    public int AccountCount => _accounts.Count;
-    public IReadOnlyList<string> AccountUsernames => _accounts.Select(a => a.IsOwner ? $"{a.Username} (owner)" : a.Username).ToList();
+    public bool HasAnyAccount { get { lock (_gate) return _accounts.Count > 0; } }
+    public bool HasRegistrationCode { get { lock (_gate) return !string.IsNullOrEmpty(_registrationCode); } }
+    public int AccountCount { get { lock (_gate) return _accounts.Count; } }
+    public IReadOnlyList<string> AccountUsernames
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _accounts.Select(a => a.IsOwner ? $"{a.Username} (owner)" : a.Username).ToList();
+            }
+        }
+    }
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(_secret);
-    public string? ManualKey => _secret;
+    public bool IsConfigured { get { lock (_gate) return !string.IsNullOrWhiteSpace(_secret); } }
+    public string? ManualKey { get { lock (_gate) return _secret; } }
 
     /// <summary>A password value is configured (via file or app config).</summary>
-    public bool HasPassword => _passwordHash is not null || !string.IsNullOrEmpty(_configPassword);
+    public bool HasPassword { get { lock (_gate) return _passwordHash is not null || !string.IsNullOrEmpty(_configPassword); } }
 
     /// <summary>Password login is switched on and a password value is actually set.</summary>
-    public bool IsPasswordEnabled => (_passwordEnabled && _passwordHash is not null)
-                                     || !string.IsNullOrEmpty(_configPassword);
+    public bool IsPasswordEnabled
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return (_passwordEnabled && _passwordHash is not null)
+                    || !string.IsNullOrEmpty(_configPassword);
+            }
+        }
+    }
 
     public TwoFactorAuth(IConfiguration configuration, IWebHostEnvironment env, ILogger<TwoFactorAuth> logger)
     {
@@ -94,6 +113,8 @@ public class TwoFactorAuth
         }
 
         LoadAuthConfig();
+        TryHardenPrivateFile(_secretFilePath);
+        TryHardenPrivateFile(_authConfigFilePath);
     }
 
     private void LoadAuthConfig()
@@ -183,8 +204,65 @@ public class TwoFactorAuth
             }).ToArray(),
             updatedAt = DateTimeOffset.UtcNow
         });
-        File.WriteAllText(_authConfigFilePath, content);
+        var tempPath = $"{_authConfigFilePath}.{Guid.NewGuid():N}.tmp";
+        WritePrivateFileAtomic(tempPath, _authConfigFilePath, content);
         _logger.LogInformation("Auth config saved to file");
+    }
+
+    private static void WritePrivateFileAtomic(string tempPath, string destinationPath, string content)
+    {
+        try
+        {
+            var streamOptions = new FileStreamOptions
+            {
+                Access = FileAccess.Write,
+                Mode = FileMode.CreateNew,
+                Share = FileShare.None,
+                Options = FileOptions.WriteThrough
+            };
+            if (!OperatingSystem.IsWindows())
+            {
+                streamOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            }
+
+            using (var stream = new FileStream(tempPath, streamOptions))
+            using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                writer.Write(content);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(tempPath, destinationPath, overwrite: true);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(destinationPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+    }
+
+    private void TryHardenPrivateFile(string path)
+    {
+        if (OperatingSystem.IsWindows() || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not restrict permissions on private auth file {FileName}", Path.GetFileName(path));
+        }
     }
 
     /// <summary>Sets (or replaces) the login password and turns password login on.</summary>
@@ -193,31 +271,77 @@ public class TwoFactorAuth
         if (string.IsNullOrEmpty(password))
             throw new ArgumentException("Password must not be empty.", nameof(password));
 
-        _passwordSalt = RandomNumberGenerator.GetBytes(PasswordSaltBytes);
-        _passwordHash = Rfc2898DeriveBytes.Pbkdf2(
+        var passwordSalt = RandomNumberGenerator.GetBytes(PasswordSaltBytes);
+        var passwordHash = Rfc2898DeriveBytes.Pbkdf2(
             password,
-            _passwordSalt,
+            passwordSalt,
             PasswordIterations,
             HashAlgorithmName.SHA256,
             PasswordHashBytes);
-        _passwordEnabled = true;
-        SaveAuthConfig();
+        lock (_gate)
+        {
+            var previousSalt = _passwordSalt;
+            var previousHash = _passwordHash;
+            var previousEnabled = _passwordEnabled;
+            _passwordSalt = passwordSalt;
+            _passwordHash = passwordHash;
+            _passwordEnabled = true;
+            try
+            {
+                SaveAuthConfig();
+            }
+            catch
+            {
+                _passwordSalt = previousSalt;
+                _passwordHash = previousHash;
+                _passwordEnabled = previousEnabled;
+                throw;
+            }
+        }
     }
 
     /// <summary>Removes the stored password and turns password login off.</summary>
     public void ClearPassword()
     {
-        _passwordHash = null;
-        _passwordSalt = null;
-        _passwordEnabled = false;
-        SaveAuthConfig();
+        lock (_gate)
+        {
+            var previousHash = _passwordHash;
+            var previousSalt = _passwordSalt;
+            var previousEnabled = _passwordEnabled;
+            _passwordHash = null;
+            _passwordSalt = null;
+            _passwordEnabled = false;
+            try
+            {
+                SaveAuthConfig();
+            }
+            catch
+            {
+                _passwordHash = previousHash;
+                _passwordSalt = previousSalt;
+                _passwordEnabled = previousEnabled;
+                throw;
+            }
+        }
     }
 
     /// <summary>Turns password login on or off without changing the stored value.</summary>
     public void SetPasswordEnabled(bool enabled)
     {
-        _passwordEnabled = enabled;
-        SaveAuthConfig();
+        lock (_gate)
+        {
+            var previousEnabled = _passwordEnabled;
+            _passwordEnabled = enabled;
+            try
+            {
+                SaveAuthConfig();
+            }
+            catch
+            {
+                _passwordEnabled = previousEnabled;
+                throw;
+            }
+        }
     }
 
     public bool ValidatePassword(string? password)
@@ -225,21 +349,31 @@ public class TwoFactorAuth
         if (string.IsNullOrEmpty(password))
             return false;
 
-        if (!string.IsNullOrEmpty(_configPassword))
-            return CryptographicOperations.FixedTimeEquals(
-                Encoding.UTF8.GetBytes(password),
-                Encoding.UTF8.GetBytes(_configPassword));
+        byte[]? passwordHash;
+        byte[]? passwordSalt;
+        lock (_gate)
+        {
+            if (!string.IsNullOrEmpty(_configPassword))
+            {
+                return CryptographicOperations.FixedTimeEquals(
+                    Encoding.UTF8.GetBytes(password),
+                    Encoding.UTF8.GetBytes(_configPassword));
+            }
 
-        if (_passwordHash is null || _passwordSalt is null)
+            passwordHash = _passwordHash?.ToArray();
+            passwordSalt = _passwordSalt?.ToArray();
+        }
+
+        if (passwordHash is null || passwordSalt is null)
             return false;
 
         var candidate = Rfc2898DeriveBytes.Pbkdf2(
             password,
-            _passwordSalt,
+            passwordSalt,
             PasswordIterations,
             HashAlgorithmName.SHA256,
             PasswordHashBytes);
-        return CryptographicOperations.FixedTimeEquals(candidate, _passwordHash);
+        return CryptographicOperations.FixedTimeEquals(candidate, passwordHash);
     }
 
     // ───────────────────────── Accounts ─────────────────────────
@@ -264,43 +398,55 @@ public class TwoFactorAuth
             return false;
         }
 
-        if (_accounts.Any(a => string.Equals(a.Username, username, StringComparison.OrdinalIgnoreCase)))
+        lock (_gate)
         {
-            error = "That username is already taken.";
-            return false;
-        }
-
-        var isOwner = _accounts.Count == 0;
-        if (!isOwner)
-        {
-            if (!HasRegistrationCode)
+            if (_accounts.Any(a => string.Equals(a.Username, username, StringComparison.OrdinalIgnoreCase)))
             {
-                error = "Sign-ups are closed until the owner sets a registration code.";
+                error = "That username is already taken.";
                 return false;
             }
 
-            if (!CryptographicOperations.FixedTimeEquals(
-                    Encoding.UTF8.GetBytes((registrationCode ?? string.Empty).Trim()),
-                    Encoding.UTF8.GetBytes(_registrationCode!)))
+            var isOwner = _accounts.Count == 0;
+            if (!isOwner)
             {
-                error = "Incorrect registration code.";
-                return false;
-            }
-        }
+                if (string.IsNullOrEmpty(_registrationCode))
+                {
+                    error = "Sign-ups are closed until the owner sets a registration code.";
+                    return false;
+                }
 
-        var salt = RandomNumberGenerator.GetBytes(PasswordSaltBytes);
-        var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, PasswordIterations, HashAlgorithmName.SHA256, PasswordHashBytes);
-        _accounts.Add(new Account
-        {
-            Username = username,
-            PasswordHash = Convert.ToBase64String(hash),
-            PasswordSalt = Convert.ToBase64String(salt),
-            IsOwner = isOwner,
-            CreatedAt = DateTimeOffset.UtcNow
-        });
-        SaveAuthConfig();
-        _logger.LogInformation("Account created '{Username}' (owner={Owner})", username, isOwner);
-        return true;
+                if (!CryptographicOperations.FixedTimeEquals(
+                        Encoding.UTF8.GetBytes((registrationCode ?? string.Empty).Trim()),
+                        Encoding.UTF8.GetBytes(_registrationCode)))
+                {
+                    error = "Incorrect registration code.";
+                    return false;
+                }
+            }
+
+            var salt = RandomNumberGenerator.GetBytes(PasswordSaltBytes);
+            var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, PasswordIterations, HashAlgorithmName.SHA256, PasswordHashBytes);
+            var account = new Account
+            {
+                Username = username,
+                PasswordHash = Convert.ToBase64String(hash),
+                PasswordSalt = Convert.ToBase64String(salt),
+                IsOwner = isOwner,
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            _accounts.Add(account);
+            try
+            {
+                SaveAuthConfig();
+            }
+            catch
+            {
+                _accounts.Remove(account);
+                throw;
+            }
+            _logger.LogInformation("Account created '{Username}' (owner={Owner})", username, isOwner);
+            return true;
+        }
     }
 
     /// <summary>Validates a username + password against the stored accounts.</summary>
@@ -311,16 +457,22 @@ public class TwoFactorAuth
             return false;
         }
 
-        var account = _accounts.FirstOrDefault(a => string.Equals(a.Username, username.Trim(), StringComparison.OrdinalIgnoreCase));
-        if (account is null)
+        string? passwordSalt;
+        string? passwordHash;
+        lock (_gate)
         {
-            return false;
+            var account = _accounts.FirstOrDefault(a => string.Equals(a.Username, username.Trim(), StringComparison.OrdinalIgnoreCase));
+            passwordSalt = account?.PasswordSalt;
+            passwordHash = account?.PasswordHash;
         }
+
+        if (passwordSalt is null || passwordHash is null)
+            return false;
 
         try
         {
-            var salt = Convert.FromBase64String(account.PasswordSalt);
-            var expected = Convert.FromBase64String(account.PasswordHash);
+            var salt = Convert.FromBase64String(passwordSalt);
+            var expected = Convert.FromBase64String(passwordHash);
             var candidate = Rfc2898DeriveBytes.Pbkdf2(password, salt, PasswordIterations, HashAlgorithmName.SHA256, PasswordHashBytes);
             return CryptographicOperations.FixedTimeEquals(candidate, expected);
         }
@@ -333,8 +485,20 @@ public class TwoFactorAuth
     /// <summary>Owner-set code required for additional sign-ups. Empty/null closes sign-ups.</summary>
     public void SetRegistrationCode(string? code)
     {
-        _registrationCode = string.IsNullOrWhiteSpace(code) ? null : code.Trim();
-        SaveAuthConfig();
+        lock (_gate)
+        {
+            var previousCode = _registrationCode;
+            _registrationCode = string.IsNullOrWhiteSpace(code) ? null : code.Trim();
+            try
+            {
+                SaveAuthConfig();
+            }
+            catch
+            {
+                _registrationCode = previousCode;
+                throw;
+            }
+        }
     }
 
     public string GenerateNewSecret()
@@ -345,16 +509,21 @@ public class TwoFactorAuth
 
     public void SaveSecret(string secret)
     {
-        _secret = secret.Trim();
-        var dir = Path.GetDirectoryName(_secretFilePath);
-        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        lock (_gate)
         {
-            Directory.CreateDirectory(dir);
-        }
+            var newSecret = secret.Trim();
+            var dir = Path.GetDirectoryName(_secretFilePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
 
-        var content = JsonSerializer.Serialize(new { secret = _secret, configuredAt = DateTimeOffset.UtcNow });
-        File.WriteAllText(_secretFilePath, content);
-        _logger.LogInformation("TOTP secret saved to file");
+            var content = JsonSerializer.Serialize(new { secret = newSecret, configuredAt = DateTimeOffset.UtcNow });
+            var tempPath = $"{_secretFilePath}.{Guid.NewGuid():N}.tmp";
+            WritePrivateFileAtomic(tempPath, _secretFilePath, content);
+            _secret = newSecret;
+            _logger.LogInformation("TOTP secret saved to file");
+        }
     }
 
     public bool ValidateCode(string secret, string code)
@@ -381,9 +550,15 @@ public class TwoFactorAuth
 
     public bool ValidateCurrentCode(string code)
     {
-        if (_secret == null)
+        string? secret;
+        lock (_gate)
+        {
+            secret = _secret;
+        }
+
+        if (secret == null)
             throw new InvalidOperationException("No TOTP secret configured");
-        return ValidateCode(_secret, code);
+        return ValidateCode(secret, code);
     }
 
     public string GetOtpAuthUrl(string secret, string label = "AC Defender")

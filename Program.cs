@@ -32,7 +32,8 @@ builder.Services.AddSingleton<TwoFactorAuth>();
 builder.Services.AddSingleton<GoogleDeviceLogin>();
 builder.Services.AddSingleton<SdmCameraService>();
 builder.Services.AddSingleton<HomeAssistantTokenStore>();
-builder.Services.AddHttpClient<HomeAssistantClient>();
+builder.Services.AddHttpClient<HomeAssistantClient>(client => client.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddHttpClient<OpenMeteoWeatherClient>(client => client.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddHostedService<AcDefenderWorker>();
 builder.Services.AddHostedService<HubKioskService>();
 builder.Services.AddHostedService<WakeTruceService>();
@@ -195,7 +196,7 @@ api.MapPost("/camera/webrtc", async (CameraWebRtcRequest request, SdmCameraServi
         : Results.Json(new { answerSdp = answer });
 });
 
-api.MapPost("/target/generate", (DefenderStateStore store) =>
+api.MapPost("/target/generate", async (DefenderStateStore store, AcDefenderService defender, CancellationToken cancellationToken) =>
 {
     var gate = store.TryBeginWebsiteCommand("generate target", bypassDebounce: true);
     if (!gate.Accepted)
@@ -203,11 +204,11 @@ api.MapPost("/target/generate", (DefenderStateStore store) =>
         return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
-    var snapshot = store.GenerateTarget();
+    var snapshot = await defender.GenerateTargetAsync(cancellationToken);
     return Results.Ok(snapshot);
 });
 
-api.MapPost("/target", (TargetTemperatureRequest request, DefenderStateStore store) =>
+api.MapPost("/target", async (TargetTemperatureRequest request, DefenderStateStore store, AcDefenderService defender, CancellationToken cancellationToken) =>
 {
     var gate = store.TryBeginWebsiteCommand("set target", bypassDebounce: true);
     if (!gate.Accepted)
@@ -215,11 +216,11 @@ api.MapPost("/target", (TargetTemperatureRequest request, DefenderStateStore sto
         return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
-    var snapshot = store.SetTarget(request.TemperatureCelsius);
+    var snapshot = await defender.SetTargetAsync(request.TemperatureCelsius, cancellationToken);
     return Results.Ok(snapshot);
 });
 
-api.MapPost("/defender", async (DefenderEnabledRequest request, DefenderStateStore store, AcDefenderService defender) =>
+api.MapPost("/defender", async (DefenderEnabledRequest request, DefenderStateStore store, AcDefenderService defender, CancellationToken cancellationToken) =>
 {
     var gate = store.TryBeginWebsiteCommand(request.Enabled ? "turn defender on" : "pause defender", bypassDebounce: true);
     if (!gate.Accepted)
@@ -227,12 +228,20 @@ api.MapPost("/defender", async (DefenderEnabledRequest request, DefenderStateSto
         return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
-    var snapshot = store.SetDefenderEnabled(request.Enabled);
+    DefenderSnapshot snapshot;
+    try
+    {
+        snapshot = await defender.SetDefenderEnabledAsync(request.Enabled, cancellationToken);
+    }
+    catch (ThermostatOperationSupersededException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, snapshot = store.GetSnapshot() });
+    }
     if (!request.Enabled)
     {
         try
         {
-            await defender.ParkThermostatForStandDownAsync(CancellationToken.None);
+            await defender.ParkThermostatForStandDownAsync(cancellationToken);
             snapshot = store.GetSnapshot();
         }
         catch
@@ -244,7 +253,7 @@ api.MapPost("/defender", async (DefenderEnabledRequest request, DefenderStateSto
     return Results.Ok(snapshot);
 });
 
-api.MapPost("/settings", (SettingsRequest request, DefenderStateStore store) =>
+api.MapPost("/settings", async (SettingsRequest request, DefenderStateStore store, AcDefenderService defender, CancellationToken cancellationToken) =>
 {
     var gate = store.TryBeginWebsiteCommand("save settings", bypassDebounce: true);
     if (!gate.Accepted)
@@ -252,7 +261,7 @@ api.MapPost("/settings", (SettingsRequest request, DefenderStateStore store) =>
         return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
-    var snapshot = store.UpdateSettings(request);
+    var snapshot = await defender.UpdateSettingsAsync(request, cancellationToken);
     return Results.Ok(snapshot);
 });
 
@@ -268,6 +277,16 @@ api.MapPost("/thermostat/refresh", async (AcDefenderService defender, DefenderSt
 
         await defender.RefreshRealThermostatAsync(cancellationToken);
         return Results.Ok(store.GetSnapshot());
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        return Results.StatusCode(499);
+    }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        store.RecordHomeAssistantRequestRejected(
+            $"Home Assistant rejected the thermostat refresh ({(int)ex.StatusCode.Value}): {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
     }
     catch (Exception ex)
     {
@@ -289,6 +308,28 @@ api.MapPost("/thermostat/force-target", async (AcDefenderService defender, Defen
         await defender.ForceTargetAsync(cancellationToken);
         return Results.Ok(store.GetSnapshot());
     }
+    catch (ThermostatOperationSupersededException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (ThermostatCommandRetryDeferredException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        return Results.StatusCode(499);
+    }
+    catch (ThermostatCommandRejectedException)
+    {
+        return Results.BadRequest(store.GetSnapshot());
+    }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        store.RecordHomeAssistantRequestRejected(
+            $"Home Assistant rejected the thermostat request ({(int)ex.StatusCode.Value}): {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
+    }
     catch (Exception ex)
     {
         store.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
@@ -308,6 +349,28 @@ api.MapPost("/thermostat/force-boost", async (AcDefenderService defender, Defend
 
         await defender.ForceCoolingBoostAsync(cancellationToken);
         return Results.Ok(store.GetSnapshot());
+    }
+    catch (ThermostatOperationSupersededException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (ThermostatCommandRetryDeferredException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        return Results.StatusCode(499);
+    }
+    catch (ThermostatCommandRejectedException)
+    {
+        return Results.BadRequest(store.GetSnapshot());
+    }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        store.RecordHomeAssistantRequestRejected(
+            $"Home Assistant rejected the thermostat request ({(int)ex.StatusCode.Value}): {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
     }
     catch (Exception ex)
     {
@@ -329,6 +392,28 @@ api.MapPost("/thermostat/fan", async (FanModeRequest request, AcDefenderService 
         await defender.ForceFanModeAsync(request.FanMode, cancellationToken);
         return Results.Ok(store.GetSnapshot());
     }
+    catch (ThermostatOperationSupersededException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (ThermostatCommandRetryDeferredException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        return Results.StatusCode(499);
+    }
+    catch (ThermostatCommandRejectedException)
+    {
+        return Results.BadRequest(store.GetSnapshot());
+    }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        store.RecordHomeAssistantRequestRejected(
+            $"Home Assistant rejected the thermostat request ({(int)ex.StatusCode.Value}): {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
+    }
     catch (Exception ex)
     {
         store.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
@@ -348,6 +433,28 @@ api.MapPost("/thermostat/off", async (AcDefenderService defender, DefenderStateS
 
         await defender.TurnThermostatOffAsync(cancellationToken);
         return Results.Ok(store.GetSnapshot());
+    }
+    catch (ThermostatOperationSupersededException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (ThermostatCommandRetryDeferredException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        return Results.StatusCode(499);
+    }
+    catch (ThermostatCommandRejectedException)
+    {
+        return Results.BadRequest(store.GetSnapshot());
+    }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        store.RecordHomeAssistantRequestRejected(
+            $"Home Assistant rejected the thermostat request ({(int)ex.StatusCode.Value}): {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
     }
     catch (Exception ex)
     {
@@ -382,6 +489,28 @@ api.MapPost("/emergency", async (EmergencyProtocolRequest request, AcDefenderSer
         await defender.ApplyEmergencyProtocolAsync(request.Protocol, cancellationToken);
         return Results.Ok(store.GetSnapshot());
     }
+    catch (ThermostatOperationSupersededException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (ThermostatCommandRetryDeferredException)
+    {
+        return Results.Conflict(store.GetSnapshot());
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        return Results.StatusCode(499);
+    }
+    catch (ThermostatCommandRejectedException)
+    {
+        return Results.BadRequest(store.GetSnapshot());
+    }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        store.RecordHomeAssistantRequestRejected(
+            $"Home Assistant rejected the thermostat request ({(int)ex.StatusCode.Value}): {ex.Message}");
+        return Results.BadRequest(store.GetSnapshot());
+    }
     catch (Exception ex)
     {
         store.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
@@ -401,21 +530,18 @@ api.MapPost("/siesta", async (SiestaRequest request, DefenderStateStore store, A
             return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
         }
 
-        if (!store.TryStartSiesta(request.Minutes ?? 60, "manual", out var startMessage))
-        {
-            return Results.BadRequest(new { error = startMessage });
-        }
-
+        (bool Started, string Message) start;
         try
         {
-            await defender.ApplySiestaThermostatActionAsync(cancellationToken);
+            start = await defender.StartSiestaAsync(request.Minutes ?? 60, "manual", cancellationToken);
         }
-        catch
+        catch (ThermostatOperationSupersededException ex)
         {
-            // The park/off command is best-effort; the nap itself is already on.
+            return Results.Conflict(new { error = ex.Message });
         }
-
-        return Results.Ok(store.GetSnapshot());
+        return start.Started
+            ? Results.Ok(store.GetSnapshot())
+            : Results.BadRequest(new { error = start.Message });
     }
 
     if (string.Equals(request.Action, "cancel", StringComparison.OrdinalIgnoreCase))
@@ -426,9 +552,18 @@ api.MapPost("/siesta", async (SiestaRequest request, DefenderStateStore store, A
             return Results.Json(gate.Snapshot, statusCode: StatusCodes.Status429TooManyRequests);
         }
 
-        return store.TryCancelSiesta(out var cancelMessage)
+        (bool Cancelled, string Message) cancel;
+        try
+        {
+            cancel = await defender.CancelSiestaAsync("website", cancellationToken);
+        }
+        catch (ThermostatOperationSupersededException ex)
+        {
+            return Results.Conflict(new { error = ex.Message });
+        }
+        return cancel.Cancelled
             ? Results.Ok(store.GetSnapshot())
-            : Results.BadRequest(new { error = cancelMessage });
+            : Results.BadRequest(new { error = cancel.Message });
     }
 
     return Results.BadRequest(new { error = "action must be start or cancel" });

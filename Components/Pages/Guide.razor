@@ -19,7 +19,7 @@
 
         <div class="ops-roster-group">
             <div class="ops-roster-group__head">
-                <span class="ops-roster-group__title">@group.Title</span>
+                <h2 class="ops-roster-group__title">@group.Title</h2>
                 <span class="ops-roster-group__rule"></span>
                 <span class="ops-roster-group__count">@entries.Count ENTR@(entries.Count == 1 ? "Y" : "IES")</span>
             </div>
@@ -29,7 +29,7 @@
                     var live = guard.Project is not null;
                     <div class="guide-entry guide-entry--v2">
                         <div class="guide-entry__head">
-                            <span class="guide-entry__name">@guard.Name</span>
+                            <h3 class="guide-entry__name">@guard.Name</h3>
                             <span class="@(live ? "guide-pill guide-pill--live" : "guide-pill guide-pill--manual")">@(live ? "LIVE CARD" : "MANUAL ONLY")</span>
                         </div>
                         <div class="guide-entry__summary">@guard.Summary</div>

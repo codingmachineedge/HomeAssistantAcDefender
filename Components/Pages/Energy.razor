@@ -15,7 +15,7 @@
     <div class="ops-cmd-tent">
         <div class="ops-cmd-tent__icon" aria-hidden="true">↯</div>
         <div class="ops-cmd-tent__main">
-            <div class="ops-cmd-tent__title">@AlectraStatusTitle</div>
+            <h2 class="ops-cmd-tent__title">@AlectraStatusTitle</h2>
             <div class="helper-text">Read-only intel from real Alectra Hui entities. The defender gets more chill during expensive or high-load power periods.</div>
             <div class="ops-cmd-tent__chips">
                 <span class="ops-repo-chip ops-repo-chip--@AlectraGuardChipState">@AlectraGuardLabel.ToUpperInvariant()</span>
@@ -25,19 +25,27 @@
             </div>
         </div>
         <div class="ops-power-meter">
-            <div class="ops-panel__label">PEAK POWER METER — @PowerTelemetryStateLabel</div>
-            <div class="ops-power-meter__track"><div class="ops-power-meter__fill" style="width: @PeakPowerPercent.ToString("0.#", CultureInfo.InvariantCulture)%; background: @PowerBarColor;"></div></div>
+            <h3 class="ops-panel__label">PEAK POWER METER — @PowerTelemetryStateLabel</h3>
+            <div class="ops-power-meter__track"
+                 role="meter"
+                 aria-label="Current power relative to the peak-power guard threshold"
+                 aria-valuemin="0"
+                 aria-valuemax="100"
+                 aria-valuenow="@PeakPowerPercent.ToString("0.#", CultureInfo.InvariantCulture)"
+                 aria-valuetext="@PeakPowerMeterText">
+                <div class="ops-power-meter__fill" style="width: @PeakPowerPercent.ToString("0.#", CultureInfo.InvariantCulture)%; background: @PowerBarColor;"></div>
+            </div>
             <div class="helper-text">@PeakPowerMeterText</div>
         </div>
     </div>
 
     @if (!string.IsNullOrWhiteSpace(_usageError))
     {
-        <div class="ops-alert-row ops-alert-row--warn"><span class="ops-alert-row__tag">USAGE</span><span class="ops-alert-row__text">@_usageError</span></div>
+        <div class="ops-alert-row ops-alert-row--warn" role="alert"><span class="ops-alert-row__tag">USAGE</span><span class="ops-alert-row__text">@_usageError</span></div>
     }
     @if (!string.IsNullOrWhiteSpace(_usageHistoryError))
     {
-        <div class="ops-alert-row ops-alert-row--warn"><span class="ops-alert-row__tag">HISTORY</span><span class="ops-alert-row__text">@_usageHistoryError</span></div>
+        <div class="ops-alert-row ops-alert-row--warn" role="alert"><span class="ops-alert-row__tag">HISTORY</span><span class="ops-alert-row__text">@_usageHistoryError</span></div>
     }
 
     @* ── YELL-O-METER critical banner ── *@
@@ -45,7 +53,7 @@
     {
         <div class="ops-yell-crit">
             <div class="ops-yell-crit__bang" aria-hidden="true">❗</div>
-            <div class="ops-yell-crit__headline">@YellHeadline</div>
+            <h2 class="ops-yell-crit__headline">@YellHeadline</h2>
             <div class="ops-yell-crit__sub">Projected bill <strong>@Cad(ProjectedBill)</strong> · yell threshold $180.00 · forecast severity: <strong>@CurrentYell.Name</strong></div>
         </div>
     }
@@ -53,7 +61,7 @@
     @* ── YELL-O-METER main panel ── *@
     <div class="ops-panel ops-panel--pad @(ProjectedBill >= YellThreshold ? "ops-yell--crit" : "")">
         <div class="ops-yell__head">
-            <span class="ops-panel__label" style="color: @CurrentYell.Color; margin: 0;">📣 YELL-O-METER — MORE DOLLARS = MORE YELLING</span>
+            <h2 class="ops-panel__label" style="color: @CurrentYell.Color; margin: 0;">📣 YELL-O-METER — MORE DOLLARS = MORE YELLING</h2>
             <span class="ops-yell__cal">CALIBRATED AGAINST O5-BROTHER · 3 SEASONS OF FIELD DATA</span>
         </div>
         <div class="ops-yell__baseline">
@@ -61,7 +69,13 @@
             <span class="ops-yell__bill" style="color: @CurrentYell.Color;">@Cad(ProjectedBill)</span>
             <span class="ops-yell__level" style="color: @CurrentYell.Color;">@CurrentYell.Name — @CurrentYell.Db</span>
         </div>
-        <div class="ops-yell-gauge">
+        <div class="ops-yell-gauge"
+             role="meter"
+             aria-label="Projected month-end bill"
+             aria-valuemin="0"
+             aria-valuemax="320"
+             aria-valuenow="@Math.Clamp(ProjectedBill, 0, 320).ToString("0.##", CultureInfo.InvariantCulture)"
+             aria-valuetext="@($"{Cad(ProjectedBill)}, {CurrentYell.Name}, {CurrentYell.Db}")">
             <div class="ops-yell-gauge__needle" style="left: @NeedlePercent.ToString("0.#", CultureInfo.InvariantCulture)%;"></div>
         </div>
         <div class="ops-yell-gauge__scale">
@@ -69,11 +83,11 @@
         </div>
         <div class="ops-yell-cards">
             <div class="ops-yell-card">
-                <div class="ops-yell-card__head" style="color: @CurrentYell.Color;">FORECAST — WHAT THE YELLING WILL BE LIKE</div>
+                <h3 class="ops-yell-card__head" style="color: @CurrentYell.Color;">FORECAST — WHAT THE YELLING WILL BE LIKE</h3>
                 <div class="ops-yell-card__body">@CurrentYell.Forecast</div>
             </div>
             <div class="ops-yell-card">
-                <div class="ops-yell-card__head" style="color: var(--accent);">SURVIVAL PROTOCOL — HOW TO GET THROUGH IT</div>
+                <h3 class="ops-yell-card__head" style="color: var(--accent);">SURVIVAL PROTOCOL — HOW TO GET THROUGH IT</h3>
                 <ul class="ops-survival">
                     @foreach (var (title, body) in SurvivalSteps)
                     {
@@ -88,12 +102,12 @@
     @* ── 24-hour whole-house power ── *@
     <div class="ops-panel ops-panel--pad">
         <div class="ops-yell__head">
-            <span class="ops-panel__label" style="margin: 0;">24-HOUR CONFIGURED POWER — HOME ASSISTANT RECORDER</span>
+            <h2 class="ops-panel__label" style="margin: 0;">24-HOUR CONFIGURED POWER — HOME ASSISTANT RECORDER</h2>
             <span class="ops-usage-legend"><span style="color: var(--accent);">▮ @HistoryPowerLegend</span> <span style="color: var(--warn);">▮ ON-PEAK HOUR</span></span>
         </div>
         @if (UsageBars.Any(b => b.Value is not null))
         {
-            <div class="ops-usage-bars" style="height: 120px; margin-top: 10px;">
+            <div class="ops-usage-bars" style="height: 120px; margin-top: 10px;" role="img" aria-label="@UsageChartAccessibleLabel">
                 @foreach (var bar in UsageBars)
                 {
                     <div class="ops-usage-bars__bar @(bar.OnPeak ? "ops-usage-bars__bar--hot" : "")"
@@ -119,7 +133,7 @@
     @* ── real Alectra Hui entity browser ── *@
     <div class="ops-panel ops-panel--pad">
         <div class="ops-yell__head">
-            <span class="ops-panel__label" style="margin: 0;">ALECTRA HUI ENTITY BROWSER — READ ONLY</span>
+            <h2 class="ops-panel__label" style="margin: 0;">ALECTRA HUI ENTITY BROWSER — READ ONLY</h2>
             <button class="ops-btn" @onclick="RefreshNow" style="padding: 6px 10px; font-size: 9px;">REFRESH REAL TELEMETRY</button>
         </div>
         <div class="helper-text" style="margin-top: 8px;">Search and filter the real Home Assistant entities returned by the Alectra Hui integration. These controls never issue entity or thermostat commands.</div>
@@ -155,7 +169,7 @@
             <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">CHECKED @Format.ShortTime(_usage?.UpdatedAt)</MudChip>
         </div>
 
-        <MudTabs Rounded="true" Elevation="0" Class="ops-tabs mt-3">
+        <MudTabs Rounded="true" Elevation="0" Class="ops-tabs mt-3" aria-label="Alectra entity views">
             <MudTabPanel Text="Entity cards" Icon="@Icons.Material.Filled.Sensors">
                 <div class="ops-dash-stack mt-3">
                     @if (FilteredAlectraGroups.Count > 0)
@@ -164,7 +178,7 @@
                         {
                             <div class="ops-panel ops-panel--pad">
                                 <div class="ops-yell__head">
-                                    <span class="ops-panel__label" style="margin: 0;">@group.Category.ToUpperInvariant()</span>
+                                    <h3 class="ops-panel__label" style="margin: 0;">@group.Category.ToUpperInvariant()</h3>
                                     <span class="ops-usage-legend">@group.Items.Count ENTITIES</span>
                                 </div>
                                 <div class="scroll-list" style="margin-top: 8px;">
@@ -193,7 +207,7 @@
                 </div>
             </MudTabPanel>
             <MudTabPanel Text="Entity table" Icon="@Icons.Material.Filled.TableRows">
-                <MudTable Items="@FilteredAlectraEntities" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Class="energy-table mt-3">
+                <MudTable Items="@FilteredAlectraEntities" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Class="energy-table mt-3" aria-label="Alectra Hui entities">
                     <HeaderContent>
                         <MudTh>Desk</MudTh>
                         <MudTh>Name</MudTh>
@@ -220,7 +234,7 @@
     <div class="ops-energy-grid">
         <div class="ops-dash-stack">
             <div class="ops-panel ops-panel--pad">
-                <div class="ops-panel__label">ELECTRICITY COST (ALECTRA TOU) — SINCE @(Cost.TrackingSince is { } since ? Format.ToToronto(since).ToString("yyyy-MM-dd") : "FIRST SAMPLE")</div>
+                <h2 class="ops-panel__label">ELECTRICITY COST (ALECTRA TOU) — SINCE @(Cost.TrackingSince is { } since ? Format.ToToronto(since).ToString("yyyy-MM-dd") : "FIRST SAMPLE")</h2>
                 <div class="ops-energy-cost-tiles">
                     @foreach (var tile in CostTiles)
                     {
@@ -234,19 +248,19 @@
             </div>
 
             <div class="ops-panel ops-panel--pad">
-                <div class="ops-panel__label">MONTHLY BUDGET — @Cad(Budget.MonthlyBudgetCad)</div>
+                <h2 class="ops-panel__label">MONTHLY BUDGET — @Cad(Budget.MonthlyBudgetCad)</h2>
                 <div class="ops-budget-bars">
                     <div class="ops-budget-bar">
                         <div class="ops-budget-bar__top"><span>SPENT THIS MONTH</span><strong>@Cad(Budget.MonthToDateAllInCad)</strong></div>
-                        <div class="ops-bar"><div class="ops-bar__fill ops-bar__fill--good" style="width: @BudgetPercent(Budget.MonthToDateAllInCad)%;"></div></div>
+                        <div class="ops-bar" role="progressbar" aria-label="Monthly budget spent" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@BudgetPercent(Budget.MonthToDateAllInCad)"><div class="ops-bar__fill ops-bar__fill--good" style="width: @BudgetPercent(Budget.MonthToDateAllInCad)%;"></div></div>
                     </div>
                     <div class="ops-budget-bar">
                         <div class="ops-budget-bar__top"><span>PRO-RATED TARGET (DAY @TorontoDay/@DaysThisMonth)</span><strong style="color: var(--sub);">@Cad(Budget.ProRatedTargetCad)</strong></div>
-                        <div class="ops-bar"><div class="ops-bar__fill ops-bar__fill--sub" style="width: @BudgetPercent(Budget.ProRatedTargetCad)%;"></div></div>
+                        <div class="ops-bar" role="progressbar" aria-label="Pro-rated monthly budget target" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@BudgetPercent(Budget.ProRatedTargetCad)"><div class="ops-bar__fill ops-bar__fill--sub" style="width: @BudgetPercent(Budget.ProRatedTargetCad)%;"></div></div>
                     </div>
                     <div class="ops-budget-bar">
                         <div class="ops-budget-bar__top"><span>PROJECTED MONTH-END</span><strong style="color: var(--warn);">@Cad(Budget.ProjectedMonthEndCad)</strong></div>
-                        <div class="ops-bar"><div class="ops-bar__fill ops-bar__fill--warn" style="width: @BudgetPercent(Budget.ProjectedMonthEndCad)%;"></div></div>
+                        <div class="ops-bar" role="progressbar" aria-label="Projected month-end budget use" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@BudgetPercent(Budget.ProjectedMonthEndCad)"><div class="ops-bar__fill ops-bar__fill--warn" style="width: @BudgetPercent(Budget.ProjectedMonthEndCad)%;"></div></div>
                     </div>
                 </div>
                 @if (Budget.SafetyOverrideActive)
@@ -267,7 +281,7 @@
         @* ── fare calendar ── *@
         <div class="ops-panel ops-panel--pad">
             <div class="ops-yell__head">
-                <span class="ops-panel__label" style="margin: 0;">AC USAGE CALENDAR — @_calMonth.ToString("MMMM yyyy", CultureInfo.InvariantCulture).ToUpperInvariant()</span>
+                <h2 class="ops-panel__label" style="margin: 0;">AC USAGE CALENDAR — @_calMonth.ToString("MMMM yyyy", CultureInfo.InvariantCulture).ToUpperInvariant()</h2>
                 <span class="ops-usage-legend">cheap 🟩 → 🟥 expensive</span>
             </div>
             <div class="cal-toolbar" style="margin-top: 8px;">
@@ -276,20 +290,25 @@
                 <button class="ops-btn" @onclick="GoToThisMonth" disabled="@IsCurrentCalendarMonth" style="padding: 6px 10px; font-size: 9px;">THIS MONTH</button>
             </div>
             <div class="helper-text">@MonthSummary Like a flight-price calendar, but for regret.</div>
-            <div class="cal-grid" role="grid" aria-label="AC usage calendar">
+            <div class="cal-grid" role="group" aria-label="AC usage calendar">
                 @foreach (var dow in new[] { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" })
                 {
-                    <div class="cal-dow">@dow</div>
+                    <div class="cal-dow" aria-hidden="true">@dow</div>
                 }
                 @foreach (var cell in CalendarCells)
                 {
                     @if (cell is null)
                     {
-                        <div class="cal-cell cal-cell--blank"></div>
+                        <div class="cal-cell cal-cell--blank" aria-hidden="true"></div>
                     }
                     else
                     {
-                        <button class="cal-cell @CellCss(cell)" @onclick="() => SelectDay(cell)">
+                        <button class="cal-cell @CellCss(cell)"
+                                disabled="@cell.IsFuture"
+                                aria-label="@CalendarCellLabel(cell)"
+                                aria-pressed="@(cell.Key == _selectedDayKey ? "true" : "false")"
+                                aria-current="@(cell.IsToday ? "date" : null)"
+                                @onclick="() => SelectDay(cell)">
                             <div class="cal-cell__day">@cell.Day</div>
                             @if (cell.Usage is { } u && (u.Hours > 0 || u.CostDollars > 0))
                             {
@@ -306,7 +325,7 @@
             </div>
             @if (SelectedUsage is { } sel)
             {
-                <div class="cal-detail">
+                <div class="cal-detail" role="status" aria-live="polite">
                     @FormatDayLong(sel.Date) — AC ran @sel.Hours.ToString("0.0")h for an estimated $@sel.CostDollars.ToString("0.00")
                     (@(sel.Hours > 0 ? $"≈ ${sel.CostDollars / Math.Max(sel.Hours, 0.01):0.00}/h at the day's TOU mix" : "no compressor time logged")).
                 </div>
@@ -483,6 +502,13 @@
         .Select(bar => Math.Abs(bar.Value!.Value))
         .DefaultIfEmpty(0)
         .Max();
+
+    private string UsageChartAccessibleLabel =>
+        $"24-hour configured power chart from real Home Assistant recorder samples. "
+        + $"Average {Format.UsageHistoryValue(HistorySampleAverage, _usageHistory?.Unit)}, "
+        + $"minimum {Format.UsageHistoryValue(_usageHistory?.Min, _usageHistory?.Unit)}, "
+        + $"maximum {Format.UsageHistoryValue(_usageHistory?.Max, _usageHistory?.Unit)}. "
+        + "On-peak hours are highlighted.";
 
     private double? HistorySampleAverage
     {
@@ -724,6 +750,25 @@
         if (cell.IsFuture) css += " cal-cell--future";
         if (cell.Key == _selectedDayKey) css += " cal-cell--selected";
         return css;
+    }
+
+    private string CalendarCellLabel(CalendarCell cell)
+    {
+        var date = new DateTime(_calMonth.Year, _calMonth.Month, cell.Day);
+        var label = date.ToString("dddd, MMMM d, yyyy", CultureInfo.InvariantCulture);
+        if (cell.IsToday)
+        {
+            label += ", today";
+        }
+
+        if (cell.IsFuture)
+        {
+            return $"{label}, future date; usage is not available";
+        }
+
+        return cell.Usage is { } usage && (usage.Hours > 0 || usage.CostDollars > 0)
+            ? $"{label}, AC ran {usage.Hours:0.0} hours, estimated cost {Cad(usage.CostDollars)}"
+            : $"{label}, no AC runtime logged";
     }
 
     private string MonthSummary

@@ -14,9 +14,9 @@
 
 <div class="@RootClass">
     <div class="slide-keys">
-        <button type="button" class="@KeyClass(_key1)" @onclick="() => ToggleKey(1)" aria-label="Arming key 1" aria-pressed="@_key1">🗝</button>
-        <span class="@KeysStatusClass">@KeysStatus</span>
-        <button type="button" class="@KeyClass(_key2)" @onclick="() => ToggleKey(2)" aria-label="Arming key 2" aria-pressed="@_key2">🗝</button>
+        <button type="button" class="@KeyClass(_key1)" @onclick="() => ToggleKey(1)" aria-label="Arming key 1" aria-pressed="@(_key1 ? "true" : "false")">🗝</button>
+        <span class="@KeysStatusClass" role="status" aria-live="polite">@KeysStatus</span>
+        <button type="button" class="@KeyClass(_key2)" @onclick="() => ToggleKey(2)" aria-label="Arming key 2" aria-pressed="@(_key2 ? "true" : "false")">🗝</button>
     </div>
     <div class="@TrackClass">
         <div class="slide-confirm__fill" style="width: @(_value)%"></div>

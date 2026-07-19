@@ -45,7 +45,7 @@
 
     @* ── index | document | rail ── *@
     <div class="ops-wiki-grid">
-        <aside class="ops-wiki-index">
+        <aside class="ops-wiki-index" aria-label="Wiki document index">
             <div class="ops-panel__label">ALL DOCUMENTS</div>
             <div class="ops-wiki-index__section">Handbook</div>
             @foreach (var p in WikiContent.Handbook)
@@ -59,7 +59,7 @@
             }
         </aside>
 
-        <main class="ops-wiki-doc-wrap">
+        <article class="ops-wiki-doc-wrap">
             <div class="ops-wiki-crumb">
                 <a href="/wiki">WIKI</a> › @CrumbSection › <strong>@CurrentTitle</strong>
             </div>
@@ -71,13 +71,13 @@
             {
                 <div class="wiki-doc"><p>[DOCUMENT MISSING OR EXPUNGED]</p></div>
             }
-        </main>
+        </article>
 
-        <aside class="ops-wiki-rail">
+        <aside class="ops-wiki-rail" aria-label="Wiki page navigation">
             @if (_doc is { Toc.Count: > 1 })
             {
                 <div class="ops-panel__label">ON THIS PAGE</div>
-                <nav class="ops-wiki-toc">
+                <nav class="ops-wiki-toc" aria-label="On this wiki page">
                     @foreach (var t in _doc.Toc)
                     {
                         <a class="@(t.Level == 3 ? "ops-wiki-toc__link ops-wiki-toc__link--h3" : "ops-wiki-toc__link")" href="@($"#{t.Id}")">@Trunc(t.Text)</a>
@@ -85,7 +85,7 @@
                 </nav>
             }
             <div class="ops-panel__label" style="margin-top: 12px;">EXPLORE THE HANDBOOK</div>
-            <nav class="ops-wiki-toc">
+            <nav class="ops-wiki-toc" aria-label="Explore the wiki handbook">
                 @foreach (var p in WikiContent.Handbook)
                 {
                     <a class="@(p.Name == _doc?.Name ? "ops-wiki-toc__link active" : "ops-wiki-toc__link")" href="@($"/wiki/{p.Name}")">@p.Title</a>

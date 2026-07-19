@@ -5,6 +5,7 @@
 @inject AcDefenderService Defender
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject IJSRuntime JS
 
 <PageTitle>Command Center - AC Defender</PageTitle>
 
@@ -89,16 +90,18 @@
 
                 @* thermostat node *@
                 <div class="ops-thermo-node" @onclick:stopPropagation="true">
-                    <div class="@ThermoDiscClass" @onclick="ToggleThermostatPop" role="button" tabindex="0" aria-label="Open unit control">
+                    <button type="button" class="@ThermoDiscClass" @onclick="ToggleThermostatPop" @onclick:stopPropagation="true"
+                            aria-label="@($"{SetpointShort} — {(_thermoOpen ? "Close thermostat unit control" : "Open thermostat unit control")}")"
+                            aria-expanded="@(_thermoOpen ? "true" : "false")" aria-controls="@(_thermoOpen ? "thermostat-unit-control" : null)">
                         <span class="ops-thermo-node__value">@SetpointShort</span>
                         <span class="ops-thermo-node__ping" aria-hidden="true"></span>
                         <span class="ops-thermo-node__ping ops-thermo-node__ping--late" aria-hidden="true"></span>
-                    </div>
+                    </button>
                     <div class="ops-thermo-node__tag">THERMOSTAT · TAP</div>
 
                     @if (_thermoOpen)
                     {
-                        <div class="ops-thermo-pop">
+                        <div id="thermostat-unit-control" class="ops-thermo-pop" role="dialog" aria-label="Thermostat unit control">
                             <div class="ops-thermo-pop__head">
                                 <span class="ops-thermo-pop__title">UNIT CONTROL</span>
                                 <button class="ops-thermo-pop__close" @onclick="CloseThermostat" aria-label="Close unit control">✕</button>
@@ -183,7 +186,7 @@
         <div class="ops-dash-col">
 
             @* defender master switch — prominent on/off *@
-            <button class="@DefenderSwitchClass" @onclick="ToggleDefender" aria-pressed="@DefenderIsEnabled">
+            <button class="@DefenderSwitchClass" @onclick="ToggleDefender" aria-pressed="@(DefenderIsEnabled ? "true" : "false")">
                 <span class="ops-defender-switch__glyph" aria-hidden="true">⏻</span>
                 <span class="ops-defender-switch__body">
                     <span class="ops-defender-switch__label">DEFENDER</span>
@@ -360,14 +363,18 @@
 @* very apologetic overlay *@
 @if (_apologyVisible)
 {
-    <div class="ops-apology" @onclick="() => _apologyVisible = false">
-        <div class="ops-apology__box">
+    <div class="ops-apology" role="dialog" aria-modal="true" aria-labelledby="apology-title" aria-describedby="apology-description"
+         tabindex="-1" @ref="_apologyDialog" @onkeydown="HandleApologyKeyDown" @onclick="CloseApology">
+        <div class="ops-apology__box" @onclick:stopPropagation="true">
+            <button type="button" class="ops-apology__close" @onclick="CloseApology" aria-label="Close apology message">✕</button>
             <div class="ops-apology__bow" aria-hidden="true">❆</div>
-            <div class="ops-apology__title">WE ARE SO, SO SORRY</div>
-            <div class="ops-apology__line">The defenders are bowing as deeply as tiny snowflakes can bow.</div>
-            <div class="ops-apology__line">@(_apologyAuto ? "The upset was detected automatically — nobody needed to press anything." : "The AC has been eased up ") @(_apologyAuto ? "" : "+1.0 °C immediately as a peace gesture.")</div>
-            <div class="ops-apology__line">All corrections are <strong>stopped for 2 hours</strong>. The thermostat is yours.</div>
-            <div class="ops-apology__line ops-apology__line--small">The anger model has recorded this hour as sensitive — the defenders will be more hands-off at this time from now on. Please forgive us. 🙇</div>
+            <h2 id="apology-title" class="ops-apology__title">WE ARE SO, SO SORRY</h2>
+            <div id="apology-description">
+                <div class="ops-apology__line">The defenders are bowing as deeply as tiny snowflakes can bow.</div>
+                <div class="ops-apology__line">@(_apologyAuto ? "The upset was detected automatically — nobody needed to press anything." : "The AC has been eased up ") @(_apologyAuto ? "" : "+1.0 °C immediately as a peace gesture.")</div>
+                <div class="ops-apology__line">All corrections are <strong>stopped for 2 hours</strong>. The thermostat is yours.</div>
+                <div class="ops-apology__line ops-apology__line--small">The anger model has recorded this hour as sensitive — the defenders will be more hands-off at this time from now on. Please forgive us. 🙇</div>
+            </div>
         </div>
     </div>
 }
@@ -528,7 +535,9 @@
         ? "WEATHER --"
         : Snapshot.Weather.Condition.Replace('_', ' ').ToUpperInvariant();
     private string WeatherUpdatedText => Snapshot?.Weather?.UpdatedAt is { } updated
-        ? $"UPDATED {Format.ShortTime(updated)}"
+        ? string.Equals(Snapshot.Weather.EntityId, OpenMeteoWeatherClient.SourceId, StringComparison.OrdinalIgnoreCase)
+            ? $"OPEN-METEO BACKUP · OBSERVED {Format.ShortTime(updated)}"
+            : $"UPDATED {Format.ShortTime(updated)}"
         : "WAITING FOR HA WEATHER";
     private string HvacModeText => (Snapshot?.HomeAssistantThermostat?.HvacMode ?? "--").ToUpperInvariant();
 
@@ -617,40 +626,40 @@
 
     // ---------- commands (same plumbing as before the redesign) ----------
 
-    private void OnTargetInputChanged(ChangeEventArgs e)
+    private async Task OnTargetInputChanged(ChangeEventArgs e)
     {
         if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v))
         {
             _targetInput = Math.Clamp(v, 10, 35);
             _targetDirty = true;
-            SaveTarget(_targetInput);
+            await SaveTarget(_targetInput);
         }
     }
 
-    private void TargetUp() => SaveTarget(Target + 0.5);
-    private void TargetDown() => SaveTarget(Target - 0.5);
+    private Task TargetUp() => SaveTarget(Target + 0.5);
+    private Task TargetDown() => SaveTarget(Target - 0.5);
 
-    private void SaveTarget(double value)
+    private async Task SaveTarget(double value)
     {
         if (!TryBeginWebsiteCommand("set target", bypassDebounce: true))
         {
             return;
         }
 
-        var snapshot = StateStore.SetTarget(Math.Clamp(value, 10, 35));
+        var snapshot = await Defender.SetTargetAsync(Math.Clamp(value, 10, 35), CancellationToken.None);
         State.Refresh();
         _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
     }
 
-    private void GenerateTarget()
+    private async Task GenerateTarget()
     {
         if (!TryBeginWebsiteCommand("generate target", bypassDebounce: true))
         {
             return;
         }
 
-        var snapshot = StateStore.GenerateTarget();
+        var snapshot = await Defender.GenerateTargetAsync(CancellationToken.None);
         State.Refresh();
         _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
@@ -664,7 +673,7 @@
             return;
         }
 
-        var snapshot = StateStore.SetTarget(_targetDirty ? _targetInput : Target);
+        var snapshot = await Defender.SetTargetAsync(_targetDirty ? _targetInput : Target, CancellationToken.None);
         State.Refresh();
         _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
@@ -673,26 +682,37 @@
 
     private bool _apologyVisible;
     private bool _apologyAuto;
+    private bool _focusApology;
+    private ElementReference _apologyDialog;
+
+    private async Task CloseApology()
+    {
+        await JS.InvokeVoidAsync("acAccessibility.deactivateModal", _apologyDialog);
+        _apologyVisible = false;
+        _focusApology = false;
+    }
+
+    private async Task HandleApologyKeyDown(KeyboardEventArgs args)
+    {
+        if (string.Equals(args.Key, "Escape", StringComparison.Ordinal))
+        {
+            await CloseApology();
+        }
+    }
     private DateTimeOffset? _lastAutoApologyUntil;
 
     private async Task BrotherMad()
     {
+        await JS.InvokeVoidAsync("acAccessibility.captureFocus");
         _apologyVisible = true;
         _apologyAuto = false;
+        _focusApology = true;
         StateHasChanged();
         await RunThermostatAction(
             () => Defender.ApplyEmergencyProtocolAsync("brother-mad", CancellationToken.None),
             "Apology sent. Standing down for 2 hours.",
             "emergency brother-mad",
             bypassDebounce: true);
-        _ = HideApologyAfterDelayAsync();
-    }
-
-    private async Task HideApologyAfterDelayAsync()
-    {
-        await Task.Delay(9000);
-        _apologyVisible = false;
-        await InvokeAsync(StateHasChanged);
     }
 
     // ---------- defender on/off ----------
@@ -707,7 +727,16 @@
             return;
         }
 
-        StateStore.SetDefenderEnabled(enable);
+        try
+        {
+            await Defender.SetDefenderEnabledAsync(enable, CancellationToken.None);
+        }
+        catch (ThermostatOperationSupersededException)
+        {
+            State.Refresh();
+            Snackbar.Add("A newer defender switch action won; refreshed the live state.", Severity.Info);
+            return;
+        }
         State.Refresh();
         Snackbar.Add(enable ? "Defender turned on." : "Defender paused.", Severity.Info);
 
@@ -805,6 +834,28 @@
 
             Snackbar.Add(successMessage, Severity.Success);
         }
+        catch (ThermostatOperationSupersededException)
+        {
+            State.Refresh();
+            Snackbar.Add("A newer thermostat action took priority; Home Assistant remains connected.", Severity.Info);
+        }
+        catch (ThermostatCommandRetryDeferredException ex)
+        {
+            State.Refresh();
+            Snackbar.Add(ex.Message, Severity.Info);
+        }
+        catch (ThermostatCommandRejectedException ex)
+        {
+            State.Refresh();
+            Snackbar.Add($"Home Assistant rejected the thermostat command: {ex.Message}", Severity.Error);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode is not null)
+        {
+            StateStore.RecordHomeAssistantRequestRejected(
+                $"Home Assistant rejected the request ({(int)ex.StatusCode.Value}): {ex.Message}");
+            State.Refresh();
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
         catch (Exception ex)
         {
             StateStore.RecordHomeAssistantUnavailable($"Home Assistant error: {ex.Message}");
@@ -817,6 +868,15 @@
     {
         _targetInput = Snapshot?.TargetTemperatureCelsius ?? 22.0;
         State.Changed += OnStateChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusApology && _apologyVisible)
+        {
+            _focusApology = false;
+            await JS.InvokeVoidAsync("acAccessibility.activateModal", _apologyDialog);
+        }
     }
 
     private void OnStateChanged()
@@ -835,7 +895,7 @@
             _lastAutoApologyUntil = until;
             _apologyVisible = true;
             _apologyAuto = true;
-            _ = HideApologyAfterDelayAsync();
+            _focusApology = true;
         }
 
         InvokeAsync(StateHasChanged);

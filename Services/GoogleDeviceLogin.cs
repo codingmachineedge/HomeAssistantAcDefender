@@ -40,6 +40,7 @@ public class GoogleDeviceLogin
         public required bool KeepSignedIn { get; init; }
         public int IntervalSeconds { get; set; }
         public DateTimeOffset LastPolledAt { get; set; } = DateTimeOffset.MinValue;
+        public bool PollInFlight { get; set; }
     }
 
     public GoogleDeviceLogin(IConfiguration configuration, ILogger<GoogleDeviceLogin> logger)
@@ -135,18 +136,25 @@ public class GoogleDeviceLogin
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (now > entry.ExpiresAt)
+        lock (entry)
         {
-            pending.TryRemove(pendingId, out _);
-            return new PollResult(PollStatus.Failed, null, false, null, null, "The Google code expired — start again.");
-        }
+            if (now > entry.ExpiresAt)
+            {
+                pending.TryRemove(pendingId, out _);
+                return new PollResult(PollStatus.Failed, null, false, null, null, "The Google code expired — start again.");
+            }
 
-        if (now - entry.LastPolledAt < TimeSpan.FromSeconds(entry.IntervalSeconds))
-        {
-            return new PollResult(PollStatus.Pending, null, entry.KeepSignedIn, entry.UserCode, entry.VerificationUrl, null);
-        }
+            // Claim the network poll atomically. Overlapping browser requests must never exchange
+            // the same one-time device code concurrently or remove each other's pending session.
+            if (entry.PollInFlight
+                || now - entry.LastPolledAt < TimeSpan.FromSeconds(entry.IntervalSeconds))
+            {
+                return new PollResult(PollStatus.Pending, null, entry.KeepSignedIn, entry.UserCode, entry.VerificationUrl, null);
+            }
 
-        entry.LastPolledAt = now;
+            entry.LastPolledAt = now;
+            entry.PollInFlight = true;
+        }
 
         try
         {
@@ -169,7 +177,10 @@ public class GoogleDeviceLogin
                     case "authorization_pending":
                         return new PollResult(PollStatus.Pending, null, entry.KeepSignedIn, entry.UserCode, entry.VerificationUrl, null);
                     case "slow_down":
-                        entry.IntervalSeconds += 5;
+                        lock (entry)
+                        {
+                            entry.IntervalSeconds += 5;
+                        }
                         return new PollResult(PollStatus.Pending, null, entry.KeepSignedIn, entry.UserCode, entry.VerificationUrl, null);
                     case "access_denied":
                         pending.TryRemove(pendingId, out _);
@@ -184,7 +195,18 @@ public class GoogleDeviceLogin
             // Granted. The id_token arrives directly from Google's token endpoint over TLS, so its
             // payload is trusted the same way the access token is — no signature check needed here.
             var email = ExtractVerifiedEmail(root.GetProperty("id_token").GetString());
-            pending.TryRemove(pendingId, out _);
+            lock (entry)
+            {
+                // Success and cancellation claim the same entry under the same lock. Whichever
+                // removes the exact mapping first wins, so Cancel cannot return and then have this
+                // in-flight poll authenticate afterward.
+                if (!pending.TryGetValue(pendingId, out var activeEntry) || !ReferenceEquals(activeEntry, entry))
+                {
+                    return new PollResult(PollStatus.Failed, null, false, null, null, "Sign-in was cancelled — start again.");
+                }
+
+                pending.TryRemove(pendingId, out _);
+            }
 
             if (email is null || !allowedEmails.Contains(email))
             {
@@ -201,9 +223,30 @@ public class GoogleDeviceLogin
             logger.LogWarning(ex, "Google token poll failed");
             return new PollResult(PollStatus.Pending, null, entry.KeepSignedIn, entry.UserCode, entry.VerificationUrl, null);
         }
+        finally
+        {
+            lock (entry)
+            {
+                entry.PollInFlight = false;
+            }
+        }
     }
 
-    public void Cancel(string pendingId) => pending.TryRemove(pendingId, out _);
+    public void Cancel(string pendingId)
+    {
+        if (!pending.TryGetValue(pendingId, out var entry))
+        {
+            return;
+        }
+
+        lock (entry)
+        {
+            if (pending.TryGetValue(pendingId, out var activeEntry) && ReferenceEquals(activeEntry, entry))
+            {
+                pending.TryRemove(pendingId, out _);
+            }
+        }
+    }
 
     /// <summary>Reads email + email_verified from a Google id_token's payload (base64url JSON).</summary>
     private static string? ExtractVerifiedEmail(string? idToken)

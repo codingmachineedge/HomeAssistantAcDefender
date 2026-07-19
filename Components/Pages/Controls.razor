@@ -11,7 +11,7 @@
 <div class="ops-dash-stack">
 
     @* ── containment master switch ── *@
-    <button class="@DefenderSwitchClass" @onclick="ToggleDefender" aria-pressed="@DefenderIsEnabled">
+    <button class="@DefenderSwitchClass" @onclick="ToggleDefender" aria-pressed="@(DefenderIsEnabled ? "true" : "false")">
         <span class="ops-defender-switch__glyph" aria-hidden="true">⏻</span>
         <span class="ops-defender-switch__body">
             <span class="ops-defender-switch__label">CONTAINMENT MASTER</span>
@@ -25,7 +25,7 @@
 
         @* ── A · temp I want ── *@
         <div class="ops-ctl-card ops-ctl-card--accent">
-            <div class="ops-ctl-label" style="color: var(--accent);">⌖ TEMP I WANT — O5 DIRECTIVE</div>
+            <h2 class="ops-ctl-label" style="color: var(--accent);">⌖ TEMP I WANT — O5 DIRECTIVE</h2>
             <div class="ops-stepper">
                 <button class="ops-stepper__btn" @onclick="TargetDown" aria-label="Lower">−</button>
                 <div class="ops-stepper__value">@TargetShort</div>
@@ -42,7 +42,7 @@
 
         @* ── B · fan mode ── *@
         <div class="ops-ctl-card">
-            <div class="ops-ctl-label">FAN MODE</div>
+            <h2 class="ops-ctl-label">FAN MODE</h2>
             <div class="ops-fan-list">
                 @if (FanModes.Count == 0)
                 {
@@ -52,7 +52,8 @@
                 {
                     @foreach (var mode in FanModes)
                     {
-                        <button class="@(IsCurrentFan(mode) ? "ops-fan-btn ops-fan-btn--active" : "ops-fan-btn")" @onclick="@(() => ApplyFanModeTo(mode))">@mode.ToUpperInvariant()</button>
+                        <button class="@(IsCurrentFan(mode) ? "ops-fan-btn ops-fan-btn--active" : "ops-fan-btn")"
+                                @onclick="@(() => ApplyFanModeTo(mode))" aria-pressed="@(IsCurrentFan(mode) ? "true" : "false")">@mode.ToUpperInvariant()</button>
                     }
                 }
             </div>
@@ -61,7 +62,7 @@
 
         @* ── C · real thermostat actions ── *@
         <div class="ops-ctl-card">
-            <div class="ops-ctl-label">REAL THERMOSTAT ACTIONS</div>
+            <h2 class="ops-ctl-label">REAL THERMOSTAT ACTIONS</h2>
             <div class="ops-act-list">
                 <button class="ops-order-btn" @onclick="RefreshReal">
                     <span aria-hidden="true">⟳</span>
@@ -84,11 +85,12 @@
 
         @* ── D · emergency ── *@
         <div class="ops-ctl-card ops-ctl-card--bad">
-            <div class="ops-ctl-label" style="color: var(--bad);">⚠ EMERGENCY PROTOCOLS — BYPASS THE WEBSITE LOCK</div>
+            <h2 class="ops-ctl-label" style="color: var(--bad);">⚠ EMERGENCY PROTOCOLS — BYPASS THE WEBSITE LOCK</h2>
             <div class="ops-emg-list">
                 @foreach (var option in EmergencyProtocols)
                 {
-                    <button class="@(_emergencyProtocol == option.Value ? "ops-emg-btn ops-emg-btn--active" : "ops-emg-btn")" @onclick="@(() => _emergencyProtocol = option.Value)">
+                    <button class="@(_emergencyProtocol == option.Value ? "ops-emg-btn ops-emg-btn--active" : "ops-emg-btn")"
+                            @onclick="@(() => _emergencyProtocol = option.Value)" aria-pressed="@(_emergencyProtocol == option.Value ? "true" : "false")">
                         <span class="ops-emg-btn__label">@option.Label</span>
                         <span class="ops-emg-btn__help">@option.Help</span>
                     </button>
@@ -108,7 +110,7 @@
 
         @* ── E · mess hall (siesta) ── *@
         <div class="ops-ctl-card ops-ctl-card--info">
-            <div class="ops-ctl-label" style="color: var(--info);">☾ MESS HALL (SIESTA)</div>
+            <h2 class="ops-ctl-label" style="color: var(--info);">☾ MESS HALL (SIESTA)</h2>
             @if (Snapshot?.Siesta is { Active: true } activeNap)
             {
                 <div class="ops-siesta-active">
@@ -135,7 +137,7 @@
 
         @* ── F · learning ── *@
         <div class="ops-ctl-card">
-            <div class="ops-ctl-label">LEARNING — THE ANGER MODEL</div>
+            <h2 class="ops-ctl-label">LEARNING — THE ANGER MODEL</h2>
             <button class="ops-btn ops-btn--outline" style="width: 100%;" @onclick="LearnFromHistory" disabled="@_learningHistory">
                 @(_learningHistory ? "✦ RETRAINING…" : "✦ RETRAIN FROM HISTORY NOW")
             </button>
@@ -232,28 +234,28 @@
         _targetDirty = true;
     }
 
-    private void GenerateTarget()
+    private async Task GenerateTarget()
     {
         if (!TryBeginWebsiteCommand("generate target", bypassDebounce: true))
         {
             return;
         }
 
-        var snapshot = StateStore.GenerateTarget();
+        var snapshot = await Defender.GenerateTargetAsync(CancellationToken.None);
         State.Refresh();
         _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
         Snackbar.Add("Generated a new target.", Severity.Success);
     }
 
-    private void ApplyTarget()
+    private async Task ApplyTarget()
     {
         if (!TryBeginWebsiteCommand("set target", bypassDebounce: true))
         {
             return;
         }
 
-        var snapshot = StateStore.SetTarget(_targetInput);
+        var snapshot = await Defender.SetTargetAsync(_targetInput, CancellationToken.None);
         State.Refresh();
         _targetInput = snapshot.TargetTemperatureCelsius;
         _targetDirty = false;
@@ -269,7 +271,16 @@
             return;
         }
 
-        StateStore.SetDefenderEnabled(enabled);
+        try
+        {
+            await Defender.SetDefenderEnabledAsync(enabled, CancellationToken.None);
+        }
+        catch (ThermostatOperationSupersededException)
+        {
+            State.Refresh();
+            Snackbar.Add("A newer defender switch action won; refreshed the live state.", Severity.Info);
+            return;
+        }
         State.Refresh();
         Snackbar.Add(enabled ? "Defender turned on." : "Defender paused.", Severity.Info);
 
@@ -311,36 +322,48 @@
             return;
         }
 
-        if (!StateStore.TryStartSiesta(minutes, "manual", out var message))
+        (bool Started, string Message) start;
+        try
         {
-            Snackbar.Add(message, Severity.Warning);
+            start = await Defender.StartSiestaAsync(minutes, "manual", CancellationToken.None);
+        }
+        catch (ThermostatOperationSupersededException)
+        {
+            State.Refresh();
+            Snackbar.Add("A newer siesta action won; refreshed the live state.", Severity.Info);
+            return;
+        }
+        if (!start.Started)
+        {
+            Snackbar.Add(start.Message, Severity.Warning);
             State.Refresh();
             return;
         }
 
-        try
-        {
-            await Defender.ApplySiestaThermostatActionAsync(CancellationToken.None);
-        }
-        catch
-        {
-            // The park/off command is best-effort; the nap itself is already on.
-        }
-
         State.Refresh();
-        Snackbar.Add(message, Severity.Success);
+        Snackbar.Add(start.Message, Severity.Success);
     }
 
-    private void CancelSiesta()
+    private async Task CancelSiesta()
     {
         if (!TryBeginWebsiteCommand("cancel siesta", bypassDebounce: true))
         {
             return;
         }
 
-        var ok = StateStore.TryCancelSiesta(out var message);
+        (bool Cancelled, string Message) cancel;
+        try
+        {
+            cancel = await Defender.CancelSiestaAsync("website", CancellationToken.None);
+        }
+        catch (ThermostatOperationSupersededException)
+        {
+            State.Refresh();
+            Snackbar.Add("A newer siesta action won; refreshed the live state.", Severity.Info);
+            return;
+        }
         State.Refresh();
-        Snackbar.Add(message, ok ? Severity.Info : Severity.Warning);
+        Snackbar.Add(cancel.Message, cancel.Cancelled ? Severity.Info : Severity.Warning);
     }
 
     private Task RefreshReal() => RunThermostatAction(() => Defender.RefreshRealThermostatAsync(CancellationToken.None), "Thermostat refreshed.", "refresh thermostat", bypassDebounce: true);
@@ -363,7 +386,16 @@
 
         // Persist the stand-down before the real off command. Otherwise the worker can see HVAC off
         // while containment is still enabled and Cool Mode Restore can immediately put it back in cool.
-        StateStore.SetDefenderEnabled(false);
+        try
+        {
+            await Defender.SetDefenderEnabledAsync(false, CancellationToken.None);
+        }
+        catch (ThermostatOperationSupersededException)
+        {
+            State.Refresh();
+            Snackbar.Add("A newer defender switch action won; refreshed the live state.", Severity.Info);
+            return;
+        }
         State.Refresh();
         await TurnThermostatOffAfterGate("Defender stood down and thermostat turned off.");
     }
@@ -439,6 +471,28 @@
             }
 
             Snackbar.Add(successMessage, Severity.Success);
+        }
+        catch (ThermostatOperationSupersededException)
+        {
+            State.Refresh();
+            Snackbar.Add("A newer thermostat action took priority; Home Assistant remains connected.", Severity.Info);
+        }
+        catch (ThermostatCommandRetryDeferredException ex)
+        {
+            State.Refresh();
+            Snackbar.Add(ex.Message, Severity.Info);
+        }
+        catch (ThermostatCommandRejectedException ex)
+        {
+            State.Refresh();
+            Snackbar.Add($"Home Assistant rejected the thermostat command: {ex.Message}", Severity.Error);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode is not null)
+        {
+            StateStore.RecordHomeAssistantRequestRejected(
+                $"Home Assistant rejected the request ({(int)ex.StatusCode.Value}): {ex.Message}");
+            State.Refresh();
+            Snackbar.Add(ex.Message, Severity.Error);
         }
         catch (Exception ex)
         {

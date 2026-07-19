@@ -1,5 +1,6 @@
 @page "/settings"
 @inject DefenderStateStore StateStore
+@inject AcDefenderService Defender
 @inject ISnackbar Snackbar
 @inject TwoFactorAuth TwoFactorAuth
 @inject HomeAssistantTokenStore TokenStore
@@ -18,6 +19,7 @@
         </Actions>
         <ChildContent>
             <MudTextField @bind-Value="_settingsSearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
+                          Label="Search settings"
                           Placeholder="Search settings (cooldown, walkback, upstairs, weather…)"
                           Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mt-1" />
         </ChildContent>
@@ -759,6 +761,7 @@
         </Actions>
         <ChildContent>
             <MudTextField @bind-Value="_scheduleSearch" Immediate="true" Clearable="true" Margin="Margin.Dense"
+                          Label="Search schedule rules"
                           Placeholder="Search schedule rules" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Class="mb-2" />
 
             @if (!FilteredSchedule.Any())
@@ -785,7 +788,12 @@
                                 <div class="day-button-row">
                                     @foreach (var day in Days)
                                     {
-                                        <MudButton Size="Size.Small" Variant="@DayVariant(entry, day)" Color="@DayColor(entry, day)" OnClick="@(() => ToggleDay(entry, day))">@day</MudButton>
+                                        <MudButton Size="Size.Small"
+                                                   Variant="@DayVariant(entry, day)"
+                                                   Color="@DayColor(entry, day)"
+                                                   aria-label="@($"{day} for {entry.Name}")"
+                                                   aria-pressed="@(DaySet(entry).Contains(day) ? "true" : "false")"
+                                                   OnClick="@(() => ToggleDay(entry, day))">@day</MudButton>
                                     }
                                 </div>
                             </MudItem>
@@ -1533,7 +1541,7 @@
         return DaySet(entry).Contains(day) ? Color.Primary : Color.Default;
     }
 
-    private void SaveSettings()
+    private async Task SaveSettings()
     {
         var gate = StateStore.TryBeginWebsiteCommand("save settings", bypassDebounce: true);
         if (!gate.Accepted)
@@ -1819,7 +1827,7 @@
             _reactorPowerEnabled,
             _foodRationSizeCad);
 
-        var snapshot = StateStore.UpdateSettings(request);
+        var snapshot = await Defender.UpdateSettingsAsync(request, CancellationToken.None);
         LoadFromSnapshot(snapshot);
         _settingsStatus = $"Saved {TorontoNow():HH:mm:ss}";
         Snackbar.Add("Settings saved.", Severity.Success);

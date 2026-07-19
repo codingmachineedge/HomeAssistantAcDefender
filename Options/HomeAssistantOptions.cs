@@ -14,6 +14,18 @@ public sealed class HomeAssistantOptions
 
     public string OutdoorTemperatureEntityId { get; set; } = "";
 
+    // Key-free Open-Meteo fallback. Home Assistant weather and outdoor-temperature entities
+    // always remain the primary sources. When coordinates are omitted, the app reads the real
+    // installation latitude/longitude from Home Assistant's /api/config endpoint.
+    public bool OpenMeteoBackupEnabled { get; set; } = true;
+
+    public double? OpenMeteoLatitude { get; set; }
+
+    public double? OpenMeteoLongitude { get; set; }
+
+    // The client enforces a ten-minute minimum even if configuration asks for less.
+    public int OpenMeteoRefreshMinutes { get; set; } = 30;
+
     public string UsagePowerEntityId { get; set; } = "sensor.alectra_hui_current_power";
 
     public string UsageEnergyEntityId { get; set; } = "sensor.alectra_hui_energy_today";

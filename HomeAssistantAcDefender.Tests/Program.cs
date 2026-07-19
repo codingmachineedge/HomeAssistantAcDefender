@@ -10,6 +10,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 var tests = new DefenderSetPointRegressionTests();
+var settingsRepositoryTests = new SettingsGitRepositoryRegressionTests();
+settingsRepositoryTests.IdenticalSaveRecoversDirtySnapshotAfterGitFailureAndRestart();
 tests.ManualTouchWhileWarmRestartsBelowRoomByApproach();
 tests.ManualTouchAfterTargetRestartsBelowRoomByApproach();
 tests.IdleWarmRoomWalksDownByApproachUntilWebsiteTarget();
@@ -33,14 +35,40 @@ tests.CoolingFailureMegaAndOmegaWhenBreakerOffAndRoomRising();
 tests.CoolingFailureMegaWhenFarAboveTargetEvenIfRoomDrifsDown();
 tests.CoolingFailureMegaWhenCoolingActionButRoomNotDropping();
 tests.CoolingFailureShutdownTurnsAcOffUntilRoomRisesHalfDegree();
+tests.CoolingFailureRestoreCannotImmediatelyReopenShutdown();
 tests.CoolingFailureShutdownRespectsAManualTurnBackOn();
+tests.CoolModeRestoreDelayExpiresWhenDue();
+tests.PendingCoolCommandDoesNotHideDifferentHumanSetPoint();
+tests.PendingOffEchoGraceExpiresBeforeHumanOffRespect();
 tests.AngerButtonLearnsUpsetAndRaisesThisHourSensitivity();
 tests.HistoryLearningBuildsHumanComfortProfileAndCadence();
 tests.MachineLearningTrainerLearnsAngerAndComfortPatterns();
 tests.AdjustmentStatisticsSplitByPresenceAndBedroomOccupancy();
 tests.OutdoorPowerRuleSilencesWhenColdLiteWhenMildButYieldsToHotRoom();
+tests.StaleOutdoorWeatherCannotTriggerNightOffOrOutdoorSilence();
+tests.HotRoomCoolOutdoorPreflightSendsNoOff();
+tests.CoolOutdoorRestoreCannotImmediatelyReenter();
+tests.AutomaticOffShutdownsRetryUntilHomeAssistantAcknowledges();
 await tests.ColdOutdoorRulePreventsFiveSecondCoolModeBlipAsync();
+await tests.OpenMeteoParsesCachesAndKeepsHomeAssistantTokenIsolatedAsync();
+await tests.HomeAssistantInstallationCoordinatesAreCachedAsync();
+await tests.ConfiguredClimateNeverFallsBackAndRejectsInvalidStateAsync();
+await tests.WeatherClientTimeoutsBackOffWithoutBlockingClimateCyclesAsync();
+tests.OpenMeteoForecastCadenceDoesNotReRecordCachedDataEveryCycle();
 tests.AccountSignupOwnerThenCodeGatedAndValidates();
+await tests.ConcurrentFirstAccountCreationYieldsExactlyOneOwnerAsync();
+tests.HotRoomSiestaPreflightRejectsWithoutStarting();
+tests.SiestaOffEntryHysteresisAvoidsImmediateWakeFlap();
+await tests.ConcurrentCoolingBoostAndOffAreSerializedAsync();
+await tests.SafetyOffCannotBeCancelledByLowerPriorityRequestsAsync();
+await tests.SafetyOffCompletesAfterCallerCancellationAsync();
+await tests.StandDownReversalsPreventStaleParkAndSiestaCommandsAsync();
+await tests.DefiniteCommandRejectionDoesNotArmTamperTruceAsync();
+await tests.ClimateReadRejectionDoesNotArmTamperTruceAsync();
+tests.MatchingThermostatCommandsUseConfirmationGraceAndRejectBackoff();
+tests.AutomaticOffShutdownsHonorFiveMinuteOnDwell();
+tests.AutomaticCoolRestoreHonorsFiveMinuteOffDwell();
+await tests.EnforcerCannotBypassAutomaticOffDwellAsync();
 tests.EmergencyQuietPausesCorrectionsButKeepsStatus();
 tests.FrontDoorKillSwitchPausesDefenderAndTagsThermostatOffSource();
 tests.WallSettlingWaitsWhileWallThermostatIsStillBeingTouched();
@@ -75,6 +103,8 @@ tests.AppliedTargetPersistsAcrossStoreReloads();
 tests.InvalidLoadedTargetFallsBackToConfiguredDefault();
 tests.UserTargetSurvivesUpstairsComfortOverride();
 tests.NightShutdownTurnsAcOffOnceAndStandsDown();
+tests.NightShutdownEntryHysteresisAvoidsBoundaryFlap();
+tests.NightShutdownPreflightsHotRoomBeforeOffAndReleasesActiveHold();
 tests.GentleSteppingPacesWalkDownAndPreemptsCompressorStop();
 tests.StepperNeverSnapsTheWallAndWalksBothWaysTowardMyTemp();
 tests.PeaceOfferingConcedesUpwardOnAppRaiseThenStandsDown();
@@ -111,6 +141,200 @@ Console.WriteLine("Defender setpoint regression checks passed.");
 
 internal sealed class DefenderSetPointRegressionTests
 {
+    public async Task OpenMeteoParsesCachesAndKeepsHomeAssistantTokenIsolatedAsync()
+    {
+        var handler = new OpenMeteoApiHandler();
+        var configured = new HomeAssistantOptions
+        {
+            AccessToken = "must-stay-on-home-assistant",
+            OpenMeteoRefreshMinutes = 1,
+        };
+        var externalHttpClient = new HttpClient(handler);
+        externalHttpClient.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", configured.AccessToken);
+        var client = new OpenMeteoWeatherClient(
+            externalHttpClient,
+            new FixedOptionsMonitor<HomeAssistantOptions>(configured),
+            NullLogger<OpenMeteoWeatherClient>.Instance);
+
+        var first = await client.GetWeatherAsync(43.6532, -79.3832, CancellationToken.None)
+            ?? throw new InvalidOperationException("Open-Meteo test response should parse.");
+        var second = await client.GetWeatherAsync(43.6532, -79.3832, CancellationToken.None)
+            ?? throw new InvalidOperationException("Open-Meteo cached response should remain available.");
+
+        if (handler.RequestCount != 1 || !ReferenceEquals(first, second))
+        {
+            throw new InvalidOperationException("Open-Meteo should cache a real response and avoid a second request inside the ten-minute minimum cadence.");
+        }
+
+        if (handler.Authorization is not null)
+        {
+            throw new InvalidOperationException("The isolated Open-Meteo client must never receive or send the Home Assistant bearer token.");
+        }
+
+        if (!handler.Query.Contains("forecast_hours=48", StringComparison.Ordinal)
+            || !handler.Query.Contains("latitude=43.65", StringComparison.Ordinal)
+            || !handler.Query.Contains("longitude=-79.38", StringComparison.Ordinal)
+            || first.Current.EntityId != OpenMeteoWeatherClient.SourceId
+            || first.Current.Condition != "cloudy"
+            || first.Current.OutdoorTemperatureCelsius != 25.5
+            || first.Forecast.EntityId != OpenMeteoWeatherClient.SourceId
+            || first.Forecast.Entries.Count != 48
+            || first.ObservedAt.Offset != TimeSpan.Zero)
+        {
+            throw new InvalidOperationException("Open-Meteo should use privacy-rounded coordinates and parse current temperature/WMO condition plus exactly 48 attributed UTC hourly entries.");
+        }
+    }
+
+    public async Task HomeAssistantInstallationCoordinatesAreCachedAsync()
+    {
+        var handler = new HomeAssistantConfigHandler();
+        var configured = new HomeAssistantOptions
+        {
+            BaseUrl = "http://home-assistant.test:8123",
+            AccessToken = "home-assistant-only-token",
+        };
+        var client = new HomeAssistantClient(
+            new HttpClient(handler),
+            new FixedOptionsMonitor<HomeAssistantOptions>(configured),
+            NullLogger<HomeAssistantClient>.Instance);
+
+        var first = await client.GetInstallationCoordinatesAsync(CancellationToken.None);
+        var second = await client.GetInstallationCoordinatesAsync(CancellationToken.None);
+        if (first is null || second is null
+            || first.Latitude != 43.6532 || first.Longitude != -79.3832
+            || handler.RequestCount != 1)
+        {
+            throw new InvalidOperationException("Home Assistant /api/config coordinates should be validated and cached after one authenticated request.");
+        }
+
+        if (handler.Authorization != "Bearer home-assistant-only-token")
+        {
+            throw new InvalidOperationException("The Home Assistant coordinate lookup should keep using the HA bearer token on the HA host.");
+        }
+    }
+
+    public async Task ConfiguredClimateNeverFallsBackAndRejectsInvalidStateAsync()
+    {
+        var invalidStates = new[]
+        {
+            "{\"entity_id\":\"climate.dining_room\",\"state\":\"unavailable\",\"attributes\":{}}",
+            "{\"entity_id\":\"climate.dining_room\",\"state\":\"unknown\",\"attributes\":{\"current_temperature\":22.0,\"temperature\":22.0}}",
+            "{\"entity_id\":\"climate.dining_room\",\"state\":\"cool\",\"attributes\":{\"temperature\":22.0}}",
+            "{\"entity_id\":\"climate.dining_room\",\"state\":\"cool\",\"attributes\":{\"current_temperature\":\"NaN\",\"temperature\":22.0}}",
+            "{\"entity_id\":\"climate.dining_room\",\"state\":\"off\",\"attributes\":{\"current_temperature\":0.0,\"temperature\":0.0}}"
+        };
+
+        foreach (var invalidState in invalidStates)
+        {
+            var homeAssistantOptions = new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room"
+            };
+            var monitor = new FixedOptionsMonitor<HomeAssistantOptions>(homeAssistantOptions);
+            var handler = new SerializedClimateHomeAssistantHandler(
+                blockFirstTemperatureCommand: false,
+                climateStateOverrideJson: invalidState);
+            using var httpClient = new HttpClient(handler);
+            var client = new HomeAssistantClient(httpClient, monitor, NullLogger<HomeAssistantClient>.Instance);
+
+            if (await client.GetDiningRoomClimateAsync(CancellationToken.None) is not null)
+            {
+                throw new InvalidOperationException("Unavailable, unknown, missing, or non-finite climate telemetry must never become a 0 C real reading.");
+            }
+
+            if (handler.RequestPaths.Any(path => string.Equals(path, "api/states", StringComparison.OrdinalIgnoreCase)
+                || path.Contains("climate.bedroom", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException("A configured climate entity must never silently fall back to discovery or another thermostat.");
+            }
+        }
+
+        foreach (var validOffState in new[]
+        {
+            "{\"entity_id\":\"climate.dining_room\",\"state\":\"off\",\"attributes\":{\"current_temperature\":22.0,\"temperature\":0.0}}",
+            "{\"entity_id\":\"climate.dining_room\",\"state\":\"off\",\"attributes\":{\"current_temperature\":22.0}}"
+        })
+        {
+            var options = new FixedOptionsMonitor<HomeAssistantOptions>(new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room"
+            });
+            var handler = new SerializedClimateHomeAssistantHandler(
+                blockFirstTemperatureCommand: false,
+                climateStateOverrideJson: validOffState);
+            using var httpClient = new HttpClient(handler);
+            var client = new HomeAssistantClient(httpClient, options, NullLogger<HomeAssistantClient>.Instance);
+            var reading = await client.GetDiningRoomClimateAsync(CancellationToken.None);
+            if (reading is null
+                || !string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase)
+                || reading.CurrentTemperatureCelsius != 22.0
+                || reading.SetPointCelsius != 0.0)
+            {
+                throw new InvalidOperationException("A real OFF climate reading with a 0 or omitted target must remain available using the established mode-off sentinel.");
+            }
+        }
+    }
+
+    public async Task WeatherClientTimeoutsBackOffWithoutBlockingClimateCyclesAsync()
+    {
+        var openMeteoHandler = new TimeoutApiHandler();
+        var configured = new HomeAssistantOptions
+        {
+            AccessToken = "test-token",
+            BaseUrl = "http://home-assistant.test:8123",
+        };
+        var openMeteo = new OpenMeteoWeatherClient(
+            new HttpClient(openMeteoHandler),
+            new FixedOptionsMonitor<HomeAssistantOptions>(configured),
+            NullLogger<OpenMeteoWeatherClient>.Instance);
+
+        if (await openMeteo.GetWeatherAsync(43.6532, -79.3832, CancellationToken.None) is not null
+            || await openMeteo.GetWeatherAsync(43.6532, -79.3832, CancellationToken.None) is not null
+            || openMeteoHandler.RequestCount != 1)
+        {
+            throw new InvalidOperationException("An Open-Meteo HTTP timeout should return unavailable and enter backoff instead of escaping or retrying every climate cycle.");
+        }
+
+        var homeAssistantHandler = new TimeoutApiHandler();
+        var homeAssistant = new HomeAssistantClient(
+            new HttpClient(homeAssistantHandler),
+            new FixedOptionsMonitor<HomeAssistantOptions>(configured),
+            NullLogger<HomeAssistantClient>.Instance);
+        if (await homeAssistant.GetInstallationCoordinatesAsync(CancellationToken.None) is not null
+            || await homeAssistant.GetInstallationCoordinatesAsync(CancellationToken.None) is not null
+            || homeAssistantHandler.RequestCount != 1)
+        {
+            throw new InvalidOperationException("A Home Assistant coordinate timeout should return unavailable and enter backoff so the climate cycle can continue.");
+        }
+    }
+
+    public void OpenMeteoForecastCadenceDoesNotReRecordCachedDataEveryCycle()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var fetchedAt = new DateTimeOffset(2026, 7, 18, 21, 0, 0, TimeSpan.Zero);
+        var refreshAt = fetchedAt.AddHours(1);
+        var forecast = new WeatherForecastReading(
+            OpenMeteoWeatherClient.SourceId,
+            "hourly",
+            [new ForecastEntry(fetchedAt.AddHours(1), 24.0, "sunny")]);
+
+        fixture.Store.RecordForecastReading(forecast, fetchedAt, refreshAt);
+        if (fixture.Store.ShouldRefreshForecast(fetchedAt.AddMinutes(30)))
+        {
+            throw new InvalidOperationException("A cached Open-Meteo forecast must not be re-recorded on every thermostat cycle before its external refresh time.");
+        }
+
+        if (!fixture.Store.ShouldRefreshForecast(refreshAt))
+        {
+            throw new InvalidOperationException("The Open-Meteo forecast should become due at its real external refresh time.");
+        }
+    }
+
     public void AppliedTargetPersistsAcrossStoreReloads()
     {
         var contentRoot = DefenderStoreFixture.CreateContentRoot();
@@ -1302,12 +1526,15 @@ internal sealed class DefenderSetPointRegressionTests
             new HomeAssistantStateContext("ctx-1", null, "app-user-1")));
 
         var reading = new ThermostatReading("climate.dining_room", 23.5, 24.5, "cool", "idle", null, []);
-        if (!store.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out var gift, out _, out _) || gift is null)
+        if (!store.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out var gift, out var giftUntil, out _)
+            || gift is null
+            || giftUntil is null)
         {
             throw new InvalidOperationException("An app-sourced raise must arm a one-shot peace offering.");
         }
 
         AssertEqual(25.0, gift.Value, "The gift goes one step ABOVE what they asked for (24.5 + 0.5).");
+        store.RecordPeaceOfferingCommand(gift.Value, giftUntil.Value);
 
         // The gesture holds: no second command, corrections stand down.
         if (!store.TryBeginPeaceOffering(reading, DateTimeOffset.UtcNow, out var second, out _, out _) || second is not null)
@@ -1364,6 +1591,7 @@ internal sealed class DefenderSetPointRegressionTests
         }
 
         AssertEqual(26.5, step, "The ease-up moves 0.5 C at a time toward just above the room.");
+        store.RecordCoolingRestSetPointCommand(step);
 
         // After the rest window, normal duty resumes with a fresh run clock.
         SetRuntimeProperty(store, "CoolingRestUntil", DateTimeOffset.UtcNow.AddSeconds(-1));
@@ -1446,8 +1674,8 @@ internal sealed class DefenderSetPointRegressionTests
 
         // WARM night (27 C outside → no shutdown) with the AC cooling. Feed 2h of cooling in 2-min
         // steps; after the 90-minute budget the defender must ease the setpoint UP to stop it.
-        store.RecordWeatherReading(new WeatherReading("weather.home", 27.0, "hot"));
         var nightStart = new DateTimeOffset(DateTime.Now.Date.AddHours(2)); // 02:00 local
+        store.RecordWeatherReading(new WeatherReading("weather.home", 27.0, "hot"), nightStart);
         double wall = 22.0;
         var easedAt = -1;
         for (var step = 0; step < 60; step++) // 60 * 2 min = 120 min
@@ -1723,15 +1951,15 @@ internal sealed class DefenderSetPointRegressionTests
                 case 180: mode = "off"; break;                                // 23:00 brother turns the AC OFF by hand
                 case 270: outdoor = 22.0; break;                              // 00:30 cool night
                 case 420: mode = "cool"; wallSp = 25.0; manualNightReEnableAt = now; break; // 03:00 manual re-enable
-                case 480: store.RecordWeatherReading(new WeatherReading("weather.home", null, "unavailable")); break; // 04:00 blip
-                case 485: store.RecordWeatherReading(new WeatherReading("weather.home", 22.0, "clear")); break;
+                case 480: store.RecordWeatherReading(new WeatherReading("weather.home", null, "unavailable"), now); break; // 04:00 blip
+                case 485: store.RecordWeatherReading(new WeatherReading("weather.home", 22.0, "clear"), now); break;
                 case 600: wallSp = 27.0; break;                               // 06:00 brother raises again
                 case 840: outdoor = 33.0; break;                              // 10:00 heat wave: target unreachable
             }
 
             if (minute != 480 && minute != 485)
             {
-                store.RecordWeatherReading(new WeatherReading("weather.home", outdoor, "sim"));
+                store.RecordWeatherReading(new WeatherReading("weather.home", outdoor, "sim"), now);
             }
 
             // ---- one worker cycle, in the real gate order ----
@@ -1739,7 +1967,7 @@ internal sealed class DefenderSetPointRegressionTests
             var snapshot = store.RecordHomeAssistantReading(reading, now);
 
             if (snapshot.DefenderEnabled
-                && store.TryBeginPeaceOffering(reading, now, out var gift, out _, out _))
+                && store.TryBeginPeaceOffering(reading, now, out var gift, out var giftUntil, out _))
             {
                 if (gift is { } g && mode == "cool")
                 {
@@ -1750,7 +1978,7 @@ internal sealed class DefenderSetPointRegressionTests
 
                     giftsSent.Add(g);
                     wallSp = g;
-                    store.RecordCommand($"sim gift -> {g:0.0}", g, commandedHvacMode: "cool", nowOverride: now);
+                    store.RecordPeaceOfferingCommand(g, giftUntil ?? now, now);
                 }
 
                 continue;
@@ -1772,12 +2000,13 @@ internal sealed class DefenderSetPointRegressionTests
                 if (easeUp is { } e)
                 {
                     SendSetpoint(e, now, "rest");
+                    store.RecordCoolingRestSetPointCommand(e, now);
                 }
 
                 continue;
             }
 
-            if (store.TryBeginNightShutdown(reading, now, out _, out _, out var turnOff, out _))
+            if (store.TryBeginNightShutdown(reading, now, out var nightUntil, out _, out var turnOff, out _))
             {
                 if (turnOff)
                 {
@@ -1789,7 +2018,7 @@ internal sealed class DefenderSetPointRegressionTests
                     }
 
                     mode = "off";
-                    store.RecordCommand("sim night off", commandedHvacMode: "off", nowOverride: now);
+                    store.RecordNightShutdownOffCommand(reading.EntityId, nightUntil ?? now, now);
                 }
 
                 continue;
@@ -2344,6 +2573,7 @@ internal sealed class DefenderSetPointRegressionTests
         using var fixture = DefenderStoreFixture.Create();
         var store = fixture.Store;
         store.SetTarget(23.0);
+        store.SetDefenderEnabled(false);
 
         // Cool mode with a low setpoint: park at 28.
         var cool = new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "idle", null, []);
@@ -2411,15 +2641,15 @@ internal sealed class DefenderSetPointRegressionTests
         s.NightShutdownOutdoorBelowCelsius = 24.0;
         SetRuntimeProperty(store, "Settings", s);
 
-        store.RecordWeatherReading(new WeatherReading("weather.home", 20.0, "clear"));
-
         var night = new DateTimeOffset(DateTime.Now.Date.AddHours(2)); // 02:00 local
+        store.RecordWeatherReading(new WeatherReading("weather.home", 20.0, "clear"), night);
         var coolReading = new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "cooling", null, []);
 
-        if (!store.TryBeginNightShutdown(coolReading, night, out _, out _, out var turnOff, out _) || !turnOff)
+        if (!store.TryBeginNightShutdown(coolReading, night, out var nightUntil, out _, out var turnOff, out _) || !turnOff)
         {
             throw new InvalidOperationException("Entering the night window with a cool outdoor reading must trigger a single AC-off command.");
         }
+        store.RecordNightShutdownOffCommand(coolReading.EntityId, nightUntil ?? night, night);
 
         // Someone turns the AC back on mid-window: respected — no second off command, but still standing down.
         if (!store.TryBeginNightShutdown(coolReading, night.AddMinutes(10), out _, out _, out var secondOff, out _) || secondOff)
@@ -2429,7 +2659,7 @@ internal sealed class DefenderSetPointRegressionTests
 
         // Hot night: no shutdown, but PASSIVE WATCH — the defender holds (no off command) and
         // sends no corrections, because history shows night-time fights are the angriest.
-        store.RecordWeatherReading(new WeatherReading("weather.home", 27.0, "hot"));
+        store.RecordWeatherReading(new WeatherReading("weather.home", 27.0, "hot"), night.AddMinutes(20));
         if (!store.TryBeginNightShutdown(coolReading, night.AddMinutes(20), out _, out _, out var hotNightOff, out _) || hotNightOff)
         {
             throw new InvalidOperationException("A hot night must enter passive watch (hold, no off command) instead of normal fighting.");
@@ -2443,11 +2673,115 @@ internal sealed class DefenderSetPointRegressionTests
         }
 
         // Outside the window: normal duty.
-        store.RecordWeatherReading(new WeatherReading("weather.home", 20.0, "clear"));
         var morning = new DateTimeOffset(DateTime.Now.Date.AddHours(9)); // 09:00 local
+        store.RecordWeatherReading(new WeatherReading("weather.home", 20.0, "clear"), morning);
         if (store.TryBeginNightShutdown(coolReading, morning, out _, out _, out _, out _))
         {
             throw new InvalidOperationException("Night shutdown must not hold outside its window.");
+        }
+    }
+
+    public void NightShutdownEntryHysteresisAvoidsBoundaryFlap()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.NightShutdownEnabled = true;
+        settings.NightShutdownStartTime = "01:00";
+        settings.NightShutdownEndTime = "08:00";
+        settings.NightShutdownOutdoorBelowCelsius = 24.0;
+        SetRuntimeProperty(store, "Settings", settings);
+        var now = new DateTimeOffset(DateTime.Now.Date.AddHours(2));
+        store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "clear"), now);
+
+        var nearBoundary = new ThermostatReading(
+            "climate.dining_room", 23.9, 22.0, "cool", "idle", null, []);
+        if (!store.TryBeginNightShutdown(
+                nearBoundary,
+                now,
+                out _,
+                out var nearMessage,
+                out var nearOff,
+                out _)
+            || nearOff
+            || !nearMessage.Contains("boundary", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Night shutdown must wait rather than issue OFF beside the direct-comfort boundary.");
+        }
+
+        var settled = nearBoundary with { CurrentTemperatureCelsius = 23.6 };
+        if (!store.TryBeginNightShutdown(settled, now.AddSeconds(5), out _, out _, out var settledOff, out _)
+            || !settledOff)
+        {
+            throw new InvalidOperationException("Night shutdown should still issue its one-shot OFF after the room settles inside the hysteresis band.");
+        }
+    }
+
+    public void NightShutdownPreflightsHotRoomBeforeOffAndReleasesActiveHold()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        var settings = store.GetSettings();
+        settings.NightShutdownEnabled = true;
+        settings.NightShutdownStartTime = "01:00";
+        settings.NightShutdownEndTime = "08:00";
+        settings.NightShutdownOutdoorBelowCelsius = 24.0;
+        settings.NaturalSafetyOverrideCelsius = 2.0;
+        var night = new DateTimeOffset(DateTime.Now.Date.AddHours(2));
+        SetRuntimeProperty(store, "Settings", settings);
+        store.RecordWeatherReading(new WeatherReading("weather.home", 20.0, "clear"), night);
+        var hotRoom = new ThermostatReading(
+            "climate.dining_room",
+            25.5,
+            23.0,
+            "cool",
+            "cooling",
+            null,
+            []);
+
+        // Even with cool outdoor air inside the shutdown window, direct room comfort must win
+        // before the first OFF or any night-budget ease-up is signalled.
+        if (store.TryBeginNightShutdown(hotRoom, night, out _, out _, out var hotRoomOff, out var hotRoomEase)
+            || hotRoomOff
+            || hotRoomEase is not null)
+        {
+            throw new InvalidOperationException("A room above target plus the safety margin must preflight out of night shutdown before OFF/ease-up.");
+        }
+
+        // Start one real night episode from a safe reading, then let the room cross the comfort
+        // threshold. The active hold must release in that same call without a second actuator write.
+        var safeRoom = hotRoom with { CurrentTemperatureCelsius = 24.0 };
+        if (!store.TryBeginNightShutdown(safeRoom, night.AddMinutes(5), out var nightUntil, out _, out var firstOff, out _)
+            || !firstOff)
+        {
+            throw new InvalidOperationException("The safe cool-outdoor reading should establish the one-shot night OFF episode for this regression.");
+        }
+        store.RecordNightShutdownOffCommand(safeRoom.EntityId, nightUntil ?? night, night.AddMinutes(5));
+
+        if (store.TryBeginNightShutdown(hotRoom, night.AddMinutes(10), out _, out _, out var releaseOff, out var releaseEase)
+            || releaseOff
+            || releaseEase is not null)
+        {
+            throw new InvalidOperationException("An active night hold must release immediately for direct comfort without another OFF/ease command.");
+        }
+
+        var runtimeState = GetRuntimeState(store);
+        var active = (bool)runtimeState.GetType().GetProperty("NightShutdownActive")!.GetValue(runtimeState)!;
+        if (active
+            || !store.GetSnapshot().Events.Any(item => item.Message.Contains("released for direct comfort", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException("The hot-room release must clear the active night hold and expose its direct-comfort status.");
+        }
+
+        // If the room becomes safe again in the same window, the window key still prevents a
+        // conspicuous second OFF command.
+        if (!store.TryBeginNightShutdown(safeRoom, night.AddMinutes(15), out _, out _, out var repeatedOff, out _)
+            || repeatedOff)
+        {
+            throw new InvalidOperationException("A released night episode must retain one-OFF-per-window protection.");
         }
     }
 
@@ -2826,8 +3160,8 @@ internal sealed class DefenderSetPointRegressionTests
     public void CoolingFailureShutdownTurnsAcOffUntilRoomRisesHalfDegree()
     {
         // When the MEGA/OMEGA cooling-failure alert is up, the defender turns the AC off and holds it
-        // off until the real room temperature rises 0.5 C above the reading captured at shutdown, then
-        // restores cool.
+        // off until the real room temperature rises 0.5 C above the reading captured at shutdown. A
+        // minimum OFF dwell and two stable real readings are required before cool is restored.
         using var fixture = DefenderStoreFixture.Create();
         var store = fixture.Store;
         store.SetTarget(22.0);
@@ -2842,12 +3176,22 @@ internal sealed class DefenderSetPointRegressionTests
         }
 
         var t0 = DateTimeOffset.UtcNow;
+        SetRuntimeProperty(store, "LastObservedHvacModeCoolAt", t0.AddMinutes(-10));
 
         // Shutdown opens: it turns the AC off and holds, capturing 25.0 C as the release baseline.
         if (!store.TryRespectCoolingFailureShutdown(coolIdle, t0, out _, out _, out var turnOff, out var restore, out _)
             || !turnOff || restore)
         {
             throw new InvalidOperationException("The cooling-failure shutdown should turn the AC off and hold while the alert is up.");
+        }
+        store.RecordCoolingFailureShutdownOffCommand(coolIdle.EntityId, t0);
+
+        // A single noisy rise before the anti-short-cycle dwell expires must not restore cool.
+        var offReleased = coolIdle with { HvacMode = "off", HvacAction = "off", CurrentTemperatureCelsius = 25.5 };
+        if (!store.TryRespectCoolingFailureShutdown(offReleased, t0.AddSeconds(30), out _, out _, out var earlyOff, out var earlyRestore, out _)
+            || earlyOff || earlyRestore)
+        {
+            throw new InvalidOperationException("A release-temperature blip inside the minimum OFF dwell must keep the AC off.");
         }
 
         // AC now off; still below baseline + 0.5 -> keep holding, no re-command, no restore. (Mode is
@@ -2859,12 +3203,88 @@ internal sealed class DefenderSetPointRegressionTests
             throw new InvalidOperationException("Below the 0.5 C release margin the shutdown must keep the AC off without re-commanding or restoring.");
         }
 
-        // Room reaches baseline + 0.5 (25.5) -> restore cool (returns false with restoreCool set).
-        var offReleased = offBelow with { CurrentTemperatureCelsius = 25.5 };
-        if (store.TryRespectCoolingFailureShutdown(offReleased, t0.AddMinutes(6), out _, out _, out var finalOff, out var finalRestore, out _)
+        // The first qualifying post-dwell reading only arms confirmation.
+        if (!store.TryRespectCoolingFailureShutdown(offReleased, t0.AddMinutes(6), out _, out _, out var candidateOff, out var candidateRestore, out _)
+            || candidateOff || candidateRestore)
+        {
+            throw new InvalidOperationException("The first post-dwell release reading must arm confirmation while the AC remains off.");
+        }
+
+        // A second reading that arrives too soon is still inside the stability confirmation window.
+        if (!store.TryRespectCoolingFailureShutdown(offReleased, t0.AddMinutes(6).AddSeconds(2), out _, out _, out var confirmingOff, out var confirmingRestore, out _)
+            || confirmingOff || confirmingRestore)
+        {
+            throw new InvalidOperationException("Cooling-failure release must wait through its stable-reading confirmation window.");
+        }
+
+        // A second stable reading after the confirmation interval restores cool exactly once.
+        if (store.TryRespectCoolingFailureShutdown(offReleased, t0.AddMinutes(6).AddSeconds(5), out _, out _, out var finalOff, out var finalRestore, out _)
             || finalOff || !finalRestore)
         {
-            throw new InvalidOperationException("Once the room rises 0.5 C the shutdown must restore cool (return false with restoreCool=true).");
+            throw new InvalidOperationException("A second stable post-dwell reading must restore cool (return false with restoreCool=true).");
+        }
+    }
+
+    public void CoolingFailureRestoreCannotImmediatelyReopenShutdown()
+    {
+        // Home Assistant can echo `cooling` immediately after the shutdown restores COOL. Retained
+        // twenty-minute room history may re-arm MEGA on that same poll, but compressor protection must
+        // keep the newly restored mode on for five minutes instead of issuing a second OFF in seconds.
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var restoredAt = DateTimeOffset.UtcNow;
+
+        SeedRoomSample(store, restoredAt.AddSeconds(-1205), 25.0);
+        var restoredCooling = new ThermostatReading(
+            "climate.dining_room",
+            25.0,
+            23.0,
+            "cool",
+            "cooling",
+            null,
+            []);
+
+        store.RecordCommand(
+            "Cooling-failure restore accepted for regression coverage.",
+            commandedHvacMode: "cool",
+            nowOverride: restoredAt);
+        store.RecordCoolingFailureRestoreCommand(restoredCooling.EntityId, restoredAt);
+        var snapshot = store.RecordHomeAssistantReading(restoredCooling, restoredAt.AddSeconds(5));
+        if (!snapshot.CoolingFailure.Alerting)
+        {
+            throw new InvalidOperationException("Retained no-drop evidence should reproduce the post-restore MEGA re-arm precondition.");
+        }
+
+        if (store.TryRespectCoolingFailureShutdown(
+                restoredCooling,
+                restoredAt.AddSeconds(5),
+                out var heldUntil,
+                out var message,
+                out var turnOff,
+                out var restoreCool,
+                out _)
+            || turnOff
+            || restoreCool
+            || heldUntil != restoredAt.AddMinutes(5).AddSeconds(5)
+            || !message.Contains("minimum-ON dwell", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("A restored cooling-failure episode must not reopen or send OFF inside the five-minute minimum-ON dwell.");
+        }
+
+        if (store.TryRespectCoolingFailureShutdown(
+                restoredCooling,
+                restoredAt.AddSeconds(6),
+                out var stillHeldUntil,
+                out _,
+                out var secondTurnOff,
+                out var secondRestore,
+                out _)
+            || secondTurnOff
+            || secondRestore
+            || stillHeldUntil != restoredAt.AddMinutes(5).AddSeconds(5))
+        {
+            throw new InvalidOperationException("The post-restore dwell must remain unlatched and command-free on every poll before it expires.");
         }
     }
 
@@ -2882,10 +3302,12 @@ internal sealed class DefenderSetPointRegressionTests
         store.RecordHomeAssistantReading(coolIdle);
 
         var t0 = DateTimeOffset.UtcNow;
+        SetRuntimeProperty(store, "LastObservedHvacModeCoolAt", t0.AddMinutes(-10));
         if (!store.TryRespectCoolingFailureShutdown(coolIdle, t0, out _, out _, out var turnOff, out _, out _) || !turnOff)
         {
             throw new InvalidOperationException("The shutdown should turn the AC off first.");
         }
+        store.RecordCoolingFailureShutdownOffCommand(coolIdle.EntityId, t0);
 
         // Human turns it back on: mode reads cool again, well past the command grace, below the release
         // margin. The guard must release (return false, no restore command) rather than re-command off.
@@ -2894,6 +3316,162 @@ internal sealed class DefenderSetPointRegressionTests
             || reOff || reRestore)
         {
             throw new InvalidOperationException("A manual turn-back-on during the hold must be respected (guard stands aside, no re-command).");
+        }
+    }
+
+    public void CoolModeRestoreDelayExpiresWhenDue()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.CoolModeRestoreDelayEnabled = true;
+        settings.CoolModeRestoreMinimumDelaySeconds = 8;
+        settings.CoolModeRestoreMaximumDelaySeconds = 8;
+        settings.CoolModeRestoreComfortBandCelsius = 0.6;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var reading = new ThermostatReading(
+            "climate.dining_room",
+            22.2,
+            22.0,
+            "off",
+            "off",
+            null,
+            []);
+        var t0 = DateTimeOffset.UtcNow;
+
+        if (!store.TryDelayCoolModeRestore(reading, t0, out var dueAt, out _)
+            || dueAt != t0.AddSeconds(8))
+        {
+            throw new InvalidOperationException("Cool-mode restore should schedule the configured deterministic eight-second delay once.");
+        }
+
+        if (!store.TryDelayCoolModeRestore(reading, t0.AddSeconds(7), out var sameDueAt, out _)
+            || sameDueAt != dueAt)
+        {
+            throw new InvalidOperationException("Cool-mode restore must retain its original deadline before it expires.");
+        }
+
+        if (store.TryDelayCoolModeRestore(reading, dueAt, out _, out _)
+            || !store.GetSnapshot().CoolModeRestore.Status.Contains("finished", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("An elapsed cool-mode restore deadline must release immediately instead of rescheduling forever.");
+        }
+    }
+
+    public void PendingCoolCommandDoesNotHideDifferentHumanSetPoint()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        var t0 = DateTimeOffset.UtcNow;
+        var baseline = new ThermostatReading(
+            "climate.dining_room",
+            23.0,
+            23.0,
+            "cool",
+            "idle",
+            null,
+            [],
+            new HomeAssistantStateContext("ctx-baseline", null, null));
+        store.RecordHomeAssistantReading(baseline, t0);
+        store.RecordCommand(
+            "Defender requested 22.0 C while staying in cool mode.",
+            22.0,
+            commandedHvacMode: "cool",
+            nowOverride: t0.AddSeconds(1));
+
+        var humanRaise = baseline with
+        {
+            SetPointCelsius = 24.0,
+            Context = new HomeAssistantStateContext("ctx-human", null, "ha-user")
+        };
+        var snapshot = store.RecordHomeAssistantReading(humanRaise, t0.AddSeconds(2));
+
+        if (snapshot.ThermostatChanges.Count != 1)
+        {
+            throw new InvalidOperationException("A different human setpoint must be audited even when the pending command and reading both say COOL mode.");
+        }
+
+        var audit = snapshot.ThermostatChanges[0];
+        if (audit.NewSetPointCelsius != 24.0
+            || audit.ChangeSource != "home-assistant-user"
+            || audit.ContextUserId != "ha-user")
+        {
+            throw new InvalidOperationException("The different setpoint should retain its real Home Assistant user attribution.");
+        }
+
+        if (snapshot.SetpointEcho.PendingSetPointCelsius != 22.0)
+        {
+            throw new InvalidOperationException("The unrelated human raise must not be consumed as the defender's pending 22.0 C echo.");
+        }
+    }
+
+    public void PendingOffEchoGraceExpiresBeforeHumanOffRespect()
+    {
+        static (DateTimeOffset? HoldUntil, bool ModeOffRespect) ReadPeaceState(DefenderStateStore store)
+        {
+            var state = GetRuntimeState(store);
+            var stateType = state.GetType();
+            return (
+                (DateTimeOffset?)stateType.GetProperty("PeaceOfferingHoldUntil")!.GetValue(state),
+                (bool)stateType.GetProperty("PeaceHoldIsModeOffRespect")!.GetValue(state)!);
+        }
+
+        var t0 = DateTimeOffset.UtcNow;
+        var coolReading = new ThermostatReading(
+            "climate.dining_room",
+            23.0,
+            23.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        var offReading = coolReading with { HvacMode = "off", HvacAction = "off" };
+
+        // A fresh OFF command is our own state echo, not a person asking the defender to stand down.
+        using (var freshFixture = DefenderStoreFixture.Create())
+        {
+            var store = freshFixture.Store;
+            store.RecordHomeAssistantReading(coolReading, t0);
+            store.RecordCommand("Defender sent OFF.", commandedHvacMode: "off", nowOverride: t0.AddSeconds(1));
+            store.RecordHomeAssistantReading(offReading, t0.AddSeconds(2));
+
+            var freshPeace = ReadPeaceState(store);
+            if (freshPeace.HoldUntil is not null
+                || freshPeace.ModeOffRespect
+                || store.TryBeginPeaceOffering(offReading, t0.AddSeconds(2), out _, out _, out _))
+            {
+                throw new InvalidOperationException("A fresh pending OFF echo must not masquerade as a human OFF or arm a peace hold.");
+            }
+        }
+
+        // Once the command grace is stale, a later real COOL -> OFF transition must be treated as a
+        // human request. Otherwise one abandoned pending slot could suppress manual-OFF respect forever.
+        using (var staleFixture = DefenderStoreFixture.Create())
+        {
+            var store = staleFixture.Store;
+            store.RecordHomeAssistantReading(coolReading, t0);
+            store.RecordCommand("Old defender OFF request.", commandedHvacMode: "off", nowOverride: t0.AddSeconds(1));
+            var humanOffAt = t0.AddMinutes(5);
+            store.RecordHomeAssistantReading(offReading, humanOffAt);
+
+            var stalePeace = ReadPeaceState(store);
+            if (stalePeace.HoldUntil is not { } holdUntil
+                || holdUntil <= humanOffAt
+                || !stalePeace.ModeOffRespect)
+            {
+                throw new InvalidOperationException("A stale pending OFF must not suppress the later human mode-OFF peace/respect hold.");
+            }
+
+            if (!store.TryBeginPeaceOffering(offReading, humanOffAt, out var gift, out var publicUntil, out var status)
+                || gift is not null
+                || publicUntil != holdUntil
+                || !status.Contains("leaving", StringComparison.OrdinalIgnoreCase)
+                || !store.GetSnapshot().Events.Any(item => item.Message.Contains("turned the AC off by hand", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException("The stale-command human OFF must expose an active no-command respect hold and status.");
+            }
         }
     }
 
@@ -3102,6 +3680,274 @@ internal sealed class DefenderSetPointRegressionTests
         }
     }
 
+    public void StaleOutdoorWeatherCannotTriggerNightOffOrOutdoorSilence()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(23.0);
+
+        var settings = store.GetSettings();
+        settings.NightShutdownEnabled = true;
+        settings.NightShutdownStartTime = "01:00";
+        settings.NightShutdownEndTime = "08:00";
+        settings.NightShutdownOutdoorBelowCelsius = 24.0;
+        settings.NaturalSafetyOverrideCelsius = 2.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var night = new DateTimeOffset(DateTime.Now.Date.AddHours(2));
+        var safeRoom = new ThermostatReading(
+            "climate.dining_room",
+            24.0,
+            23.0,
+            "cool",
+            "idle",
+            null,
+            []);
+        var coldWeather = new WeatherReading("weather.home", 18.0, "clear");
+
+        // A retained cold reading older than the 90-minute safety gate is display history only. It
+        // must not authorize an irreversible real-device OFF or even the outdoor-silence hold.
+        store.RecordWeatherReading(coldWeather, night.AddHours(-2));
+        store.TryBeginNightShutdown(safeRoom, night, out _, out _, out var staleNightOff, out _);
+        if (staleNightOff)
+        {
+            throw new InvalidOperationException("Stale retained cold weather must not authorize the night-shutdown OFF command.");
+        }
+
+        if (store.TryRespectOutdoorPowerRule(safeRoom, bypassForComfort: false, night, out _, out _))
+        {
+            throw new InvalidOperationException("Stale retained cold weather must not silence the defender after weather providers stop updating.");
+        }
+
+        // The same cold value is actionable again as soon as a provider supplies a genuinely fresh
+        // observation: night OFF and the ordinary outdoor-silence rule should both engage.
+        store.RecordWeatherReading(coldWeather, night);
+        if (!store.TryBeginNightShutdown(safeRoom, night.AddSeconds(1), out _, out _, out var freshNightOff, out _)
+            || !freshNightOff)
+        {
+            throw new InvalidOperationException("A fresh cold reading should still authorize the configured night-shutdown OFF command.");
+        }
+
+        if (!store.TryRespectOutdoorPowerRule(safeRoom, bypassForComfort: false, night.AddSeconds(1), out _, out var freshMessage)
+            || !freshMessage.Contains("Silenced", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("A fresh cold reading should still activate the ordinary Outdoor Power Rule silence.");
+        }
+    }
+
+    public void HotRoomCoolOutdoorPreflightSendsNoOff()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.CoolOutdoorShutdownEnabled = true;
+        settings.CoolOutdoorShutdownBelowCelsius = 20.0;
+        settings.CoolOutdoorForecastGateEnabled = false;
+        SetRuntimeProperty(store, "Settings", settings);
+        store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "clear"));
+
+        var hotRoom = new ThermostatReading(
+            "climate.dining_room",
+            25.0,
+            23.0,
+            "cool",
+            "cooling",
+            null,
+            []);
+        var held = store.TryBeginCoolOutdoorShutdown(
+            hotRoom,
+            DateTimeOffset.UtcNow,
+            out _,
+            out _,
+            out var turnOff,
+            out var restoreCool,
+            out _);
+
+        if (held || turnOff || restoreCool)
+        {
+            throw new InvalidOperationException("A hot-room cool-outdoor preflight must not enter an episode or signal any OFF/restore command.");
+        }
+
+        var snapshot = store.GetSnapshot();
+        if (snapshot.CoolOutdoorShutdown is not { } coolOutdoor
+            || !coolOutdoor.Status.Contains("direct cooling", StringComparison.OrdinalIgnoreCase)
+            || coolOutdoor.Holding)
+        {
+            throw new InvalidOperationException("The rejected cool-outdoor episode should explain that direct room comfort won before OFF.");
+        }
+    }
+
+    public void CoolOutdoorRestoreCannotImmediatelyReenter()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.CoolOutdoorShutdownEnabled = true;
+        settings.CoolOutdoorShutdownBelowCelsius = 20.0;
+        settings.CoolOutdoorForecastGateEnabled = false;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var t0 = new DateTimeOffset(2030, 7, 18, 18, 0, 0, TimeSpan.Zero);
+        store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "clear"), t0);
+
+        var nearComfortEdge = new ThermostatReading(
+            "climate.dining_room", 23.9, 22.0, "cool", "idle", null, []);
+        if (store.TryBeginCoolOutdoorShutdown(
+                nearComfortEdge,
+                t0,
+                out _,
+                out _,
+                out var edgeOff,
+                out _,
+                out _)
+            || edgeOff)
+        {
+            throw new InvalidOperationException("Cool-outdoor OFF must use entry hysteresis near the direct-comfort boundary.");
+        }
+
+        var safelyInsideBand = nearComfortEdge with { CurrentTemperatureCelsius = 23.0 };
+        if (!store.TryBeginCoolOutdoorShutdown(
+                safelyInsideBand,
+                t0.AddSeconds(1),
+                out _,
+                out _,
+                out var firstOff,
+                out _,
+                out _)
+            || !firstOff)
+        {
+            throw new InvalidOperationException("A comfortably safe room should still allow the configured cool-outdoor shutdown.");
+        }
+
+        store.RecordCoolOutdoorOffCommand(safelyInsideBand.EntityId, t0.AddSeconds(1));
+        var hotOff = safelyInsideBand with
+        {
+            CurrentTemperatureCelsius = 24.0,
+            HvacMode = "off",
+            HvacAction = "off"
+        };
+        if (store.TryBeginCoolOutdoorShutdown(
+                hotOff,
+                t0.AddSeconds(6),
+                out _,
+                out _,
+                out _,
+                out var restoreCool,
+                out _)
+            || !restoreCool)
+        {
+            throw new InvalidOperationException("Direct comfort must still release cool-outdoor OFF immediately.");
+        }
+
+        store.RecordCoolOutdoorRestoreCommand(hotOff.EntityId, t0.AddSeconds(6));
+        if (store.TryBeginCoolOutdoorShutdown(
+                safelyInsideBand,
+                t0.AddSeconds(11),
+                out _,
+                out _,
+                out var immediateReOff,
+                out _,
+                out _)
+            || immediateReOff)
+        {
+            throw new InvalidOperationException("A comfort restore must block a new discretionary OFF for the five-minute minimum-ON dwell.");
+        }
+
+        if (!store.TryBeginCoolOutdoorShutdown(
+                safelyInsideBand,
+                t0.AddMinutes(5).AddSeconds(7),
+                out _,
+                out _,
+                out var laterOff,
+                out _,
+                out _)
+            || !laterOff)
+        {
+            throw new InvalidOperationException("Cool-outdoor shutdown should become eligible again after the minimum-ON dwell expires.");
+        }
+    }
+
+    public void AutomaticOffShutdownsRetryUntilHomeAssistantAcknowledges()
+    {
+        var now = new DateTimeOffset(DateTime.Now.Date.AddHours(2));
+
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(23.0);
+            var settings = store.GetSettings();
+            settings.NightShutdownEnabled = true;
+            settings.NightShutdownStartTime = "01:00";
+            settings.NightShutdownEndTime = "08:00";
+            settings.NightShutdownOutdoorBelowCelsius = 24.0;
+            SetRuntimeProperty(store, "Settings", settings);
+            store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "clear"), now);
+            var reading = new ThermostatReading("climate.dining_room", 24.0, 23.0, "cool", "idle", null, []);
+
+            if (!store.TryBeginNightShutdown(reading, now, out var until, out _, out var firstOff, out _) || !firstOff
+                || !store.TryBeginNightShutdown(reading, now.AddSeconds(5), out _, out _, out var retryOff, out _) || !retryOff)
+            {
+                throw new InvalidOperationException("Night shutdown must retry OFF when the previous Home Assistant call was not acknowledged.");
+            }
+
+            store.RecordNightShutdownOffCommand(reading.EntityId, until ?? now, now.AddSeconds(5));
+            if (!store.TryBeginNightShutdown(reading, now.AddSeconds(10), out _, out _, out var afterAckOff, out _) || afterAckOff)
+            {
+                throw new InvalidOperationException("Night shutdown must stop retrying after Home Assistant acknowledges OFF.");
+            }
+        }
+
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+            var settings = store.GetSettings();
+            settings.CoolOutdoorShutdownEnabled = true;
+            settings.CoolOutdoorShutdownBelowCelsius = 20.0;
+            settings.CoolOutdoorForecastGateEnabled = false;
+            SetRuntimeProperty(store, "Settings", settings);
+            store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "clear"), now);
+            var reading = new ThermostatReading("climate.dining_room", 23.0, 22.5, "cool", "idle", null, []);
+
+            if (!store.TryBeginCoolOutdoorShutdown(reading, now, out _, out _, out var firstOff, out _, out _) || !firstOff
+                || !store.TryBeginCoolOutdoorShutdown(reading, now.AddSeconds(5), out _, out _, out var retryOff, out _, out _) || !retryOff)
+            {
+                throw new InvalidOperationException("Cool-outdoor shutdown must retry OFF when the previous Home Assistant call was not acknowledged.");
+            }
+
+            store.RecordCoolOutdoorOffCommand(reading.EntityId, now.AddSeconds(5));
+            if (!store.TryBeginCoolOutdoorShutdown(reading, now.AddSeconds(10), out _, out _, out var afterAckOff, out _, out _) || afterAckOff)
+            {
+                throw new InvalidOperationException("Cool-outdoor shutdown must stop retrying after Home Assistant acknowledges OFF.");
+            }
+        }
+
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+            var reading = new ThermostatReading("climate.dining_room", 25.0, 23.0, "cool", "idle", null, []);
+            store.RecordHomeAssistantReading(reading, now);
+            SetRuntimeProperty(store, "CoolingFailureSuspectedAt", now.AddMinutes(-31));
+            store.RecordHomeAssistantReading(reading, now);
+            SetRuntimeProperty(store, "LastObservedHvacModeCoolAt", now.AddMinutes(-10));
+
+            if (!store.TryRespectCoolingFailureShutdown(reading, now, out _, out _, out var firstOff, out _, out _) || !firstOff
+                || !store.TryRespectCoolingFailureShutdown(reading, now.AddSeconds(5), out _, out _, out var retryOff, out _, out _) || !retryOff)
+            {
+                throw new InvalidOperationException("Cooling-failure shutdown must retry OFF when the previous Home Assistant call was not acknowledged.");
+            }
+
+            store.RecordCoolingFailureShutdownOffCommand(reading.EntityId, now.AddSeconds(5));
+            if (!store.TryRespectCoolingFailureShutdown(reading, now.AddSeconds(10), out _, out _, out var afterAckOff, out _, out _) || afterAckOff)
+            {
+                throw new InvalidOperationException("Cooling-failure shutdown must stop retrying after Home Assistant acknowledges OFF.");
+            }
+        }
+    }
+
     public async Task ColdOutdoorRulePreventsFiveSecondCoolModeBlipAsync()
     {
         var contentRoot = DefenderStoreFixture.CreateContentRoot();
@@ -3238,6 +4084,829 @@ internal sealed class DefenderSetPointRegressionTests
         finally
         {
             try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    public async Task ConcurrentFirstAccountCreationYieldsExactlyOneOwnerAsync()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "acd_acct_race_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var env = new TestWebHostEnvironment(dir);
+            var auth = new TwoFactorAuth(new ConfigurationBuilder().Build(), env, NullLogger<TwoFactorAuth>.Instance);
+            const int contenderCount = 12;
+            using var startBarrier = new Barrier(contenderCount);
+            var attempts = Enumerable.Range(0, contenderCount)
+                .Select(index => Task.Factory.StartNew(
+                    () =>
+                    {
+                        startBarrier.SignalAndWait();
+                        return auth.TryCreateAccount($"owner-{index}", "secret123", null, out _);
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default))
+                .ToArray();
+
+            var results = await Task.WhenAll(attempts);
+            if (results.Count(success => success) != 1
+                || auth.AccountCount != 1
+                || auth.AccountUsernames.Count != 1
+                || !auth.AccountUsernames[0].Contains("(owner)", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Concurrent first-account attempts must produce one persisted owner; successes={results.Count(success => success)}, accounts={auth.AccountCount}.");
+            }
+
+            var reloaded = new TwoFactorAuth(new ConfigurationBuilder().Build(), env, NullLogger<TwoFactorAuth>.Instance);
+            if (reloaded.AccountCount != 1
+                || reloaded.AccountUsernames.Count != 1
+                || !reloaded.AccountUsernames[0].Contains("(owner)", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("The single concurrent winner must persist atomically as the only owner account.");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    public void HotRoomSiestaPreflightRejectsWithoutStarting()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.SiestaEnabled = true;
+        settings.SiestaWakeBandCelsius = 1.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var hotRoom = new ThermostatReading(
+            "climate.dining_room",
+            24.0,
+            22.0,
+            "cool",
+            "cooling",
+            null,
+            []);
+        if (store.TryStartSiesta(30, "regression", out var message, reading: hotRoom)
+            || store.GetSnapshot().Siesta is { Active: true })
+        {
+            throw new InvalidOperationException("A siesta that would wake immediately must be rejected before it starts or parks/turns off the real AC.");
+        }
+
+        if (!message.Contains("already", StringComparison.OrdinalIgnoreCase)
+            || !message.Contains("no park/off", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Hot-room siesta rejection should explain why no actuator command is allowed, got: {message}");
+        }
+    }
+
+    public void SiestaOffEntryHysteresisAvoidsImmediateWakeFlap()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        store.SetTarget(22.0);
+        var settings = store.GetSettings();
+        settings.SiestaEnabled = true;
+        settings.SiestaThermostatAction = "off";
+        settings.SiestaWakeBandCelsius = 2.0;
+        settings.ElectricityBudgetSafetyMaxCelsius = 30.0;
+        SetRuntimeProperty(store, "Settings", settings);
+
+        var nearWake = new ThermostatReading(
+            "climate.dining_room", 23.9, 22.0, "cool", "idle", null, []);
+        if (store.TryStartSiesta(60, "test", out var nearMessage, reading: nearWake)
+            || !nearMessage.Contains("wake boundary", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("An OFF siesta must not start beside its immediate wake/COOL threshold.");
+        }
+
+        var settled = nearWake with { CurrentTemperatureCelsius = 23.6 };
+        if (!store.TryStartSiesta(60, "test", out _, reading: settled))
+        {
+            throw new InvalidOperationException("An OFF siesta should still start once room comfort is safely inside the entry hysteresis.");
+        }
+    }
+
+    public async Task ConcurrentCoolingBoostAndOffAreSerializedAsync()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var defenderOptions = new DefenderOptions { PollIntervalSeconds = 5 };
+            using var fixture = DefenderStoreFixture.Create(contentRoot, defenderOptions);
+            var homeAssistantOptions = new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room",
+                WeatherEntityId = "",
+                OutdoorTemperatureEntityId = "",
+                UsagePowerEntityId = "",
+                UsageEnergyEntityId = "",
+                UsageCostEntityId = "",
+                UsageHourlyCostEntityId = "",
+                UsageCurrentBillEntityId = "",
+                UsageCurrentBillDueEntityId = "",
+                UsageCurrentBillStatusEntityId = "",
+            };
+            var defenderMonitor = new FixedOptionsMonitor<DefenderOptions>(defenderOptions);
+            var homeAssistantMonitor = new FixedOptionsMonitor<HomeAssistantOptions>(homeAssistantOptions);
+            var handler = new SerializedClimateHomeAssistantHandler();
+            using var httpClient = new HttpClient(handler);
+            var homeAssistantClient = new HomeAssistantClient(
+                httpClient,
+                homeAssistantMonitor,
+                NullLogger<HomeAssistantClient>.Instance);
+            var service = new AcDefenderService(
+                fixture.Store,
+                homeAssistantClient,
+                defenderMonitor,
+                homeAssistantMonitor,
+                NullLogger<AcDefenderService>.Instance);
+
+            var boostTask = service.ForceCoolingBoostAsync(CancellationToken.None);
+            await handler.FirstTemperatureCommandEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var offTask = service.TurnThermostatOffAsync(CancellationToken.None);
+            await Task.Delay(150);
+            if (handler.MaxConcurrentRequests != 1)
+            {
+                throw new InvalidOperationException("Thermostat OFF and the superseded boost must never overlap Home Assistant reads or writes.");
+            }
+
+            handler.ReleaseFirstTemperatureCommand.TrySetResult(true);
+            var boostSuperseded = false;
+            try
+            {
+                await boostTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (OperationCanceledException)
+            {
+                boostSuperseded = true;
+            }
+
+            await offTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var calls = handler.ClimateServiceCalls;
+            var expected = new[]
+            {
+                "set_temperature",
+            };
+            if (!calls.SequenceEqual(expected, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"A newer OFF must cancel the older COOL stage and avoid redundant mode writes when the unit is already off; calls: {string.Join(", ", calls)}");
+            }
+
+            if (!boostSuperseded
+                || handler.MaxConcurrentRequests != 1
+                || !string.Equals(handler.CurrentHvacMode, "off", StringComparison.OrdinalIgnoreCase)
+                || fixture.Store.GetSnapshot().DefenderEnabled)
+            {
+                throw new InvalidOperationException("OFF must supersede the older boost, finish with the real thermostat OFF, and leave the defender persistently paused.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public async Task SafetyOffCannotBeCancelledByLowerPriorityRequestsAsync()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var defenderOptions = new DefenderOptions { PollIntervalSeconds = 5 };
+            using var fixture = DefenderStoreFixture.Create(contentRoot, defenderOptions);
+            var homeAssistantOptions = new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room",
+                WeatherEntityId = "",
+                OutdoorTemperatureEntityId = "",
+                UsagePowerEntityId = "",
+                UsageEnergyEntityId = "",
+                UsageCostEntityId = "",
+                UsageHourlyCostEntityId = "",
+                UsageCurrentBillEntityId = "",
+                UsageCurrentBillDueEntityId = "",
+                UsageCurrentBillStatusEntityId = "",
+            };
+            var defenderMonitor = new FixedOptionsMonitor<DefenderOptions>(defenderOptions);
+            var homeAssistantMonitor = new FixedOptionsMonitor<HomeAssistantOptions>(homeAssistantOptions);
+            var handler = new SerializedClimateHomeAssistantHandler(
+                initialHvacMode: "cool",
+                blockFirstTemperatureCommand: false,
+                blockFirstOffCommand: true);
+            using var httpClient = new HttpClient(handler);
+            var homeAssistantClient = new HomeAssistantClient(
+                httpClient,
+                homeAssistantMonitor,
+                NullLogger<HomeAssistantClient>.Instance);
+            var service = new AcDefenderService(
+                fixture.Store,
+                homeAssistantClient,
+                defenderMonitor,
+                homeAssistantMonitor,
+                NullLogger<AcDefenderService>.Instance);
+
+            var offTask = service.TurnThermostatOffAsync(CancellationToken.None);
+            await handler.FirstOffCommandEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            // These lower-priority requests arrive while the real OFF call is in flight. Neither
+            // may cancel the accepted safety intent or overlap another Home Assistant operation.
+            var disableTask = service.SetDefenderEnabledAsync(false, CancellationToken.None);
+            var fanTask = service.ForceFanModeAsync("auto", CancellationToken.None);
+            await Task.Delay(100);
+            if (offTask.IsCompleted || handler.MaxConcurrentRequests != 1)
+            {
+                throw new InvalidOperationException("Lower-priority requests must queue behind, not cancel or overlap, an in-flight safety OFF.");
+            }
+
+            handler.ReleaseFirstOffCommand.TrySetResult(true);
+            await Task.WhenAll(offTask, disableTask, fanTask).WaitAsync(TimeSpan.FromSeconds(10));
+
+            var calls = handler.ClimateServiceCalls;
+            if (!calls.SequenceEqual(["set_hvac_mode:off"], StringComparer.OrdinalIgnoreCase)
+                || handler.MaxConcurrentRequests != 1
+                || !string.Equals(handler.CurrentHvacMode, "off", StringComparison.OrdinalIgnoreCase)
+                || fixture.Store.GetSnapshot().DefenderEnabled)
+            {
+                throw new InvalidOperationException(
+                    $"Safety OFF must finish once with no COOL/fan follow-up; calls: {string.Join(", ", calls)}");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public async Task SafetyOffCompletesAfterCallerCancellationAsync()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var defenderOptions = new DefenderOptions { PollIntervalSeconds = 5 };
+            using var fixture = DefenderStoreFixture.Create(contentRoot, defenderOptions);
+            var homeAssistantOptions = new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room",
+            };
+            var defenderMonitor = new FixedOptionsMonitor<DefenderOptions>(defenderOptions);
+            var homeAssistantMonitor = new FixedOptionsMonitor<HomeAssistantOptions>(homeAssistantOptions);
+            var handler = new SerializedClimateHomeAssistantHandler(
+                initialHvacMode: "cool",
+                blockFirstTemperatureCommand: false,
+                blockFirstOffCommand: true);
+            using var httpClient = new HttpClient(handler);
+            var homeAssistantClient = new HomeAssistantClient(httpClient, homeAssistantMonitor, NullLogger<HomeAssistantClient>.Instance);
+            var service = new AcDefenderService(
+                fixture.Store,
+                homeAssistantClient,
+                defenderMonitor,
+                homeAssistantMonitor,
+                NullLogger<AcDefenderService>.Instance);
+
+            using var callerCancellation = new CancellationTokenSource();
+            var offTask = service.TurnThermostatOffAsync(callerCancellation.Token);
+            await handler.FirstOffCommandEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            callerCancellation.Cancel();
+            await Task.Delay(100);
+            if (offTask.IsCompleted)
+            {
+                throw new InvalidOperationException("A committed safety OFF must not be canceled by an HTTP caller disconnect.");
+            }
+
+            handler.ReleaseFirstOffCommand.TrySetResult(true);
+            await offTask.WaitAsync(TimeSpan.FromSeconds(10));
+            if (!string.Equals(handler.CurrentHvacMode, "off", StringComparison.OrdinalIgnoreCase)
+                || !handler.ClimateServiceCalls.SequenceEqual(["set_hvac_mode:off"], StringComparer.OrdinalIgnoreCase)
+                || fixture.Store.GetSnapshot().DefenderEnabled)
+            {
+                throw new InvalidOperationException("Safety OFF must finish and persist the paused state after caller cancellation.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public async Task StandDownReversalsPreventStaleParkAndSiestaCommandsAsync()
+    {
+        async Task<(DefenderStoreFixture Fixture, SerializedClimateHomeAssistantHandler Handler, AcDefenderService Service)> CreateServiceAsync(
+            string contentRoot,
+            Action<DefenderStateStore>? configureStore = null)
+        {
+            var defenderOptions = new DefenderOptions { PollIntervalSeconds = 5 };
+            var fixture = DefenderStoreFixture.Create(contentRoot, defenderOptions);
+            configureStore?.Invoke(fixture.Store);
+            var homeAssistantOptions = new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room",
+            };
+            var defenderMonitor = new FixedOptionsMonitor<DefenderOptions>(defenderOptions);
+            var homeAssistantMonitor = new FixedOptionsMonitor<HomeAssistantOptions>(homeAssistantOptions);
+            var handler = new SerializedClimateHomeAssistantHandler(
+                initialHvacMode: "cool",
+                blockFirstTemperatureCommand: false,
+                blockFirstClimateRead: true,
+                currentTemperatureCelsius: 22.5);
+            var homeAssistantClient = new HomeAssistantClient(
+                new HttpClient(handler),
+                homeAssistantMonitor,
+                NullLogger<HomeAssistantClient>.Instance);
+            var service = new AcDefenderService(
+                fixture.Store,
+                homeAssistantClient,
+                defenderMonitor,
+                homeAssistantMonitor,
+                NullLogger<AcDefenderService>.Instance);
+            await Task.CompletedTask;
+            return (fixture, handler, service);
+        }
+
+        var parkRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var setup = await CreateServiceAsync(parkRoot);
+            using var fixture = setup.Fixture;
+            await setup.Service.SetDefenderEnabledAsync(false, CancellationToken.None);
+            var parkTask = setup.Service.ParkThermostatForStandDownAsync(CancellationToken.None);
+            await setup.Handler.FirstClimateReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var enableTask = setup.Service.SetDefenderEnabledAsync(true, CancellationToken.None);
+
+            var parkSuperseded = false;
+            try
+            {
+                await parkTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (ThermostatOperationSupersededException)
+            {
+                parkSuperseded = true;
+            }
+            await enableTask.WaitAsync(TimeSpan.FromSeconds(10));
+            if (!parkSuperseded
+                || !fixture.Store.GetSnapshot().DefenderEnabled
+                || setup.Handler.ClimateServiceCalls.Count != 0)
+            {
+                throw new InvalidOperationException("A newer re-enable must cancel stale stand-down parking before it can write 28 C.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(parkRoot);
+        }
+
+        var siestaRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var setup = await CreateServiceAsync(siestaRoot, store =>
+            {
+                var settings = store.GetSettings();
+                settings.SiestaEnabled = true;
+                settings.SiestaThermostatAction = "off";
+                settings.SiestaWakeBandCelsius = 2.0;
+                SetRuntimeProperty(store, "Settings", settings);
+            });
+            using var fixture = setup.Fixture;
+            var startTask = setup.Service.StartSiestaAsync(60, "test", CancellationToken.None);
+            await setup.Handler.FirstClimateReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var cancelTask = setup.Service.CancelSiestaAsync("test", CancellationToken.None);
+
+            var startSuperseded = false;
+            try
+            {
+                await startTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (ThermostatOperationSupersededException)
+            {
+                startSuperseded = true;
+            }
+            await cancelTask.WaitAsync(TimeSpan.FromSeconds(10));
+            if (!startSuperseded
+                || fixture.Store.GetSnapshot().Siesta is { Active: true }
+                || setup.Handler.ClimateServiceCalls.Count != 0)
+            {
+                throw new InvalidOperationException("A newer siesta cancellation must prevent the stale one-shot OFF/park action.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(siestaRoot);
+        }
+    }
+
+    public async Task DefiniteCommandRejectionDoesNotArmTamperTruceAsync()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var defenderOptions = new DefenderOptions { PollIntervalSeconds = 5 };
+            using var fixture = DefenderStoreFixture.Create(contentRoot, defenderOptions);
+            var now = DateTimeOffset.UtcNow;
+            fixture.Store.RecordHomeAssistantReading(
+                new ThermostatReading("climate.dining_room", 22.0, 22.0, "cool", "idle", null, []),
+                now);
+            SetRuntimeProperty(fixture.Store, "LastDefenderCommandAt", now);
+            SetRuntimeProperty(fixture.Store, "ExternalTouchTimes", new List<DateTimeOffset> { now });
+
+            var homeAssistantOptions = new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room",
+            };
+            var defenderMonitor = new FixedOptionsMonitor<DefenderOptions>(defenderOptions);
+            var homeAssistantMonitor = new FixedOptionsMonitor<HomeAssistantOptions>(homeAssistantOptions);
+            var handler = new SerializedClimateHomeAssistantHandler(
+                initialHvacMode: "cool",
+                blockFirstTemperatureCommand: false,
+                rejectedClimateService: "set_fan_mode");
+            using var httpClient = new HttpClient(handler);
+            var homeAssistantClient = new HomeAssistantClient(httpClient, homeAssistantMonitor, NullLogger<HomeAssistantClient>.Instance);
+            var service = new AcDefenderService(
+                fixture.Store,
+                homeAssistantClient,
+                defenderMonitor,
+                homeAssistantMonitor,
+                NullLogger<AcDefenderService>.Instance);
+
+            try
+            {
+                await service.ForceFanModeAsync("auto", CancellationToken.None);
+                throw new InvalidOperationException("The test Home Assistant rejection should reach the caller.");
+            }
+            catch (ThermostatCommandRejectedException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+            {
+            }
+
+            var snapshot = fixture.Store.GetSnapshot();
+            if (!string.Equals(snapshot.ConnectionState, "home-assistant", StringComparison.Ordinal)
+                || snapshot.Emergency.Active
+                || string.Equals(snapshot.Emergency.Protocol, "Tamper truce", StringComparison.OrdinalIgnoreCase)
+                || snapshot.LastError is null
+                || !snapshot.LastError.Contains("rejected", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("A definite HA command rejection must remain online and must never arm Tamper Truce.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public async Task ClimateReadRejectionDoesNotArmTamperTruceAsync()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var defenderOptions = new DefenderOptions { PollIntervalSeconds = 5 };
+            using var fixture = DefenderStoreFixture.Create(contentRoot, defenderOptions);
+            var now = DateTimeOffset.UtcNow;
+            fixture.Store.RecordHomeAssistantReading(
+                new ThermostatReading("climate.dining_room", 22.0, 22.0, "cool", "idle", null, []),
+                now);
+            SetRuntimeProperty(fixture.Store, "LastDefenderCommandAt", now);
+            SetRuntimeProperty(fixture.Store, "ExternalTouchTimes", new List<DateTimeOffset> { now });
+
+            var homeAssistantOptions = new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room",
+            };
+            var defenderMonitor = new FixedOptionsMonitor<DefenderOptions>(defenderOptions);
+            var homeAssistantMonitor = new FixedOptionsMonitor<HomeAssistantOptions>(homeAssistantOptions);
+            var handler = new SerializedClimateHomeAssistantHandler(
+                blockFirstTemperatureCommand: false,
+                climateReadStatusCode: System.Net.HttpStatusCode.BadGateway);
+            using var httpClient = new HttpClient(handler);
+            var homeAssistantClient = new HomeAssistantClient(
+                httpClient,
+                homeAssistantMonitor,
+                NullLogger<HomeAssistantClient>.Instance);
+            var service = new AcDefenderService(
+                fixture.Store,
+                homeAssistantClient,
+                defenderMonitor,
+                homeAssistantMonitor,
+                NullLogger<AcDefenderService>.Instance);
+
+            await service.RunCycleAsync(CancellationToken.None);
+            var snapshot = fixture.Store.GetSnapshot();
+            if (!string.Equals(snapshot.ConnectionState, "home-assistant", StringComparison.Ordinal)
+                || snapshot.Emergency.Active
+                || string.Equals(snapshot.Emergency.Protocol, "Tamper truce", StringComparison.OrdinalIgnoreCase)
+                || snapshot.LastError is null
+                || !snapshot.LastError.Contains("climate read", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("A status-bearing climate API response must surface as an API error without pretending the thermostat vanished or arming Tamper Truce.");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
+        }
+    }
+
+    public void MatchingThermostatCommandsUseConfirmationGraceAndRejectBackoff()
+    {
+        using var fixture = DefenderStoreFixture.Create();
+        var store = fixture.Store;
+        var t0 = new DateTimeOffset(2030, 7, 18, 20, 0, 0, TimeSpan.Zero);
+
+        store.BeginThermostatCommandIntent(hvacMode: "off", nowOverride: t0);
+        if (!store.TryRespectMatchingThermostatCommand(
+                t0.AddSeconds(5), null, "off", null, out _, out _)
+            || store.TryRespectMatchingThermostatCommand(
+                t0.AddSeconds(5), null, "cool", null, out _, out _))
+        {
+            throw new InvalidOperationException("Ambiguous command grace must block only an identical retry, never a differing safety command.");
+        }
+
+        store.ClearThermostatCommandIntent(t0.AddSeconds(6));
+        store.RecordThermostatCommandRejected(
+            "Test rejection.",
+            hvacMode: "off",
+            nowOverride: t0.AddSeconds(6));
+        if (!store.TryRespectMatchingThermostatCommand(
+                t0.AddSeconds(10), null, "off", null, out var rejectedUntil, out _)
+            || rejectedUntil != t0.AddSeconds(36)
+            || store.TryRespectMatchingThermostatCommand(
+                t0.AddSeconds(10), null, "cool", null, out _, out _))
+        {
+            throw new InvalidOperationException("A definite rejection must back off identical retries for 30 seconds while allowing a different state request.");
+        }
+
+        if (store.TryRespectMatchingThermostatCommand(
+                t0.AddSeconds(10), null, "off", null, true, out _, out _))
+        {
+            throw new InvalidOperationException("The first later urgent OFF must bypass an ordinary OFF rejection backoff.");
+        }
+
+        store.RecordThermostatCommandRejected(
+            "Urgent test rejection.",
+            hvacMode: "off",
+            nowOverride: t0.AddSeconds(11),
+            urgent: true);
+        if (!store.TryRespectMatchingThermostatCommand(
+                t0.AddSeconds(12), null, "off", null, true, out _, out _))
+        {
+            throw new InvalidOperationException("Once the urgent OFF itself is rejected, its bounded backoff must prevent five-second retry hammering.");
+        }
+
+        store.RecordCommand(
+            "Prepared cooling transition.",
+            commandedSetPointCelsius: 22.5,
+            nowOverride: t0.AddMinutes(1));
+        store.RecordCoolingTransitionCompleted(
+            "Cooling transition accepted.",
+            22.5,
+            "test",
+            "Test",
+            "Test two-stage transition.",
+            t0.AddMinutes(1).AddSeconds(1));
+        if (!store.TryRespectMatchingThermostatCommand(
+                t0.AddMinutes(1).AddSeconds(2), 22.5, null, null, out _, out _)
+            || !store.TryRespectMatchingThermostatCommand(
+                t0.AddMinutes(1).AddSeconds(2), null, "cool", null, out _, out _))
+        {
+            throw new InvalidOperationException("An accepted two-stage setpoint+COOL transition must suppress duplicate stage-one and stage-two retries until echo.");
+        }
+    }
+
+    public void AutomaticOffShutdownsHonorFiveMinuteOnDwell()
+    {
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+            var settings = store.GetSettings();
+            settings.NightShutdownEnabled = true;
+            settings.NightShutdownStartTime = "01:00";
+            settings.NightShutdownEndTime = "08:00";
+            settings.NightShutdownOutdoorBelowCelsius = 24.0;
+            settings.NaturalSafetyOverrideCelsius = 2.0;
+            SetRuntimeProperty(store, "Settings", settings);
+
+            var startedCoolAt = new DateTimeOffset(DateTime.Now.Date.AddHours(2));
+            var reading = new ThermostatReading(
+                "climate.dining_room", 23.0, 22.0, "cool", "idle", null, []);
+            store.RecordHomeAssistantReading(reading, startedCoolAt);
+            store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "clear"), startedCoolAt);
+
+            if (!store.TryBeginNightShutdown(
+                    reading,
+                    startedCoolAt.AddSeconds(1),
+                    out var heldUntil,
+                    out var heldMessage,
+                    out var earlyOff,
+                    out _)
+                || earlyOff
+                || heldUntil != startedCoolAt.AddMinutes(5)
+                || !heldMessage.Contains("minimum-ON", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Night shutdown must not turn newly enabled cooling back off before five minutes.");
+            }
+
+            if (!store.TryBeginNightShutdown(
+                    reading,
+                    startedCoolAt.AddMinutes(5),
+                    out _,
+                    out _,
+                    out var dwellFinishedOff,
+                    out _)
+                || !dwellFinishedOff)
+            {
+                throw new InvalidOperationException("Night shutdown may issue its one-shot OFF once the minimum-ON dwell finishes.");
+            }
+        }
+
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+            var settings = store.GetSettings();
+            settings.CoolOutdoorShutdownEnabled = true;
+            settings.CoolOutdoorShutdownBelowCelsius = 20.0;
+            settings.CoolOutdoorForecastGateEnabled = false;
+            settings.NaturalSafetyOverrideCelsius = 2.0;
+            SetRuntimeProperty(store, "Settings", settings);
+
+            var startedCoolAt = DateTimeOffset.UtcNow;
+            var reading = new ThermostatReading(
+                "climate.dining_room", 23.0, 22.0, "cool", "idle", null, []);
+            store.RecordCommand(
+                "Test accepted COOL command.",
+                commandedHvacMode: "cool",
+                nowOverride: startedCoolAt);
+            store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "clear"), startedCoolAt);
+
+            if (!store.TryBeginCoolOutdoorShutdown(
+                    reading,
+                    startedCoolAt.AddSeconds(1),
+                    out var heldUntil,
+                    out var heldMessage,
+                    out var earlyOff,
+                    out _,
+                    out _)
+                || earlyOff
+                || heldUntil != startedCoolAt.AddMinutes(5)
+                || !heldMessage.Contains("minimum-ON", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Cool-outdoor shutdown must honor an accepted COOL command's five-minute minimum-ON dwell.");
+            }
+
+            if (!store.TryBeginCoolOutdoorShutdown(
+                    reading,
+                    startedCoolAt.AddMinutes(5),
+                    out _,
+                    out _,
+                    out var dwellFinishedOff,
+                    out _,
+                    out _)
+                || !dwellFinishedOff)
+            {
+                throw new InvalidOperationException("Cool-outdoor shutdown may issue OFF once the accepted COOL dwell finishes.");
+            }
+        }
+    }
+
+    public void AutomaticCoolRestoreHonorsFiveMinuteOffDwell()
+    {
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+            var settings = store.GetSettings();
+            settings.CoolModeRestoreDelayEnabled = false;
+            SetRuntimeProperty(store, "Settings", settings);
+
+            var t0 = new DateTimeOffset(2030, 7, 18, 18, 0, 0, TimeSpan.Zero);
+            var cool = new ThermostatReading("climate.dining_room", 22.1, 22.0, "cool", "idle", null, []);
+            var off = cool with { HvacMode = "off", HvacAction = "off" };
+            store.RecordHomeAssistantReading(cool, t0.AddSeconds(-1));
+            store.RecordHomeAssistantReading(off, t0);
+
+            if (!store.TryDelayCoolModeRestore(off, t0.AddSeconds(1), out var observedUntil, out _)
+                || observedUntil != t0.AddMinutes(5))
+            {
+                throw new InvalidOperationException("An observed COOL-to-OFF transition must hold automatic restore for five minutes.");
+            }
+
+            var hot = off with { CurrentTemperatureCelsius = 24.0 };
+            if (store.TryDelayCoolModeRestore(hot, t0.AddSeconds(2), out _, out _))
+            {
+                throw new InvalidOperationException("Direct hot-room comfort must be able to bypass the automatic OFF dwell.");
+            }
+        }
+
+        using (var fixture = DefenderStoreFixture.Create())
+        {
+            var store = fixture.Store;
+            store.SetTarget(22.0);
+            var settings = store.GetSettings();
+            settings.CoolModeRestoreDelayEnabled = false;
+            SetRuntimeProperty(store, "Settings", settings);
+            var t0 = new DateTimeOffset(2030, 7, 18, 19, 0, 0, TimeSpan.Zero);
+            var off = new ThermostatReading("climate.dining_room", 22.1, 22.0, "off", "off", null, []);
+            store.RecordCommand(
+                "Test accepted OFF command.",
+                commandedHvacMode: "off",
+                nowOverride: t0);
+
+            if (!store.TryDelayCoolModeRestore(off, t0.AddSeconds(1), out var acceptedUntil, out _)
+                || acceptedUntil != t0.AddMinutes(5))
+            {
+                throw new InvalidOperationException("An accepted defender OFF command must also hold automatic restore for five minutes.");
+            }
+        }
+    }
+
+    public async Task EnforcerCannotBypassAutomaticOffDwellAsync()
+    {
+        var contentRoot = DefenderStoreFixture.CreateContentRoot();
+        try
+        {
+            var defenderOptions = new DefenderOptions { PollIntervalSeconds = 5 };
+            using var fixture = DefenderStoreFixture.Create(contentRoot, defenderOptions);
+            var settings = fixture.Store.GetSettings();
+            settings.NightShutdownEnabled = false;
+            settings.CoolOutdoorShutdownEnabled = false;
+            settings.CoolingFailureWatchEnabled = false;
+            settings.PeaceOfferingEnabled = false;
+            settings.CoolingRestEnabled = false;
+            settings.FrontDoorKillSwitchEnabled = false;
+            settings.CoolModeRestoreDelayEnabled = false;
+            settings.EnforcerModeEnabled = true;
+            settings.EnforcerEnforceMode = true;
+            settings.EnforcerStealthShaping = false;
+            settings.EnforcerDebounceSeconds = 0;
+            settings.EnforcerRequirePresence = false;
+            SetRuntimeProperty(fixture.Store, "Settings", settings);
+            fixture.Store.SetTarget(22.0);
+
+            var now = DateTimeOffset.UtcNow;
+            var cool = new ThermostatReading("climate.dining_room", 22.1, 22.0, "cool", "idle", null, []);
+            var off = cool with { HvacMode = "off", HvacAction = "off" };
+            fixture.Store.RecordHomeAssistantReading(cool, now.AddSeconds(-2));
+            fixture.Store.RecordHomeAssistantReading(off, now.AddSeconds(-1));
+            SetRuntimeProperty(fixture.Store, "EnforcerPendingSince", now.AddMinutes(-1));
+
+            var homeAssistantOptions = new HomeAssistantOptions
+            {
+                BaseUrl = "http://home-assistant.test:8123",
+                AccessToken = "test-token",
+                EntityId = "climate.dining_room",
+                WeatherEntityId = "",
+                OutdoorTemperatureEntityId = "",
+                UsagePowerEntityId = "",
+                UsageEnergyEntityId = "",
+                UsageCostEntityId = "",
+                UsageHourlyCostEntityId = "",
+                UsageCurrentBillEntityId = "",
+                UsageCurrentBillDueEntityId = "",
+                UsageCurrentBillStatusEntityId = "",
+            };
+            var defenderMonitor = new FixedOptionsMonitor<DefenderOptions>(defenderOptions);
+            var homeAssistantMonitor = new FixedOptionsMonitor<HomeAssistantOptions>(homeAssistantOptions);
+            var handler = new SerializedClimateHomeAssistantHandler(
+                initialHvacMode: "off",
+                blockFirstTemperatureCommand: false,
+                currentTemperatureCelsius: 22.1);
+            using var httpClient = new HttpClient(handler);
+            var homeAssistantClient = new HomeAssistantClient(httpClient, homeAssistantMonitor, NullLogger<HomeAssistantClient>.Instance);
+            var service = new AcDefenderService(
+                fixture.Store,
+                homeAssistantClient,
+                defenderMonitor,
+                homeAssistantMonitor,
+                NullLogger<AcDefenderService>.Instance);
+
+            await service.RunCycleAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+            if (handler.ClimateServiceCalls.Count != 0
+                || !fixture.Store.GetSnapshot().NextAction.Contains("five-minute", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Desired-State Enforcer must not bypass the automatic OFF dwell; calls: {string.Join(", ", handler.ClimateServiceCalls)}");
+            }
+        }
+        finally
+        {
+            DefenderStoreFixture.DeleteContentRoot(contentRoot);
         }
     }
 
@@ -4921,6 +6590,83 @@ internal sealed class FixedOptionsMonitor<T>(T value) : IOptionsMonitor<T>
     }
 }
 
+internal sealed class OpenMeteoApiHandler : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+
+    public string? Authorization { get; private set; }
+
+    public string Query { get; private set; } = string.Empty;
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        RequestCount++;
+        Authorization = request.Headers.Authorization?.ToString();
+        Query = request.RequestUri?.Query ?? string.Empty;
+
+        var start = new DateTimeOffset(2026, 7, 18, 21, 0, 0, TimeSpan.Zero);
+        var times = Enumerable.Range(0, 48)
+            .Select(index => start.AddHours(index).ToString("yyyy-MM-dd'T'HH:mm", System.Globalization.CultureInfo.InvariantCulture))
+            .ToArray();
+        var payload = new Dictionary<string, object?>
+        {
+            ["current"] = new Dictionary<string, object?>
+            {
+                ["time"] = "2026-07-18T21:15",
+                ["temperature_2m"] = 25.5,
+                ["weather_code"] = 3,
+            },
+            ["hourly"] = new Dictionary<string, object?>
+            {
+                ["time"] = times,
+                ["temperature_2m"] = Enumerable.Range(0, 48).Select(index => 20.0 + index / 10.0).ToArray(),
+                ["weather_code"] = Enumerable.Repeat(2, 48).ToArray(),
+            },
+        };
+        var json = System.Text.Json.JsonSerializer.Serialize(payload);
+        return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+        });
+    }
+}
+
+internal sealed class TimeoutApiHandler : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        RequestCount++;
+        return Task.FromException<HttpResponseMessage>(new TaskCanceledException("Synthetic HTTP timeout"));
+    }
+}
+
+internal sealed class HomeAssistantConfigHandler : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+
+    public string? Authorization { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(request.RequestUri?.AbsolutePath, "/api/config", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        }
+
+        RequestCount++;
+        Authorization = request.Headers.Authorization?.ToString();
+        return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "{\"latitude\":43.6532,\"longitude\":-79.3832}",
+                System.Text.Encoding.UTF8,
+                "application/json"),
+        });
+    }
+}
+
 internal sealed class ColdOutdoorHomeAssistantHandler : HttpMessageHandler
 {
     public List<string> ClimateServiceCalls { get; } = [];
@@ -4954,6 +6700,257 @@ internal sealed class ColdOutdoorHomeAssistantHandler : HttpMessageHandler
         return Task.FromResult(string.IsNullOrEmpty(body)
             ? JsonResponse("{}", System.Net.HttpStatusCode.NotFound)
             : JsonResponse(body));
+    }
+
+    private static HttpResponseMessage JsonResponse(
+        string json,
+        System.Net.HttpStatusCode statusCode = System.Net.HttpStatusCode.OK)
+        => new(statusCode)
+        {
+            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+        };
+}
+
+internal sealed class SerializedClimateHomeAssistantHandler : HttpMessageHandler
+{
+    private readonly object gate = new();
+    private readonly List<string> climateServiceCalls = [];
+    private readonly List<string> requestPaths = [];
+    private int activeRequests;
+    private int maxConcurrentRequests;
+    private int firstTemperatureCommandClaimed;
+    private int firstOffCommandClaimed;
+    private int firstClimateReadClaimed;
+    private readonly bool blockFirstTemperatureCommand;
+    private readonly bool blockFirstOffCommand;
+    private readonly bool blockFirstClimateRead;
+    private readonly double currentTemperatureCelsius;
+    private readonly string? rejectedClimateService;
+    private readonly string? climateStateOverrideJson;
+    private readonly System.Net.HttpStatusCode? climateReadStatusCode;
+    private string currentHvacMode;
+    private double currentSetPointCelsius = 23.0;
+
+    public SerializedClimateHomeAssistantHandler(
+        string initialHvacMode = "off",
+        bool blockFirstTemperatureCommand = true,
+        bool blockFirstOffCommand = false,
+        bool blockFirstClimateRead = false,
+        double currentTemperatureCelsius = 24.0,
+        string? rejectedClimateService = null,
+        string? climateStateOverrideJson = null,
+        System.Net.HttpStatusCode? climateReadStatusCode = null)
+    {
+        currentHvacMode = initialHvacMode;
+        this.blockFirstTemperatureCommand = blockFirstTemperatureCommand;
+        this.blockFirstOffCommand = blockFirstOffCommand;
+        this.blockFirstClimateRead = blockFirstClimateRead;
+        this.currentTemperatureCelsius = currentTemperatureCelsius;
+        this.rejectedClimateService = rejectedClimateService;
+        this.climateStateOverrideJson = climateStateOverrideJson;
+        this.climateReadStatusCode = climateReadStatusCode;
+    }
+
+    public TaskCompletionSource<bool> FirstTemperatureCommandEntered { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource<bool> ReleaseFirstTemperatureCommand { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource<bool> FirstOffCommandEntered { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource<bool> ReleaseFirstOffCommand { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource<bool> FirstClimateReadEntered { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource<bool> ReleaseFirstClimateRead { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public int MaxConcurrentRequests => Volatile.Read(ref maxConcurrentRequests);
+
+    public IReadOnlyList<string> ClimateServiceCalls
+    {
+        get
+        {
+            lock (gate)
+            {
+                return climateServiceCalls.ToArray();
+            }
+        }
+    }
+
+    public IReadOnlyList<string> RequestPaths
+    {
+        get
+        {
+            lock (gate)
+            {
+                return requestPaths.ToArray();
+            }
+        }
+    }
+
+    public string CurrentHvacMode
+    {
+        get
+        {
+            lock (gate)
+            {
+                return currentHvacMode;
+            }
+        }
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var concurrent = Interlocked.Increment(ref activeRequests);
+        UpdateMaximumConcurrency(concurrent);
+        try
+        {
+            var path = request.RequestUri?.AbsolutePath.TrimStart('/') ?? string.Empty;
+            lock (gate)
+            {
+                requestPaths.Add(path);
+            }
+            if (request.Method == HttpMethod.Post
+                && path.StartsWith("api/services/climate/", StringComparison.OrdinalIgnoreCase))
+            {
+                var service = path[(path.LastIndexOf('/') + 1)..];
+                var json = request.Content is null
+                    ? "{}"
+                    : await request.Content.ReadAsStringAsync(cancellationToken);
+
+                if (string.Equals(service, rejectedClimateService, StringComparison.OrdinalIgnoreCase))
+                {
+                    lock (gate)
+                    {
+                        climateServiceCalls.Add(service);
+                    }
+
+                    return JsonResponse("{\"message\":\"rejected by test thermostat\"}", System.Net.HttpStatusCode.BadRequest);
+                }
+
+                if (string.Equals(service, "set_temperature", StringComparison.OrdinalIgnoreCase))
+                {
+                    lock (gate)
+                    {
+                        climateServiceCalls.Add("set_temperature");
+                    }
+
+                    using (var document = System.Text.Json.JsonDocument.Parse(json))
+                    {
+                        if (document.RootElement.TryGetProperty("temperature", out var temperature)
+                            && temperature.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        {
+                            lock (gate)
+                            {
+                                currentSetPointCelsius = temperature.GetDouble();
+                            }
+                        }
+                    }
+
+                    if (blockFirstTemperatureCommand
+                        && Interlocked.CompareExchange(ref firstTemperatureCommandClaimed, 1, 0) == 0)
+                    {
+                        FirstTemperatureCommandEntered.TrySetResult(true);
+                        await ReleaseFirstTemperatureCommand.Task.WaitAsync(cancellationToken);
+                    }
+                }
+                else if (string.Equals(service, "set_hvac_mode", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var document = System.Text.Json.JsonDocument.Parse(json);
+                    var mode = document.RootElement.GetProperty("hvac_mode").GetString() ?? "unknown";
+                    if (blockFirstOffCommand
+                        && string.Equals(mode, "off", StringComparison.OrdinalIgnoreCase)
+                        && Interlocked.CompareExchange(ref firstOffCommandClaimed, 1, 0) == 0)
+                    {
+                        FirstOffCommandEntered.TrySetResult(true);
+                        await ReleaseFirstOffCommand.Task.WaitAsync(cancellationToken);
+                    }
+
+                    lock (gate)
+                    {
+                        currentHvacMode = mode;
+                        climateServiceCalls.Add($"set_hvac_mode:{mode}");
+                    }
+                }
+                else
+                {
+                    lock (gate)
+                    {
+                        climateServiceCalls.Add(service);
+                    }
+                }
+
+                return JsonResponse("[]");
+            }
+
+            if (request.Method == HttpMethod.Post)
+            {
+                return JsonResponse("{}");
+            }
+
+            if (string.Equals(path, "api/states/climate.dining_room", StringComparison.OrdinalIgnoreCase))
+            {
+                if (blockFirstClimateRead
+                    && Interlocked.CompareExchange(ref firstClimateReadClaimed, 1, 0) == 0)
+                {
+                    FirstClimateReadEntered.TrySetResult(true);
+                    await ReleaseFirstClimateRead.Task.WaitAsync(cancellationToken);
+                }
+
+                if (climateReadStatusCode is { } readStatus)
+                {
+                    return JsonResponse("{\"message\":\"climate read rejected by test\"}", readStatus);
+                }
+
+                if (climateStateOverrideJson is not null)
+                {
+                    return JsonResponse(climateStateOverrideJson);
+                }
+
+                string mode;
+                double setPoint;
+                lock (gate)
+                {
+                    mode = currentHvacMode;
+                    setPoint = currentSetPointCelsius;
+                }
+
+                var action = string.Equals(mode, "off", StringComparison.OrdinalIgnoreCase) ? "off" : "idle";
+                return JsonResponse(
+                    $"{{\"entity_id\":\"climate.dining_room\",\"state\":\"{mode}\",\"attributes\":{{\"current_temperature\":{currentTemperatureCelsius.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"temperature\":{setPoint.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"hvac_action\":\"{action}\",\"fan_modes\":[],\"min_temp\":16.0,\"max_temp\":30.0}},\"context\":{{\"id\":\"test-context\",\"parent_id\":null,\"user_id\":null}}}}");
+            }
+
+            if (string.Equals(path, "api/states", StringComparison.OrdinalIgnoreCase))
+            {
+                return JsonResponse("[]");
+            }
+
+            return JsonResponse("{}", System.Net.HttpStatusCode.NotFound);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref activeRequests);
+        }
+    }
+
+    private void UpdateMaximumConcurrency(int concurrent)
+    {
+        var observed = Volatile.Read(ref maxConcurrentRequests);
+        while (concurrent > observed)
+        {
+            var original = Interlocked.CompareExchange(ref maxConcurrentRequests, concurrent, observed);
+            if (original == observed)
+            {
+                return;
+            }
+
+            observed = original;
+        }
     }
 
     private static HttpResponseMessage JsonResponse(

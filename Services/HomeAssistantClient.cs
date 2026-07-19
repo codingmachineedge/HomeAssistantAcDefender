@@ -17,6 +17,9 @@ public sealed class HomeAssistantClient
     private readonly HomeAssistantTokenStore? tokenStore;
     private string? discoveredClimateEntityId;
     private string? discoveredWeatherEntityId;
+    private readonly SemaphoreSlim locationGate = new(1, 1);
+    private HomeAssistantCoordinates? cachedInstallationCoordinates;
+    private DateTimeOffset nextInstallationCoordinateAttemptAt;
 
     public HomeAssistantClient(HttpClient httpClient, IOptionsMonitor<HomeAssistantOptions> options, ILogger<HomeAssistantClient> logger, HomeAssistantTokenStore? tokenStore = null)
     {
@@ -44,11 +47,9 @@ public sealed class HomeAssistantClient
         var configuredEntityId = options.CurrentValue.EntityId;
         if (!string.IsNullOrWhiteSpace(configuredEntityId))
         {
-            var configuredReading = await TryGetClimateStateAsync(configuredEntityId.Trim(), cancellationToken);
-            if (configuredReading is not null)
-            {
-                return configuredReading;
-            }
+            // A configured entity is an explicit real-device boundary. Never silently bind the
+            // defender to another thermostat when this entity is missing or unavailable.
+            return await TryGetClimateStateAsync(configuredEntityId.Trim(), cancellationToken);
         }
 
         var entityId = await DiscoverClimateEntityIdAsync(cancellationToken);
@@ -67,23 +68,141 @@ public sealed class HomeAssistantClient
             return null;
         }
 
+        WeatherReading? conditionOnlyReading = null;
         var configuredWeatherEntityId = options.CurrentValue.WeatherEntityId;
         if (!string.IsNullOrWhiteSpace(configuredWeatherEntityId))
         {
-            var configuredReading = await TryGetWeatherStateAsync(configuredWeatherEntityId.Trim(), cancellationToken);
-            if (configuredReading is not null)
+            try
             {
-                return configuredReading;
+                var configuredReading = await TryGetWeatherStateAsync(configuredWeatherEntityId.Trim(), cancellationToken);
+                if (IsUsableWeatherReading(configuredReading))
+                {
+                    return configuredReading;
+                }
+
+                conditionOnlyReading = configuredReading;
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(ex, "Configured Home Assistant weather entity {EntityId} timed out.", configuredWeatherEntityId.Trim());
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Configured Home Assistant weather entity {EntityId} is unavailable.", configuredWeatherEntityId.Trim());
             }
         }
 
-        var entityId = await DiscoverWeatherEntityIdAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(entityId))
+        try
         {
-            return await TryGetOutdoorTemperatureSensorAsync(cancellationToken);
+            var entityId = await DiscoverWeatherEntityIdAsync(cancellationToken);
+            if (!string.IsNullOrWhiteSpace(entityId)
+                && !string.Equals(entityId, configuredWeatherEntityId?.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                var discoveredReading = await TryGetWeatherStateAsync(entityId, cancellationToken);
+                if (IsUsableWeatherReading(discoveredReading))
+                {
+                    return discoveredReading;
+                }
+
+                conditionOnlyReading ??= discoveredReading;
+            }
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Home Assistant weather discovery timed out.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Home Assistant weather discovery is unavailable.");
         }
 
-        return await TryGetWeatherStateAsync(entityId, cancellationToken);
+        try
+        {
+            var sensorReading = await TryGetOutdoorTemperatureSensorAsync(cancellationToken);
+            return IsUsableWeatherReading(sensorReading) ? sensorReading : conditionOnlyReading;
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Configured Home Assistant outdoor-temperature sensor timed out.");
+            return conditionOnlyReading;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Configured Home Assistant outdoor-temperature sensor is unavailable.");
+            return conditionOnlyReading;
+        }
+    }
+
+    /// <summary>
+    /// Reads and caches the real Home Assistant installation coordinates. These are used only to
+    /// locate the optional Open-Meteo weather fallback; the Home Assistant access token remains on
+    /// this client's requests and is never passed to the external weather client.
+    /// </summary>
+    public async Task<HomeAssistantCoordinates?> GetInstallationCoordinatesAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConfigured)
+        {
+            return null;
+        }
+
+        if (cachedInstallationCoordinates is not null)
+        {
+            return cachedInstallationCoordinates;
+        }
+
+        if (DateTimeOffset.UtcNow < nextInstallationCoordinateAttemptAt)
+        {
+            return null;
+        }
+
+        await locationGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (cachedInstallationCoordinates is not null)
+            {
+                return cachedInstallationCoordinates;
+            }
+
+            if (DateTimeOffset.UtcNow < nextInstallationCoordinateAttemptAt)
+            {
+                return null;
+            }
+
+            using var response = await SendAsync(HttpMethod.Get, "api/config", null, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            var root = document.RootElement;
+            var latitude = root.TryGetProperty("latitude", out var latitudeElement) ? TryGetDouble(latitudeElement) : null;
+            var longitude = root.TryGetProperty("longitude", out var longitudeElement) ? TryGetDouble(longitudeElement) : null;
+            if (latitude is not { } lat || longitude is not { } lon
+                || !double.IsFinite(lat) || !double.IsFinite(lon)
+                || lat is < -90 or > 90 || lon is < -180 or > 180)
+            {
+                logger.LogWarning("Home Assistant /api/config did not return valid installation coordinates.");
+                nextInstallationCoordinateAttemptAt = DateTimeOffset.UtcNow.AddMinutes(10);
+                return null;
+            }
+
+            cachedInstallationCoordinates = new HomeAssistantCoordinates(lat, lon);
+            return cachedInstallationCoordinates;
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Reading Home Assistant installation coordinates timed out.");
+            nextInstallationCoordinateAttemptAt = DateTimeOffset.UtcNow.AddMinutes(10);
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Could not read installation coordinates from Home Assistant /api/config.");
+            nextInstallationCoordinateAttemptAt = DateTimeOffset.UtcNow.AddMinutes(10);
+            return null;
+        }
+        finally
+        {
+            locationGate.Release();
+        }
     }
 
     /// <summary>
@@ -567,8 +686,15 @@ public sealed class HomeAssistantClient
 
     public async Task SetCoolingAsync(string entityId, double setPointCelsius, CancellationToken cancellationToken)
     {
+        // Put the intended target in place before enabling cooling. If Home Assistant rejects or
+        // cancels either half of this two-call transition, the safer partial outcome is an OFF unit
+        // with a prepared setpoint, never COOL running against a stale wall target.
+        await SetTemperatureAsync(entityId, setPointCelsius, cancellationToken);
         await SetHvacModeAsync(entityId, "cool", cancellationToken);
+    }
 
+    public async Task SetTemperatureAsync(string entityId, double setPointCelsius, CancellationToken cancellationToken)
+    {
         await CallServiceAsync("climate", "set_temperature", new
         {
             entity_id = entityId,
@@ -693,7 +819,15 @@ public sealed class HomeAssistantClient
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-        return ParseClimateState(document.RootElement, entityId);
+        var reading = ParseClimateState(document.RootElement, entityId);
+        if (reading is null)
+        {
+            logger.LogWarning(
+                "Home Assistant climate entity {EntityId} returned an unavailable/unknown state or incomplete temperature attributes",
+                entityId);
+        }
+
+        return reading;
     }
 
     private async Task<WeatherReading?> TryGetWeatherStateAsync(string entityId, CancellationToken cancellationToken)
@@ -899,16 +1033,38 @@ public sealed class HomeAssistantClient
         return new Uri(new Uri(baseUrl), relativePath);
     }
 
-    private static ThermostatReading ParseClimateState(JsonElement root, string entityId)
+    private static ThermostatReading? ParseClimateState(JsonElement root, string entityId)
     {
         var hvacMode = root.TryGetProperty("state", out var stateElement)
-            ? stateElement.GetString() ?? "unknown"
-            : "unknown";
+            ? stateElement.GetString()?.Trim()
+            : null;
+        var currentTemperature = TryGetAttributeDouble(root, "current_temperature");
+        var setPoint = TryGetAttributeDouble(root, "temperature");
+        var modeOff = string.Equals(hvacMode, "off", StringComparison.OrdinalIgnoreCase);
+        // Several real climate integrations omit the target or report 0 while OFF. The rest of
+        // the defender already treats 0 as mode-off telemetry noise, so preserve the valid live
+        // OFF reading with that sentinel instead of declaring the entity unavailable.
+        var normalizedSetPoint = setPoint ?? (modeOff ? 0.0 : double.NaN);
+        var setPointIsPlausible = modeOff
+            ? normalizedSetPoint == 0.0 || (normalizedSetPoint > 5.0 && normalizedSetPoint <= 40.0)
+            : normalizedSetPoint > 5.0 && normalizedSetPoint <= 40.0;
+        if (string.IsNullOrWhiteSpace(hvacMode)
+            || string.Equals(hvacMode, "unavailable", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(hvacMode, "unknown", StringComparison.OrdinalIgnoreCase)
+            || currentTemperature is not { } currentValue
+            || !double.IsFinite(currentValue)
+            || !double.IsFinite(normalizedSetPoint)
+            || currentValue <= 5.0
+            || currentValue > 50.0
+            || !setPointIsPlausible)
+        {
+            return null;
+        }
 
         return new ThermostatReading(
             entityId,
-            TryGetAttributeDouble(root, "current_temperature") ?? 0.0,
-            TryGetAttributeDouble(root, "temperature") ?? 0.0,
+            currentValue,
+            normalizedSetPoint,
             hvacMode,
             TryGetAttributeString(root, "hvac_action") ?? hvacMode,
             TryGetAttributeString(root, "fan_mode"),
@@ -929,6 +1085,11 @@ public sealed class HomeAssistantClient
             TryGetAttributeDouble(root, "temperature") ?? TryGetAttributeDouble(root, "apparent_temperature"),
             condition);
     }
+
+    private static bool IsUsableWeatherReading(WeatherReading? reading) =>
+        reading?.OutdoorTemperatureCelsius is not null
+        && !string.Equals(reading.Condition, "unavailable", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(reading.Condition, "unknown", StringComparison.OrdinalIgnoreCase);
 
     private static TemperatureSensorReading ParseTemperatureSensor(JsonElement root)
     {

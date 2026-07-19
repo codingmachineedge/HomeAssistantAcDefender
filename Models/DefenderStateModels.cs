@@ -913,6 +913,17 @@ public sealed record DefenderCommandLogEntry(
     string? FanMode,
     string Detail);
 
+public sealed record CoolingSetPointPlan(
+    double ExpectedSetPointCelsius,
+    double? PreviousActiveSetPointCelsius,
+    bool PreviousStartedInSafeBand,
+    DateTimeOffset? PreviousLastWalkStepAt,
+    double PreviousBoostOffsetCelsius,
+    double? NextActiveSetPointCelsius,
+    bool NextStartedInSafeBand,
+    DateTimeOffset? NextLastWalkStepAt,
+    double NextBoostOffsetCelsius);
+
 public sealed class DefenderSettings
 {
     /// <summary>

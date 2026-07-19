@@ -4,7 +4,7 @@
         <div class="guard-card__title">
             <span class="@($"guard-avatar guard-avatar--{Tone.Css()}")" aria-hidden="true">@Initials</span>
             <div class="guard-card__id">
-                <MudText Typo="Typo.subtitle1" Class="i18n-both">@L(Info.Name)</MudText>
+                <MudText Typo="Typo.subtitle1" HtmlTag="h3" Class="i18n-both">@L(Info.Name)</MudText>
                 <span class="guard-card__rank">@RankText</span>
             </div>
         </div>
@@ -32,6 +32,8 @@
         <MudButton Class="guard-card__more"
                    Variant="Variant.Text"
                    Size="Size.Small"
+                   id="@HowButtonId"
+                   aria-label="@HowButtonLabel"
                    aria-expanded="@(_open ? "true" : "false")"
                    aria-controls="@HowPanelId"
                    OnClick="@(() => _open = !_open)"
@@ -43,6 +45,8 @@
                    Variant="Variant.Text"
                    Color="Color.Info"
                    Size="Size.Small"
+                   id="@DetailButtonId"
+                   aria-label="@DetailButtonLabel"
                    aria-expanded="@(_detailOpen ? "true" : "false")"
                    aria-controls="@DetailPanelId"
                    OnClick="@(() => _detailOpen = !_detailOpen)"
@@ -52,7 +56,7 @@
     </div>
 
     <MudCollapse Expanded="_open">
-        <div id="@HowPanelId" class="guard-help">
+        <div id="@HowPanelId" class="guard-help" role="region" aria-labelledby="@HowButtonId">
             <p class="guard-help__summary i18n-both">@L(Info.Summary)</p>
             <p class="i18n-both"><span class="guard-help__tag">@LInline("Watches")</span> @L(Info.Watches)</p>
             <p class="i18n-both"><span class="guard-help__tag">@LInline("Logic")</span> @L(Info.Logic)</p>
@@ -65,7 +69,7 @@
     </MudCollapse>
 
     <MudCollapse Expanded="_detailOpen">
-        <div id="@DetailPanelId" class="guard-detail">
+        <div id="@DetailPanelId" class="guard-detail" role="region" aria-labelledby="@DetailButtonId">
             <div class="guard-detail__brief">
                 @foreach (var item in DetailBriefItems)
                 {
@@ -104,7 +108,7 @@
             <div class="guard-detail__row">
                 <div class="guard-detail__label">
                     <MudIcon Icon="@Icons.Material.Filled.Flag" Size="Size.Small" />
-                    What would trigger it next
+                    Future trigger — what would trigger it next
                 </div>
                 <div class="guard-detail__text">@FutureTriggerText</div>
             </div>
@@ -206,8 +210,12 @@
     private bool _open;
     private bool _detailOpen;
 
+    private string HowButtonId => $"guard-how-button-{GuardOrder}";
     private string HowPanelId => $"guard-how-{GuardOrder}";
+    private string DetailButtonId => $"guard-detail-button-{GuardOrder}";
     private string DetailPanelId => $"guard-detail-{GuardOrder}";
+    private string HowButtonLabel => $"{LInline("How this works")}: {L(Info.Name)}";
+    private string DetailButtonLabel => $"{LInline("More extra-specific info")}: {L(Info.Name)}";
 
     private bool IsOffline =>
         !string.Equals(Snapshot.ConnectionState, "home-assistant", StringComparison.OrdinalIgnoreCase);

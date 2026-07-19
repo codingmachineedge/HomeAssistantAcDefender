@@ -12,9 +12,9 @@
     @if (State.Snapshot?.AdjustmentStatistics is { } stats)
     {
         <div class="ops-panel ops-panel--pad">
-            <div class="ops-panel__label">ADJUSTMENT STATISTICS — @stats.TotalAdjustments ANALYSED</div>
+            <h2 class="ops-panel__label">ADJUSTMENT STATISTICS — @stats.TotalAdjustments ANALYSED</h2>
             <div class="helper-text" style="margin-bottom: 12px;">@stats.Insight</div>
-            <div class="ops-stat-scroll">
+            <div class="ops-stat-scroll" role="region" aria-label="Adjustment statistics table" tabindex="0">
                 <div class="ops-stat-grid">
                     @foreach (var head in new[] { "GROUP", "COUNT", "AVG SET", "AVG ROOM", "AVG OUT" })
                     {
@@ -41,14 +41,14 @@
     @if (_historyLoading)
     {
         <div class="ops-panel ops-panel--pad" role="status">
-            <div class="ops-panel__label">RECORDER HISTORY — LOADING</div>
+            <h2 class="ops-panel__label">RECORDER HISTORY — LOADING</h2>
             <div class="helper-text">Reading the real Home Assistant climate archive…</div>
         </div>
     }
     else if (!string.IsNullOrWhiteSpace(_historyError))
     {
         <div class="ops-panel ops-panel--pad" role="alert">
-            <div class="ops-panel__label">RECORDER HISTORY — UNAVAILABLE</div>
+            <h2 class="ops-panel__label">RECORDER HISTORY — UNAVAILABLE</h2>
             <div class="helper-text" style="margin-bottom: 10px;">@_historyError</div>
             <button class="ops-btn ops-btn--outline" @onclick="RetryHistory">↻ RETRY REAL HISTORY</button>
         </div>
@@ -58,8 +58,8 @@
     @if (_history is { Count: > 1 })
     {
         <div class="ops-panel ops-panel--pad">
-            <div class="ops-panel__label">SETPOINT CHANGES BY HOUR OF DAY (TORONTO)</div>
-            <div class="ops-usage-bars" style="height: 70px; margin-bottom: 4px;">
+            <h2 class="ops-panel__label">SETPOINT CHANGES BY HOUR OF DAY (TORONTO)</h2>
+            <div class="ops-usage-bars" style="height: 70px; margin-bottom: 4px;" role="img" aria-label="@HistogramAccessibleLabel">
                 @foreach (var (hour, count) in HourHistogram)
                 {
                     <div class="ops-usage-bars__bar @(count >= HistogramHotThreshold && HistogramMax > 0 ? "ops-usage-bars__bar--hot" : "")"
@@ -70,7 +70,7 @@
             <div class="ops-usage-scale"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
 
             <div class="ops-learned">
-                <div class="ops-learned__label">THE ALGORITHM — WHAT THE DEFENDER LEARNED</div>
+                <h3 class="ops-learned__label">THE ALGORITHM — WHAT THE DEFENDER LEARNED</h3>
                 @foreach (var line in AlgorithmLines)
                 {
                     <div class="ops-learned__line">▸ @line</div>
@@ -82,7 +82,7 @@
     @* ---------- Two-column log grid ---------- *@
     <div class="ops-logs-grid">
         <div class="ops-panel ops-panel--pad" style="min-width: 0;">
-            <div class="ops-panel__label">THERMOSTAT CHANGE LOG — EXTERNAL TOUCHES</div>
+            <h2 class="ops-panel__label">THERMOSTAT CHANGE LOG — EXTERNAL TOUCHES</h2>
             <input class="ops-input" style="width: 100%; box-sizing: border-box; margin: 0 0 10px 0;"
                    value="@_touchSearch" @oninput="OnTouchSearchChanged"
                    placeholder="SEARCH CHANGES…" aria-label="Search thermostat changes" />
@@ -107,7 +107,7 @@
         </div>
 
         <div class="ops-panel ops-panel--pad" style="min-width: 0;">
-            <div class="ops-panel__label">ACTIVITY — WHAT THE DEFENDER HAS BEEN DOING</div>
+            <h2 class="ops-panel__label">ACTIVITY — WHAT THE DEFENDER HAS BEEN DOING</h2>
             <input class="ops-input" style="width: 100%; box-sizing: border-box; margin: 0 0 10px 0;"
                    value="@_eventSearch" @oninput="OnEventSearchChanged"
                    placeholder="SEARCH ACTIVITY…" aria-label="Search defender activity" />
@@ -288,6 +288,22 @@
 
     private int HistogramMax => HourHistogram.Count == 0 ? 0 : HourHistogram.Max(h => h.Count);
     private int HistogramHotThreshold => Math.Max(1, (int)(HistogramMax * 0.7));
+
+    private string HistogramAccessibleLabel
+    {
+        get
+        {
+            var populatedHours = HourHistogram.Where(item => item.Count > 0).ToArray();
+            if (populatedHours.Length == 0)
+            {
+                return "Setpoint changes by hour of day in Toronto. No setpoint changes were recorded.";
+            }
+
+            var values = string.Join(", ", populatedHours.Select(item =>
+                $"{item.Hour:00}:00, {item.Count} change{(item.Count == 1 ? string.Empty : "s")}"));
+            return $"Setpoint changes by hour of day in Toronto. {values}.";
+        }
+    }
 
     private string BusiestHoursText => string.Join(" · ",
         HourHistogram.Where(h => h.Count > 0).OrderByDescending(h => h.Count).Take(3).Select(h => $"{h.Hour:00}:00"));

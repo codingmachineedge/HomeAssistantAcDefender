@@ -16,8 +16,8 @@
 
 @if (_error is not null)
 {
-    <div class="login-error">
-        <svg class="login-error-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+    <div class="login-error" role="alert" aria-live="assertive" aria-atomic="true">
+        <svg class="login-error-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
         <span>@_error</span>
     </div>
 }
@@ -196,7 +196,7 @@ else
     }
 
     .login-subtitle {
-        color: #6d7c86;
+        color: #70808a;
         font-size: 0.72rem;
         line-height: 1.6;
     }
@@ -306,7 +306,7 @@ else
         display: flex;
         align-items: center;
         gap: 8px;
-        color: #6d7c86;
+        color: #70808a;
         font-size: 0.72rem;
         letter-spacing: 0.08em;
         cursor: pointer;

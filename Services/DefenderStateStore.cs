@@ -37,6 +37,11 @@ public sealed class DefenderStateStore
     // climbs this far above the reading captured at shutdown, then restores cool. A human turning the
     // AC back on is always respected.
     private const double CoolingFailureShutdownReleaseRiseCelsius = 0.5;
+    private const int CoolingFailureShutdownReleaseConfirmSeconds = 3;
+    private static readonly TimeSpan AutomaticMinimumOffDwell = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan AutomaticMinimumOnDwell = TimeSpan.FromMinutes(5);
+    private const double AutomaticOffEntryComfortHysteresisCelsius = 0.3;
+    private static readonly TimeSpan WeatherDecisionMaxAge = TimeSpan.FromMinutes(90);
 
     private readonly object gate = new();
     private readonly LearningTrainer learningTrainer = new();
@@ -900,20 +905,21 @@ public sealed class DefenderStateStore
         }
     }
 
-    public DefenderSnapshot RecordWeatherReading(WeatherReading? reading)
+    public DefenderSnapshot RecordWeatherReading(WeatherReading? reading, DateTimeOffset? observedAt = null)
     {
         lock (gate)
         {
             if (reading is not null)
             {
+                var readingTime = observedAt ?? DateTimeOffset.UtcNow;
                 state.Weather = new WeatherRuntimeState
                 {
                     OutdoorTemperatureCelsius = reading.OutdoorTemperatureCelsius,
                     Condition = reading.Condition,
                     EntityId = reading.EntityId,
-                    UpdatedAt = DateTimeOffset.UtcNow
+                    UpdatedAt = readingTime
                 };
-                RecordWeatherSample(reading, state.Weather.UpdatedAt);
+                RecordWeatherSample(reading, readingTime);
             }
 
             state.UpdatedAt = DateTimeOffset.UtcNow;
@@ -947,10 +953,14 @@ public sealed class DefenderStateStore
         }
     }
 
-    /// <summary>Records a forecast fetch. A null reading keeps the last good entries (freshness
-    /// still decays via forecastUpdatedAt) and backs the next attempt off five minutes so a broken
-    /// weather integration cannot spin every poll.</summary>
-    public DefenderSnapshot RecordForecastReading(WeatherForecastReading? reading, DateTimeOffset now)
+    /// <summary>Records a forecast fetch. A successful external source may provide its real next
+    /// refresh time so cached data is not re-recorded every thermostat cycle. A null reading keeps
+    /// the last good entries (freshness still decays via forecastUpdatedAt) and backs the next
+    /// attempt off five minutes so a broken weather integration cannot spin every poll.</summary>
+    public DefenderSnapshot RecordForecastReading(
+        WeatherForecastReading? reading,
+        DateTimeOffset now,
+        DateTimeOffset? nextRefreshAt = null)
     {
         lock (gate)
         {
@@ -958,7 +968,7 @@ public sealed class DefenderStateStore
             {
                 forecast = reading;
                 forecastUpdatedAt = now;
-                forecastNextAttemptAt = null;
+                forecastNextAttemptAt = nextRefreshAt;
                 forecastStatus = $"{reading.ForecastType} forecast: {reading.Entries.Count} entries from {reading.EntityId}.";
             }
             else
@@ -1357,6 +1367,23 @@ public sealed class DefenderStateStore
 
             var inWindow = haveWindow && IsInMinuteWindow(now, startMinutes, endMinutes);
 
+            // Direct room comfort wins before every night action, including the one-shot OFF and
+            // the cooling-budget ease-up. If an active night hold warmed into the safety override,
+            // end it now; the normal pipeline below can restore COOL immediately from this same
+            // real reading, and the one-command-per-window key prevents another OFF flap later.
+            if (inWindow && ShouldBypassNaturalRecovery(reading))
+            {
+                if (state.NightShutdownActive)
+                {
+                    state.NightShutdownActive = false;
+                    state.NightShutdownOffCommandedAt = null;
+                    AddEvent("warning", $"Night shutdown released for direct comfort at {reading.CurrentTemperatureCelsius:0.0} C.");
+                    SaveState();
+                }
+
+                return false;
+            }
+
             // NIGHT COOLING BUDGET: even on warm nights the AC may cool at most this many minutes
             // inside the window. Once the budget is spent the defender eases the unit to a stop
             // ONCE and then only observes — a later deliberate manual re-enable is respected,
@@ -1393,14 +1420,6 @@ public sealed class DefenderStateStore
                         if (reading.SetPointCelsius < restCeiling - 0.05 && budgetStepReady)
                         {
                             easeUpSetPoint = Math.Round(Math.Min(restCeiling, reading.SetPointCelsius + 0.5), 1);
-                            state.LastWalkStepAt = now;
-                            RecordPendingThermostatCommand(
-                                commandedSetPointCelsius: easeUpSetPoint,
-                                commandedHvacMode: "cool",
-                                commandedFanMode: null,
-                                commandSourceKind: "night-budget",
-                                commandSourceLabel: "Night cooling budget",
-                                commandSourceDetail: "The nightly cooling budget was spent; AC Defender eased the setpoint up so the unit stops.");
                         }
                     }
                     else
@@ -1418,17 +1437,35 @@ public sealed class DefenderStateStore
 
             // The outdoor check is a safeguard against shutting down on a genuinely hot night. An
             // unknown outdoor reading keeps the AC running rather than blindly turning it off.
-            var outdoorOk = state.Weather?.OutdoorTemperatureCelsius is { } outdoor
-                && outdoor < s.NightShutdownOutdoorBelowCelsius;
+            var outdoor = GetFreshWeatherLocked(now)?.OutdoorTemperatureCelsius;
+            var outdoorOk = outdoor is { } currentOutdoor
+                && currentOutdoor < s.NightShutdownOutdoorBelowCelsius;
+            var modeOff = string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase);
+            var minimumOffDwell = AutomaticMinimumOffDwell;
+
+            if ((!inWindow || !outdoorOk)
+                && state.NightShutdownActive
+                && modeOff
+                && state.NightShutdownOffCommandedAt is { } nightOffAt
+                && now < nightOffAt.Add(minimumOffDwell)
+                && !ShouldBypassNaturalRecovery(reading))
+            {
+                until = nightOffAt.Add(minimumOffDwell);
+                message = $"Night shutdown release is ready, but the anti-short-cycle OFF dwell runs until {until.Value.ToLocalTime():HH:mm:ss}.";
+                return true;
+            }
 
             if (!inWindow || !outdoorOk)
             {
                 if (state.NightShutdownActive)
                 {
                     state.NightShutdownActive = false;
+                    state.NightShutdownOffCommandedAt = null;
                     AddEvent("info", !inWindow
                         ? "Night shutdown window ended; normal guard duty resumes."
-                        : $"Outdoor rose to {state.Weather?.OutdoorTemperatureCelsius:0.0} C during the night window; cooling is allowed again.");
+                        : outdoor is { } availableOutdoor
+                            ? $"Outdoor rose to {availableOutdoor:0.0} C during the night window; cooling is allowed again."
+                            : "Outdoor weather is unavailable or stale; night shutdown released and cooling is allowed.");
                     SaveState();
                 }
 
@@ -1449,37 +1486,102 @@ public sealed class DefenderStateStore
             }
 
             until = NextWindowEnd(now, endMinutes);
-            var modeOff = string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase);
+            var shutdownOutdoor = outdoor!.Value;
+            var windowKey = until.Value.ToLocalTime().ToString("yyyy-MM-dd");
+            var alreadyShutThisWindow = string.Equals(state.NightShutdownLastOffWindowKey, windowKey, StringComparison.Ordinal);
+            var nightEntryComfortCeiling = state.TargetTemperatureCelsius
+                + Math.Max(0.1, s.NaturalSafetyOverrideCelsius)
+                - AutomaticOffEntryComfortHysteresisCelsius;
+            if (!modeOff
+                && !alreadyShutThisWindow
+                && reading.CurrentTemperatureCelsius > nightEntryComfortCeiling)
+            {
+                message = $"Night shutdown is near the direct-comfort boundary; waiting for the room to settle at or below {nightEntryComfortCeiling:0.0} C before any OFF command.";
+                return true;
+            }
+            if (!modeOff
+                && !alreadyShutThisWindow
+                && TryGetAutomaticMinimumOnDwellLocked(reading, now, out var minimumOnUntil))
+            {
+                if (minimumOnUntil >= until.Value)
+                {
+                    message = $"Night shutdown ends at {until.Value.ToLocalTime():HH:mm:ss}, before the five-minute minimum-ON dwell finishes; skipping this OFF cycle.";
+                }
+                else
+                {
+                    until = minimumOnUntil;
+                    message = $"Night shutdown is ready, but cooling was just enabled; the five-minute minimum-ON dwell prevents OFF until {minimumOnUntil.ToLocalTime():HH:mm:ss}.";
+                }
+                return true;
+            }
+            if (!modeOff && !alreadyShutThisWindow && until.Value - now < minimumOffDwell)
+            {
+                message = $"Night shutdown window ends at {until.Value.ToLocalTime():HH:mm:ss}; skipping a seconds-long OFF cycle inside the {minimumOffDwell.TotalSeconds:0}-second minimum dwell.";
+                return true;
+            }
             if (!state.NightShutdownActive)
             {
                 // ONE off command per night, keyed to this window's end date — an outdoor blip or a
                 // restart mid-window must never re-send OFF over a deliberate manual re-enable.
-                var windowKey = until.Value.ToLocalTime().ToString("yyyy-MM-dd");
-                var alreadyShutThisWindow = string.Equals(state.NightShutdownLastOffWindowKey, windowKey, StringComparison.Ordinal);
                 state.NightShutdownActive = true;
-                turnOff = !modeOff && !alreadyShutThisWindow;
-                if (turnOff)
-                {
-                    state.NightShutdownLastOffWindowKey = windowKey;
-                }
-                AddEvent("info", $"Night shutdown ({s.NightShutdownStartTime}-{s.NightShutdownEndTime}, outdoor {state.Weather?.OutdoorTemperatureCelsius:0.0} C < {s.NightShutdownOutdoorBelowCelsius:0.0} C): AC off, defenders standing down.");
-                if (turnOff)
-                {
-                    RecordPendingThermostatCommand(
-                        commandedSetPointCelsius: null,
-                        commandedHvacMode: "off",
-                        commandedFanMode: null,
-                        commandSourceKind: "night-shutdown",
-                        commandSourceLabel: "Night shutdown",
-                        commandSourceDetail: "The night shutdown window started with cool outdoor air; AC Defender turned the AC off to save power.");
-                    state.LastCommand = $"Home Assistant {reading.EntityId} thermostat turned off for the night shutdown window.";
-                }
+                AddEvent("info", $"Night shutdown selected ({s.NightShutdownStartTime}-{s.NightShutdownEndTime}, outdoor {shutdownOutdoor:0.0} C < {s.NightShutdownOutdoorBelowCelsius:0.0} C); defenders standing down.");
             }
 
-            message = $"Night shutdown until {s.NightShutdownEndTime}: AC stays off while it is {state.Weather?.OutdoorTemperatureCelsius:0.0} C outside. Turning it back on manually is respected.";
+            if (modeOff && !alreadyShutThisWindow)
+            {
+                state.NightShutdownLastOffWindowKey = windowKey;
+                alreadyShutThisWindow = true;
+            }
+
+            turnOff = !modeOff && !alreadyShutThisWindow;
+            message = turnOff
+                ? $"Night shutdown until {s.NightShutdownEndTime}: sending AC off while it is {shutdownOutdoor:0.0} C outside."
+                : $"Night shutdown until {s.NightShutdownEndTime}: AC stays off while it is {shutdownOutdoor:0.0} C outside. Turning it back on manually is respected.";
             state.UpdatedAt = now;
             SaveState();
             return true;
+        }
+    }
+
+    public void RecordNightBudgetEaseCommand(string entityId, double setPointCelsius, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            state.LastWalkStepAt = now;
+            state.LastCommand = $"Home Assistant {entityId} eased to {setPointCelsius:0.0} C after the night cooling budget was spent.";
+            state.UpdatedAt = now;
+            RecordPendingThermostatCommand(
+                setPointCelsius,
+                commandedHvacMode: null,
+                commandedFanMode: null,
+                commandSourceKind: "night-budget",
+                commandSourceLabel: "Night cooling budget",
+                commandSourceDetail: "The nightly cooling budget was spent; AC Defender eased the setpoint up so the unit stops.",
+                nowOverride: now);
+            SaveState();
+        }
+    }
+
+    public void RecordNightShutdownOffCommand(string entityId, DateTimeOffset windowEnd, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            state.NightShutdownLastOffWindowKey = windowEnd.ToLocalTime().ToString("yyyy-MM-dd");
+            state.NightShutdownOffCommandedAt = now;
+            state.LastCommand = $"Home Assistant {entityId} thermostat turned off for the night shutdown window.";
+            state.UpdatedAt = now;
+            RecordPendingThermostatCommand(
+                commandedSetPointCelsius: null,
+                commandedHvacMode: "off",
+                commandedFanMode: null,
+                commandSourceKind: "night-shutdown",
+                commandSourceLabel: "Night shutdown",
+                commandSourceDetail: "The night shutdown window started with cool outdoor air; AC Defender turned the AC off to save power.",
+                nowOverride: now);
+            AddEvent("info", "Night shutdown: Home Assistant accepted the thermostat OFF command.");
+            SaveState();
         }
     }
 
@@ -1524,13 +1626,23 @@ public sealed class DefenderStateStore
                 return false;
             }
 
-            var outdoor = state.Weather?.OutdoorTemperatureCelsius;
+            var outdoor = GetFreshWeatherLocked(now)?.OutdoorTemperatureCelsius;
             var restoreAt = Math.Round(s.CoolOutdoorShutdownBelowCelsius + s.CoolOutdoorRestoreMarginCelsius, 1);
             var modeOff = string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase);
             var nextCheck = now.AddSeconds(Math.Max(15, options.PollIntervalSeconds));
 
             if (state.CoolOutdoorEpisodeActive)
             {
+                if (!state.CoolOutdoorOffSentThisEpisode && !modeOff)
+                {
+                    turnOff = true;
+                    until = nextCheck;
+                    message = "Cool-outdoor shutdown is retrying the real OFF command; no successful OFF has been recorded yet.";
+                    state.CoolOutdoorStatus = message;
+                    SaveState();
+                    return true;
+                }
+
                 // HUMAN OVERRIDE: stand aside for the rest of the episode; it ends when outdoor
                 // genuinely warms past the restore point (a real reading — never a blip on null).
                 if (state.CoolOutdoorHumanOverrideThisEpisode)
@@ -1569,18 +1681,14 @@ public sealed class DefenderStateStore
                     {
                         restoreCool = true;
                         restoreSetPoint = Math.Max(state.TargetTemperatureCelsius, Math.Round(reading.CurrentTemperatureCelsius - 1.0, 1));
-                        RecordPendingThermostatCommand(
-                            commandedSetPointCelsius: restoreSetPoint,
-                            commandedHvacMode: "cool",
-                            commandedFanMode: null,
-                            commandSourceKind: "cool-outdoor-restore",
-                            commandSourceLabel: "Cool-Outdoor Shutdown",
-                            commandSourceDetail: "The room crossed the safety band during a cool-outdoor shutdown; cooling was restored immediately.");
-                        state.LastCommand = $"Home Assistant {reading.EntityId} cooling restored at {restoreSetPoint:0.0} C (cool-outdoor comfort restore).";
                         until = nextCheck;
                         message = reason;
+                        state.CoolOutdoorStatus = $"{reason} Waiting for Home Assistant to accept the restore.";
+                        SaveState();
+                        return false;
                     }
 
+                    state.CoolOutdoorReentryBlockedUntil = now.Add(AutomaticMinimumOnDwell);
                     ClearCoolOutdoorEpisodeLocked(reason);
                     AddEvent("warning", reason);
                     SaveState();
@@ -1590,7 +1698,7 @@ public sealed class DefenderStateStore
                 // WEATHER RESTORE: needs a real outdoor reading at/above the restore point and
                 // the minimum off dwell. An unknown outdoor keeps holding (never flap on a blip).
                 var offSince = state.CoolOutdoorOffCommandedAt ?? state.CoolOutdoorEpisodeStartedAt ?? now;
-                var dwellEnd = offSince.AddMinutes(Math.Max(1, s.CoolOutdoorMinimumOffMinutes));
+                var dwellEnd = offSince.AddMinutes(Math.Max(AutomaticMinimumOffDwell.TotalMinutes, s.CoolOutdoorMinimumOffMinutes));
                 if (outdoor is { } warmedOutdoor && warmedOutdoor >= restoreAt)
                 {
                     if (now < dwellEnd)
@@ -1606,17 +1714,12 @@ public sealed class DefenderStateStore
                     {
                         // Mode-only restore: the next cycle's normal pipeline computes the setpoint.
                         restoreCool = true;
-                        RecordPendingThermostatCommand(
-                            commandedSetPointCelsius: null,
-                            commandedHvacMode: "cool",
-                            commandedFanMode: null,
-                            commandSourceKind: "cool-outdoor-restore",
-                            commandSourceLabel: "Cool-Outdoor Shutdown",
-                            commandSourceDetail: "Outdoor warmed past the restore point; AC Defender restored cool mode after the cool-outdoor shutdown.");
-                        state.LastCommand = $"Home Assistant {reading.EntityId} cool mode restored (outdoor warmed past {restoreAt:0.0} C).";
                         until = nextCheck;
                         message = $"Outdoor warmed to {warmedOutdoor:0.0} C — restoring cool mode after the cool-outdoor shutdown.";
                         restoreReason = message;
+                        state.CoolOutdoorStatus = $"{message} Waiting for Home Assistant to accept the restore.";
+                        SaveState();
+                        return false;
                     }
 
                     ClearCoolOutdoorEpisodeLocked(restoreReason);
@@ -1637,6 +1740,36 @@ public sealed class DefenderStateStore
             }
 
             // ── No active episode: evaluate a new shutdown ──
+            // Never enter an episode that this exact real reading would have to undo on the next
+            // worker poll. Direct room comfort wins before OFF, avoiding a visible OFF -> COOL flap.
+            if (ShouldBypassNaturalRecovery(reading))
+            {
+                state.CoolOutdoorStatus = $"Room is {reading.CurrentTemperatureCelsius:0.0} C and needs direct cooling; cool-outdoor shutdown is standing aside.";
+                SaveState();
+                return false;
+            }
+
+            if (state.CoolOutdoorReentryBlockedUntil is { } reentryAt)
+            {
+                if (now < reentryAt)
+                {
+                    state.CoolOutdoorStatus = $"Cooling was just restored; cool-outdoor shutdown cannot turn it off again until {reentryAt.ToLocalTime():HH:mm:ss}.";
+                    return false;
+                }
+
+                state.CoolOutdoorReentryBlockedUntil = null;
+            }
+
+            var safetyOverride = Math.Max(0.1, s.NaturalSafetyOverrideCelsius);
+            var entryComfortCeiling = state.TargetTemperatureCelsius
+                + safetyOverride
+                - AutomaticOffEntryComfortHysteresisCelsius;
+            if (reading.CurrentTemperatureCelsius > entryComfortCeiling)
+            {
+                state.CoolOutdoorStatus = $"Room is near the direct-comfort boundary; cool-outdoor shutdown waits until it is at or below {entryComfortCeiling:0.0} C before any OFF command.";
+                return false;
+            }
+
             // Unknown outdoor = do nothing (mirror night shutdown: never turn off blind).
             if (outdoor is not { } coolOutdoor || coolOutdoor >= s.CoolOutdoorShutdownBelowCelsius)
             {
@@ -1666,6 +1799,14 @@ public sealed class DefenderStateStore
                 }
             }
 
+            if (!modeOff && TryGetAutomaticMinimumOnDwellLocked(reading, now, out var minimumOnUntil))
+            {
+                until = minimumOnUntil;
+                message = $"Cool-outdoor shutdown is ready, but cooling was just enabled; the five-minute minimum-ON dwell prevents OFF until {minimumOnUntil.ToLocalTime():HH:mm:ss}.";
+                state.CoolOutdoorStatus = message;
+                return true;
+            }
+
             // Episode entry: one-shot OFF (tagged so the HA echo is never logged as a wall
             // touch). An AC already off — the user's own doing or night shutdown's — is adopted
             // without a command, which also stops cool-mode restore fighting a human's off.
@@ -1677,23 +1818,13 @@ public sealed class DefenderStateStore
             if (!modeOff)
             {
                 turnOff = true;
-                state.CoolOutdoorOffSentThisEpisode = true;
-                state.CoolOutdoorOffCommandedAt = now;
-                RecordPendingThermostatCommand(
-                    commandedSetPointCelsius: null,
-                    commandedHvacMode: "off",
-                    commandedFanMode: null,
-                    commandSourceKind: "cool-outdoor-shutdown",
-                    commandSourceLabel: "Cool-Outdoor Shutdown",
-                    commandSourceDetail: "It is genuinely cool outside and the forecast stays cool; AC Defender turned the AC fully off to save power.");
-                state.LastCommand = $"Home Assistant {reading.EntityId} thermostat turned off (cool-outdoor shutdown at {coolOutdoor:0.0} C outside).";
             }
 
-            state.CoolOutdoorShutdownAccruing = true;
-            until = now.AddMinutes(Math.Max(1, s.CoolOutdoorMinimumOffMinutes));
+            state.CoolOutdoorShutdownAccruing = modeOff;
+            until = now.AddMinutes(Math.Max(AutomaticMinimumOffDwell.TotalMinutes, s.CoolOutdoorMinimumOffMinutes));
             message = $"Cool-outdoor shutdown: it is {coolOutdoor:0.0} C outside and the forecast stays cool — AC off, guards at ease. Restores at {restoreAt:0.0} C outdoor or on room comfort.";
             state.CoolOutdoorStatus = message;
-            AddEvent("info", $"Cool-Outdoor Shutdown: outdoor {coolOutdoor:0.0} C < {s.CoolOutdoorShutdownBelowCelsius:0.0} C{(turnOff ? "; AC turned off" : "; adopted the AC's existing off state")}.");
+            AddEvent("info", $"Cool-Outdoor Shutdown: outdoor {coolOutdoor:0.0} C < {s.CoolOutdoorShutdownBelowCelsius:0.0} C{(turnOff ? "; requesting AC off" : "; adopted the AC's existing off state")}.");
             state.UpdatedAt = now;
             SaveState();
             return true;
@@ -1701,6 +1832,47 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>Ends the cool-outdoor episode (does not SaveState — callers do).</summary>
+    public void RecordCoolOutdoorOffCommand(string entityId, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            if (!state.CoolOutdoorEpisodeActive)
+            {
+                return;
+            }
+
+            state.CoolOutdoorOffSentThisEpisode = true;
+            state.CoolOutdoorOffCommandedAt = now;
+            state.CoolOutdoorShutdownAccruing = false;
+            state.LastCommand = $"Home Assistant {entityId} thermostat turned off for the cool-outdoor shutdown.";
+            state.UpdatedAt = now;
+            RecordPendingThermostatCommand(
+                commandedSetPointCelsius: null,
+                commandedHvacMode: "off",
+                commandedFanMode: null,
+                commandSourceKind: "cool-outdoor-shutdown",
+                commandSourceLabel: "Cool-Outdoor Shutdown",
+                commandSourceDetail: "It is genuinely cool outside and the forecast stays cool; AC Defender turned the AC fully off to save power.",
+                nowOverride: now);
+            AddEvent("info", "Cool-Outdoor Shutdown: Home Assistant accepted the thermostat OFF command.");
+            SaveState();
+        }
+    }
+
+    public void RecordCoolOutdoorRestoreCommand(string entityId, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            ClearCoolOutdoorEpisodeLocked($"Home Assistant {entityId} accepted the cool-outdoor cooling restore.");
+            state.CoolOutdoorReentryBlockedUntil = now.Add(AutomaticMinimumOnDwell);
+            state.UpdatedAt = now;
+            AddEvent("info", "Cool-Outdoor Shutdown: Home Assistant accepted the cooling restore; the episode is closed.");
+            SaveState();
+        }
+    }
+
     private void ClearCoolOutdoorEpisodeLocked(string reason)
     {
         state.CoolOutdoorEpisodeActive = false;
@@ -1744,6 +1916,16 @@ public sealed class DefenderStateStore
 
             if (state.PeaceOfferingPendingSetPointCelsius is { } gift)
             {
+                // A peace offering is a setpoint-only command. If the person also turned the
+                // thermostat off, discard the queued gift and let the manual-OFF hold win.
+                if (!string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+                {
+                    state.PeaceOfferingPendingSetPointCelsius = null;
+                    state.PeaceOfferingArmedAt = null;
+                    SaveState();
+                }
+                else
+                {
                 // History shows raises at night are the angriest ones — the concession holds
                 // three times longer during the night window so nobody wakes up to a fight.
                 var holdMinutes = Math.Clamp(state.Settings.PeaceOfferingHoldMinutes, 1, 240);
@@ -1755,23 +1937,11 @@ public sealed class DefenderStateStore
                     holdMinutes = Math.Min(240, holdMinutes * 3);
                 }
 
-                state.PeaceOfferingPendingSetPointCelsius = null;
-                state.PeaceOfferingHoldUntil = now.AddMinutes(holdMinutes);
-                state.PeaceHoldIsModeOffRespect = false;
                 sendSetPoint = gift;
-                until = state.PeaceOfferingHoldUntil;
-                message = $"Peace offering sent: {gift:0.0} C (their wish plus a little). Standing down until {until.Value.ToLocalTime():HH:mm:ss}.";
-                RecordPendingThermostatCommand(
-                    commandedSetPointCelsius: gift,
-                    commandedHvacMode: "cool",
-                    commandedFanMode: null,
-                    commandSourceKind: "peace-offering",
-                    commandSourceLabel: "Peace offering",
-                    commandSourceDetail: "An app user raised the setpoint; AC Defender conceded a small extra step upward to keep the peace.");
-                state.LastCommand = $"Peace offering: setpoint raised to {gift:0.0} C after an app change.";
-                AddEvent("info", message);
-                SaveState();
+                until = now.AddMinutes(holdMinutes);
+                message = $"Peace offering ready: {gift:0.0} C (their wish plus a little).";
                 return true;
+                }
             }
 
             if (state.PeaceOfferingHoldUntil is { } hold && hold > now)
@@ -1801,6 +1971,43 @@ public sealed class DefenderStateStore
         }
     }
 
+    public string RecordPeaceOfferingCommand(double setPointCelsius, DateTimeOffset holdUntil, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            if (state.PeaceOfferingPendingSetPointCelsius is { } pending
+                && Math.Abs(pending - setPointCelsius) <= 0.05)
+            {
+                state.PeaceOfferingPendingSetPointCelsius = null;
+                state.PeaceOfferingArmedAt = null;
+            }
+
+            if (state.Settings.PeaceOfferingEnabled)
+            {
+                state.PeaceOfferingHoldUntil = holdUntil;
+                state.PeaceHoldIsModeOffRespect = false;
+            }
+
+            var message = state.Settings.PeaceOfferingEnabled
+                ? $"Peace offering sent: {setPointCelsius:0.0} C (their wish plus a little). Standing down until {holdUntil.ToLocalTime():HH:mm:ss}."
+                : $"Peace offering sent: {setPointCelsius:0.0} C just before the feature was disabled; no hold was started.";
+            RecordPendingThermostatCommand(
+                commandedSetPointCelsius: setPointCelsius,
+                commandedHvacMode: null,
+                commandedFanMode: null,
+                commandSourceKind: "peace-offering",
+                commandSourceLabel: "Peace offering",
+                commandSourceDetail: "An app user raised the setpoint; AC Defender conceded a small extra step upward to keep the peace.",
+                nowOverride: now);
+            state.LastCommand = $"Peace offering: setpoint raised to {setPointCelsius:0.0} C after an app change.";
+            state.UpdatedAt = now;
+            AddEvent("info", message);
+            SaveState();
+            return message;
+        }
+    }
+
     /// <summary>
     /// Stand-down parking: decides whether turning the defender OFF should park the thermostat
     /// at the configured setpoint (default 28 C). Appropriate only when the unit is in cool mode
@@ -1812,7 +2019,8 @@ public sealed class DefenderStateStore
         lock (gate)
         {
             parkSetPoint = Math.Round(Math.Clamp(state.Settings.StandDownParkSetPointCelsius, 20.0, 30.0), 1);
-            return state.Settings.StandDownParkEnabled
+            return !state.DefenderEnabled
+                && state.Settings.StandDownParkEnabled
                 && string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase)
                 && reading.SetPointCelsius < parkSetPoint - 0.05;
         }
@@ -1825,7 +2033,12 @@ public sealed class DefenderStateStore
     /// food rations accrue. Rejected while the feature is off, the defender is paused (a siesta
     /// would double-count the stand-down), or an emergency quiet is in force.
     /// </summary>
-    public bool TryStartSiesta(int minutes, string reason, out string message, DateTimeOffset? nowOverride = null)
+    public bool TryStartSiesta(
+        int minutes,
+        string reason,
+        out string message,
+        DateTimeOffset? nowOverride = null,
+        ThermostatReading? reading = null)
     {
         lock (gate)
         {
@@ -1847,6 +2060,39 @@ public sealed class DefenderStateStore
             {
                 message = "An emergency quiet protocol is in force; the guards cannot also nap.";
                 return false;
+            }
+
+            if (reading is not null)
+            {
+                var wakeAt = state.TargetTemperatureCelsius + Math.Max(0.1, s.SiestaWakeBandCelsius);
+                var budgetSafety = s.ElectricityBudgetSafetyMaxCelsius;
+                if (reading.CurrentTemperatureCelsius > wakeAt
+                    || (budgetSafety > 0 && reading.CurrentTemperatureCelsius >= budgetSafety))
+                {
+                    message = $"Room is already {reading.CurrentTemperatureCelsius:0.0} C (siesta wakes above {wakeAt:0.0} C), so no park/off command was sent.";
+                    state.SiestaStatus = message;
+                    SaveState();
+                    return false;
+                }
+
+                if (string.Equals(s.SiestaThermostatAction, "off", StringComparison.OrdinalIgnoreCase))
+                {
+                    var offEntryCeiling = wakeAt - AutomaticOffEntryComfortHysteresisCelsius;
+                    if (budgetSafety > 0)
+                    {
+                        offEntryCeiling = Math.Min(
+                            offEntryCeiling,
+                            budgetSafety - AutomaticOffEntryComfortHysteresisCelsius);
+                    }
+
+                    if (reading.CurrentTemperatureCelsius > offEntryCeiling)
+                    {
+                        message = $"Room is near the siesta wake boundary; waiting until it settles at or below {offEntryCeiling:0.0} C so an OFF command cannot immediately flap back to COOL.";
+                        state.SiestaStatus = message;
+                        SaveState();
+                        return false;
+                    }
+                }
             }
 
             var clamped = Math.Clamp(minutes, 15, Math.Max(15, s.SiestaMaxMinutes));
@@ -1883,6 +2129,23 @@ public sealed class DefenderStateStore
             SaveState();
             message = reason;
             return true;
+        }
+    }
+
+    public void RecordSiestaThermostatActionUnconfirmed(string detail, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            if (state.SiestaUntil is not { } until || until <= now)
+            {
+                return;
+            }
+
+            state.SiestaStatus = $"Siesta remains active, but the one-shot thermostat action could not be confirmed: {detail}";
+            state.UpdatedAt = now;
+            AddEvent("warning", state.SiestaStatus);
+            SaveState();
         }
     }
 
@@ -1934,10 +2197,10 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>
-    /// The one-shot thermostat action for a starting siesta (night-shutdown convention: sent once,
-    /// never re-sent — a human turning the AC back on mid-nap is respected; accrual just pauses
-    /// while it cools). "park" raises the setpoint to the stand-down park number (raise-only,
-    /// cool-mode-only); "off" turns the unit off.
+    /// Selects the one-shot thermostat action for a starting siesta. This method only decides what
+    /// should happen; the service records the pending command after Home Assistant accepts it, so a
+    /// failed transport call never leaves a pretend command in the audit trail. "park" raises the
+    /// setpoint to the stand-down park number (raise-only, cool-mode-only); "off" turns the unit off.
     /// </summary>
     public bool TryGetSiestaThermostatAction(ThermostatReading reading, out bool turnOff, out double? parkSetPoint)
     {
@@ -1959,15 +2222,6 @@ public sealed class DefenderStateStore
                 }
 
                 turnOff = true;
-                RecordPendingThermostatCommand(
-                    commandedSetPointCelsius: null,
-                    commandedHvacMode: "off",
-                    commandedFanMode: null,
-                    commandSourceKind: "siesta",
-                    commandSourceLabel: "Siesta (mess hall)",
-                    commandSourceDetail: "A siesta started with the 'off' action; AC Defender turned the AC off while the guards nap.");
-                state.LastCommand = $"Home Assistant {reading.EntityId} thermostat turned off for the siesta.";
-                SaveState();
                 return true;
             }
 
@@ -1976,15 +2230,6 @@ public sealed class DefenderStateStore
                 && reading.SetPointCelsius < park - 0.05)
             {
                 parkSetPoint = park;
-                RecordPendingThermostatCommand(
-                    commandedSetPointCelsius: park,
-                    commandedHvacMode: "cool",
-                    commandedFanMode: null,
-                    commandSourceKind: "siesta",
-                    commandSourceLabel: "Siesta (mess hall)",
-                    commandSourceDetail: "A siesta started with the 'park' action; AC Defender raised the setpoint so the unit barely runs while the guards nap.");
-                state.LastCommand = $"Home Assistant {reading.EntityId} parked at {park:0.0} C for the siesta.";
-                SaveState();
                 return true;
             }
 
@@ -2136,7 +2381,7 @@ public sealed class DefenderStateStore
             return forecastMax >= s.FoodReleaseHotThresholdCelsius;
         }
 
-        return state.Weather?.OutdoorTemperatureCelsius is { } outdoor
+        return GetFreshWeatherLocked(now)?.OutdoorTemperatureCelsius is { } outdoor
             && outdoor >= s.FoodReleaseHotThresholdCelsius;
     }
 
@@ -2314,15 +2559,6 @@ public sealed class DefenderStateStore
                 if (reading.SetPointCelsius < restCeiling - 0.05 && stepReady)
                 {
                     stepUpSetPoint = Math.Round(Math.Min(restCeiling, reading.SetPointCelsius + 0.5), 1);
-                    state.LastWalkStepAt = now;
-                    RecordPendingThermostatCommand(
-                        commandedSetPointCelsius: stepUpSetPoint,
-                        commandedHvacMode: null,
-                        commandedFanMode: null,
-                        commandSourceKind: "cooling-rest",
-                        commandSourceLabel: "Cooling rest",
-                        commandSourceDetail: "The AC ran past the continuous-run limit without reaching the target; AC Defender eased the setpoint up for a rest.");
-                    SaveState();
                 }
 
                 return true;
@@ -2348,6 +2584,27 @@ public sealed class DefenderStateStore
             AddEvent("warning", message);
             SaveState();
             return true;
+        }
+    }
+
+    public void RecordCoolingRestSetPointCommand(double setPointCelsius, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            state.LastWalkStepAt = now;
+            state.LastCommand = $"Cooling rest: setpoint eased to {setPointCelsius:0.0} C.";
+            state.UpdatedAt = now;
+            RecordPendingThermostatCommand(
+                commandedSetPointCelsius: setPointCelsius,
+                commandedHvacMode: null,
+                commandedFanMode: null,
+                commandSourceKind: "cooling-rest",
+                commandSourceLabel: "Cooling rest",
+                commandSourceDetail: "The AC ran past the continuous-run limit without reaching the target; AC Defender eased the setpoint up for a rest.",
+                nowOverride: now);
+            AddEvent("info", $"Cooling rest: Home Assistant accepted the {setPointCelsius:0.0} C ease-up command.");
+            SaveState();
         }
     }
 
@@ -2809,7 +3066,28 @@ public sealed class DefenderStateStore
 
         // Our own OFF commands (night shutdown, front-door kill switch, too-cold, website button)
         // echo back with a pending off command — those are not a human asking for peace.
-        if (string.Equals(state.PendingCommandHvacMode, "off", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(state.InFlightCommandHvacMode, "off", StringComparison.OrdinalIgnoreCase)
+            && state.InFlightCommandAt is { } intentAt
+            && now - intentAt <= TimeSpan.FromSeconds(Math.Max(60, options.CommandGraceSeconds * 2)))
+        {
+            AddEvent("info", "Known in-flight thermostat OFF command echoed before its HTTP response was confirmed.");
+            ClearInFlightThermostatCommandIntent();
+            return;
+        }
+
+        PruneRecentThermostatCommandIntents(now);
+        var recentOffIntentIndex = state.RecentCommandIntents.FindLastIndex(intent =>
+            string.Equals(intent.HvacMode, "off", StringComparison.OrdinalIgnoreCase));
+        if (recentOffIntentIndex >= 0)
+        {
+            state.RecentCommandIntents.RemoveAt(recentOffIntentIndex);
+            AddEvent("info", "Known recently superseded thermostat OFF command echoed; it was not a human wall action.");
+            return;
+        }
+
+        if (string.Equals(state.PendingCommandHvacMode, "off", StringComparison.OrdinalIgnoreCase)
+            && state.PendingCommandAt is { } pendingAt
+            && now - pendingAt <= TimeSpan.FromSeconds(Math.Max(15, options.CommandGraceSeconds)))
         {
             return;
         }
@@ -3034,6 +3312,17 @@ public sealed class DefenderStateStore
             var now = nowOverride ?? DateTimeOffset.UtcNow;
             var previousHvacAction = state.HomeAssistantThermostat?.HvacAction;
             var previousHvacMode = state.HomeAssistantThermostat?.HvacMode;
+            var previousFanMode = state.HomeAssistantThermostat?.FanMode;
+            if (string.Equals(reading.HvacMode, "off", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(previousHvacMode, "off", StringComparison.OrdinalIgnoreCase))
+            {
+                state.LastObservedHvacModeOffAt = now;
+            }
+            if (string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(previousHvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+            {
+                state.LastObservedHvacModeCoolAt = now;
+            }
             // Accrual runs BEFORE the runtime accounting on purpose: it reads
             // AcRuntimeLastWasCooling as "was the compressor cooling at the START of this
             // slice", which AccumulateAcRuntime overwrites with the current reading. The other
@@ -3042,6 +3331,7 @@ public sealed class DefenderStateStore
             AccumulateAcRuntime(reading, now);
             DetectExternalModeOff(reading, previousHvacMode, now);
             DetectExternalSetPointChange(reading, now);
+            ReconcileModeAndFanCommandEchoes(reading, previousHvacMode, previousFanMode, now);
             RecordRoomTemperatureSample(reading, now);
             RecordHomeAssistantReadingTime(now);
             RecordSetpointStillnessSample(reading, now);
@@ -3126,6 +3416,66 @@ public sealed class DefenderStateStore
         }
     }
 
+    public DefenderSnapshot RecordHomeAssistantRequestRejected(string message)
+    {
+        lock (gate)
+        {
+            return RecordHomeAssistantRequestRejectedLocked(message, DateTimeOffset.UtcNow);
+        }
+    }
+
+    public DefenderSnapshot RecordThermostatCommandRejected(
+        string message,
+        double? setPointCelsius = null,
+        string? hvacMode = null,
+        string? fanMode = null,
+        DateTimeOffset? nowOverride = null,
+        bool urgent = false)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            var sameAsPrevious = CommandSignatureMatches(
+                state.LastRejectedCommandSetPointCelsius,
+                state.LastRejectedCommandHvacMode,
+                state.LastRejectedCommandFanMode,
+                setPointCelsius,
+                hvacMode,
+                fanMode)
+                && state.LastRejectedCommandAt is { } previousAt
+                && now - previousAt <= TimeSpan.FromMinutes(30);
+            state.ConsecutiveRejectedCommandCount = sameAsPrevious
+                ? Math.Min(10, state.ConsecutiveRejectedCommandCount + 1)
+                : 1;
+            var retrySeconds = Math.Min(300, 30 * Math.Pow(2, state.ConsecutiveRejectedCommandCount - 1));
+            state.LastRejectedCommandSetPointCelsius = setPointCelsius is { } requested
+                ? Math.Round(requested, 1)
+                : null;
+            state.LastRejectedCommandHvacMode = string.IsNullOrWhiteSpace(hvacMode) ? null : hvacMode.Trim();
+            state.LastRejectedCommandFanMode = string.IsNullOrWhiteSpace(fanMode) ? null : fanMode.Trim();
+            state.LastRejectedCommandAt = now;
+            state.RejectedCommandRetryAt = now.AddSeconds(retrySeconds);
+            state.LastRejectedCommandWasUrgent = urgent;
+            return RecordHomeAssistantRequestRejectedLocked(
+                $"{message} Identical automatic retries are backed off until {state.RejectedCommandRetryAt.Value.ToLocalTime():HH:mm:ss}.",
+                now);
+        }
+    }
+
+    private DefenderSnapshot RecordHomeAssistantRequestRejectedLocked(string message, DateTimeOffset now)
+    {
+            // A status-bearing HTTP response proves the endpoint answered, but not that a valid
+            // climate reading exists. Preserve the last truthful connection state and surface the
+            // rejection without pretending the thermostat disappeared or arming Tamper Truce.
+            state.LastError = message;
+            state.NextAction = "Home Assistant rejected the request; waiting for the next live thermostat reading.";
+            state.NextActionAt = now.AddSeconds(options.PollIntervalSeconds);
+            state.UpdatedAt = now;
+            AddEvent("warning", message);
+            SaveState();
+            return CreateSnapshot();
+    }
+
     public DefenderSnapshot RecordCommand(
         string message,
         double? commandedSetPointCelsius = null,
@@ -3168,6 +3518,278 @@ public sealed class DefenderStateStore
                     Source = commandSourceLabel
                 });
                 PruneAdjustmentContextSamples(state.UpdatedAt);
+            }
+
+            AddEvent("info", message);
+            SaveState();
+            return CreateSnapshot();
+        }
+    }
+
+    /// <summary>
+    /// Records a non-audit actuator intent immediately before a Home Assistant request starts.
+    /// An ambiguous timeout must not look successful, but a real echo must not be mistaken for a
+    /// human touch. Accepted command recording clears this intent; otherwise a matching real
+    /// reading reconciles it or the intent expires.
+    /// </summary>
+    public void BeginThermostatCommandIntent(
+        double? setPointCelsius = null,
+        string? hvacMode = null,
+        string? fanMode = null,
+        string commandSourceKind = "defender-service",
+        string commandSourceLabel = "AC Defender",
+        string commandSourceDetail = "AC Defender is waiting for Home Assistant to confirm this command.",
+        DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            ArchiveCurrentThermostatCommandIntent(now);
+            state.InFlightCommandSetPointCelsius = setPointCelsius is { } requested
+                ? Math.Round(requested, 1)
+                : null;
+            state.InFlightCommandHvacMode = string.IsNullOrWhiteSpace(hvacMode) ? null : hvacMode.Trim();
+            state.InFlightCommandFanMode = string.IsNullOrWhiteSpace(fanMode) ? null : fanMode.Trim();
+            state.InFlightCommandAt = now;
+            state.InFlightCommandSourceKind = string.IsNullOrWhiteSpace(commandSourceKind)
+                ? "defender-service"
+                : commandSourceKind.Trim();
+            state.InFlightCommandSourceLabel = string.IsNullOrWhiteSpace(commandSourceLabel)
+                ? "AC Defender"
+                : commandSourceLabel.Trim();
+            state.InFlightCommandSourceDetail = string.IsNullOrWhiteSpace(commandSourceDetail)
+                ? "AC Defender is waiting for Home Assistant to confirm this command."
+                : commandSourceDetail.Trim();
+            state.UpdatedAt = now;
+            SaveState();
+        }
+    }
+
+    public void ClearThermostatCommandIntent(DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            ClearInFlightThermostatCommandIntent();
+            state.UpdatedAt = nowOverride ?? DateTimeOffset.UtcNow;
+            SaveState();
+        }
+    }
+
+    public bool TryRespectInFlightThermostatCommand(
+        DateTimeOffset now,
+        out DateTimeOffset until,
+        out string message)
+    {
+        lock (gate)
+        {
+            until = DateTimeOffset.MinValue;
+            message = string.Empty;
+            var grace = TimeSpan.FromSeconds(Math.Max(60, options.CommandGraceSeconds * 2));
+            PruneRecentThermostatCommandIntents(now);
+            var outstanding = state.InFlightCommandAt is { } currentAt
+                ? new ThermostatCommandIntentState
+                {
+                    SetPointCelsius = state.InFlightCommandSetPointCelsius,
+                    HvacMode = state.InFlightCommandHvacMode,
+                    FanMode = state.InFlightCommandFanMode,
+                    At = currentAt,
+                    SourceLabel = state.InFlightCommandSourceLabel
+                }
+                : state.RecentCommandIntents.LastOrDefault();
+            if (outstanding is null)
+            {
+                return false;
+            }
+
+            var startedAt = outstanding.At;
+            until = startedAt.Add(grace);
+            if (until <= now)
+            {
+                if (state.InFlightCommandAt == startedAt)
+                {
+                    ClearInFlightThermostatCommandIntent();
+                }
+                else
+                {
+                    state.RecentCommandIntents.RemoveAll(intent => intent.At == startedAt);
+                }
+                state.UpdatedAt = now;
+                SaveState();
+                return false;
+            }
+
+            var expected = string.Join(", ", new[]
+            {
+                outstanding.SetPointCelsius is { } setPoint ? $"{setPoint:0.0} C" : null,
+                string.IsNullOrWhiteSpace(outstanding.HvacMode) ? null : $"mode {outstanding.HvacMode}",
+                string.IsNullOrWhiteSpace(outstanding.FanMode) ? null : $"fan {outstanding.FanMode}"
+            }.Where(item => item is not null));
+            var label = string.IsNullOrWhiteSpace(outstanding.SourceLabel)
+                ? "AC Defender"
+                : outstanding.SourceLabel;
+            message = $"Waiting for a real Home Assistant reading to reconcile the unconfirmed {expected} request from {label}; no competing command will be sent before {until.ToLocalTime():HH:mm:ss}.";
+            return true;
+        }
+    }
+
+    public bool TryRespectMatchingThermostatCommand(
+        DateTimeOffset now,
+        double? setPointCelsius,
+        string? hvacMode,
+        string? fanMode,
+        out DateTimeOffset until,
+        out string message) =>
+        TryRespectMatchingThermostatCommand(
+            now,
+            setPointCelsius,
+            hvacMode,
+            fanMode,
+            bypassRejectedCommandBackoff: false,
+            out until,
+            out message);
+
+    public bool TryRespectMatchingThermostatCommand(
+        DateTimeOffset now,
+        double? setPointCelsius,
+        string? hvacMode,
+        string? fanMode,
+        bool bypassRejectedCommandBackoff,
+        out DateTimeOffset until,
+        out string message)
+    {
+        lock (gate)
+        {
+            until = DateTimeOffset.MinValue;
+            message = string.Empty;
+            PruneRecentThermostatCommandIntents(now);
+            var ambiguousGrace = TimeSpan.FromSeconds(Math.Max(60, options.CommandGraceSeconds * 2));
+
+            if (state.InFlightCommandAt is { } inFlightAt
+                && CommandSignatureMatches(
+                    state.InFlightCommandSetPointCelsius,
+                    state.InFlightCommandHvacMode,
+                    state.InFlightCommandFanMode,
+                    setPointCelsius,
+                    hvacMode,
+                    fanMode))
+            {
+                until = inFlightAt.Add(ambiguousGrace);
+                if (until > now)
+                {
+                    message = $"The identical thermostat command is still awaiting Home Assistant confirmation until {until.ToLocalTime():HH:mm:ss}; no duplicate was sent.";
+                    return true;
+                }
+            }
+
+            var recent = state.RecentCommandIntents.LastOrDefault(intent =>
+                CommandSignatureMatches(
+                    intent.SetPointCelsius,
+                    intent.HvacMode,
+                    intent.FanMode,
+                    setPointCelsius,
+                    hvacMode,
+                    fanMode));
+            if (recent is not null)
+            {
+                until = recent.At.Add(ambiguousGrace);
+                if (until > now)
+                {
+                    message = $"The identical thermostat command is still within its ambiguous-response grace until {until.ToLocalTime():HH:mm:ss}; no duplicate was sent.";
+                    return true;
+                }
+            }
+
+            if (state.PendingCommandAt is { } acceptedAt
+                && CommandSignatureContains(
+                    state.PendingCommandSetPointCelsius,
+                    state.PendingCommandHvacMode,
+                    state.PendingCommandFanMode,
+                    setPointCelsius,
+                    hvacMode,
+                    fanMode))
+            {
+                until = acceptedAt.AddSeconds(Math.Max(15, options.CommandGraceSeconds));
+                if (until > now)
+                {
+                    message = $"Home Assistant accepted the identical thermostat command; waiting for its state echo until {until.ToLocalTime():HH:mm:ss}.";
+                    return true;
+                }
+            }
+
+            if ((!bypassRejectedCommandBackoff || state.LastRejectedCommandWasUrgent)
+                && state.RejectedCommandRetryAt is { } retryAt
+                && retryAt > now
+                && CommandSignatureMatches(
+                    state.LastRejectedCommandSetPointCelsius,
+                    state.LastRejectedCommandHvacMode,
+                    state.LastRejectedCommandFanMode,
+                    setPointCelsius,
+                    hvacMode,
+                    fanMode))
+            {
+                until = retryAt;
+                message = $"Home Assistant rejected the identical thermostat command; retry backoff runs until {retryAt.ToLocalTime():HH:mm:ss}.";
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Completes the mode stage of a two-call setpoint-then-COOL transition without counting or
+    /// displaying the already-recorded setpoint preparation as a second thermostat move.
+    /// </summary>
+    public DefenderSnapshot RecordCoolingTransitionCompleted(
+        string message,
+        double setPointCelsius,
+        string commandSourceKind,
+        string commandSourceLabel,
+        string commandSourceDetail,
+        DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            state.LastCommand = message;
+            state.UpdatedAt = now;
+            state.LastAcceptedHvacModeCoolAt = now;
+            ClearInFlightThermostatCommandIntent();
+
+            if (state.PendingCommandSetPointCelsius is { } pendingSetPoint
+                && Math.Abs(pendingSetPoint - setPointCelsius) <= 0.05)
+            {
+                state.PendingCommandHvacMode = "cool";
+                state.PendingCommandAt = now;
+                state.PendingCommandSourceKind = commandSourceKind;
+                state.PendingCommandSourceLabel = commandSourceLabel;
+                state.PendingCommandSourceDetail = commandSourceDetail;
+                state.SetpointEchoStatus = $"Thermostat command echo is waiting for Home Assistant to report {setPointCelsius:0.0} C and mode cool from {commandSourceLabel}.";
+
+                if (state.DefenderCommandLog.Count > 0
+                    && state.DefenderCommandLog[0].SetPointCelsius is { } loggedSetPoint
+                    && Math.Abs(loggedSetPoint - setPointCelsius) <= 0.05)
+                {
+                    var first = state.DefenderCommandLog[0];
+                    state.DefenderCommandLog[0] = first with
+                    {
+                        Timestamp = now,
+                        SourceLabel = commandSourceLabel,
+                        HvacMode = "cool",
+                        Detail = commandSourceDetail
+                    };
+                }
+            }
+            else
+            {
+                RecordPendingThermostatCommand(
+                    commandedSetPointCelsius: null,
+                    commandedHvacMode: "cool",
+                    commandedFanMode: null,
+                    commandSourceKind,
+                    commandSourceLabel,
+                    commandSourceDetail,
+                    now);
             }
 
             AddEvent("info", message);
@@ -3395,6 +4017,43 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>Cool Mode Restore: true while the short safe delay before forcing the HVAC mode back to cool is still running.</summary>
+    private bool TryGetAutomaticMinimumOnDwellLocked(
+        ThermostatReading reading,
+        DateTimeOffset now,
+        out DateTimeOffset until)
+    {
+        until = DateTimeOffset.MinValue;
+        if (!string.Equals(reading.HvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var lastCoolAt = new[]
+        {
+            state.LastAcceptedHvacModeCoolAt,
+            state.LastObservedHvacModeCoolAt
+        }
+        .Where(value => value is not null)
+        .Select(value => value!.Value)
+        .DefaultIfEmpty(DateTimeOffset.MinValue)
+        .Max();
+        if (lastCoolAt == DateTimeOffset.MinValue)
+        {
+            return false;
+        }
+
+        until = lastCoolAt.Add(AutomaticMinimumOnDwell);
+        return now < until;
+    }
+
+    public bool NeedsDirectCooling(ThermostatReading reading)
+    {
+        lock (gate)
+        {
+            return ShouldBypassNaturalRecovery(reading);
+        }
+    }
+
     public bool TryDelayCoolModeRestore(
         ThermostatReading reading,
         DateTimeOffset now,
@@ -3430,6 +4089,27 @@ public sealed class DefenderStateStore
                 state.CoolModeRestoreCommandedAt = null;
             }
 
+            var lastOffAt = new[]
+            {
+                state.LastAcceptedHvacModeOffAt,
+                state.LastObservedHvacModeOffAt
+            }
+            .Where(value => value is not null)
+            .Select(value => value!.Value)
+            .DefaultIfEmpty(DateTimeOffset.MinValue)
+            .Max();
+            var automaticDwellUntil = lastOffAt.Add(AutomaticMinimumOffDwell);
+            if (lastOffAt != DateTimeOffset.MinValue
+                && now < automaticDwellUntil
+                && !ShouldBypassCoolModeRestoreDelay(reading))
+            {
+                waitUntil = automaticDwellUntil;
+                message = $"Automatic cool restore is waiting for the five-minute compressor OFF dwell until {automaticDwellUntil.ToLocalTime():HH:mm:ss}; direct room comfort can still override it.";
+                state.CoolModeRestoreStatus = message;
+                SaveState();
+                return true;
+            }
+
             if (!state.Settings.CoolModeRestoreDelayEnabled)
             {
                 state.CoolModeRestoreDueAt = null;
@@ -3446,7 +4126,14 @@ public sealed class DefenderStateStore
                 return false;
             }
 
-            if (state.CoolModeRestoreDueAt is not { } dueAt || dueAt <= now)
+            if (state.CoolModeRestoreDueAt is { } elapsedDueAt && elapsedDueAt <= now)
+            {
+                state.CoolModeRestoreStatus = "Cool mode restore delay finished; cool can be restored now.";
+                SaveState();
+                return false;
+            }
+
+            if (state.CoolModeRestoreDueAt is not { } dueAt)
             {
                 dueAt = now.AddSeconds(CalculateCoolModeRestoreDelaySeconds());
                 state.CoolModeRestoreDueAt = dueAt;
@@ -3701,11 +4388,8 @@ public sealed class DefenderStateStore
                 return Gate(EnforcerDecision.Backoff, state.EnforcerStatus, now.AddSeconds(60), notify: notify, notifyMessage: notifyMessage);
             }
 
-            // Assert. Optimistically count a reject; the next cycle clears it to 0 once the echo confirms.
-            state.EnforcerConsecutiveRejects += 1;
-            state.EnforcerLastAssertAt = now;
-            state.EnforcerAssertTimes.Add(now);
-            state.EnforcerPendingSince = null;
+            // Return the decision without consuming cooldown/backoff/rate-limit state. The service
+            // commits those counters only after Home Assistant accepts the complete command.
             var decision = modeOff ? EnforcerDecision.EnforceMode : EnforcerDecision.EnforceSetpoint;
             state.EnforcerStatus = modeOff
                 ? $"Someone turned the AC off; restoring cool at {desiredTarget:0.0} C."
@@ -3718,6 +4402,31 @@ public sealed class DefenderStateStore
 
             SaveState();
             return Gate(decision, state.EnforcerStatus, now.AddSeconds(cooldown), desiredTarget, notify, notifyMessage);
+        }
+    }
+
+    public void RecordEmergencyStatus(string status, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            state.EmergencyStatus = status;
+            state.UpdatedAt = nowOverride ?? DateTimeOffset.UtcNow;
+            SaveState();
+        }
+    }
+
+    public void RecordEnforcerCommandAccepted(DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            state.EnforcerConsecutiveRejects += 1;
+            state.EnforcerLastAssertAt = now;
+            state.EnforcerAssertTimes.Add(now);
+            state.EnforcerPendingSince = null;
+            state.UpdatedAt = now;
+            AddEvent("info", "Desired-State Enforcer command was accepted by Home Assistant; confirmation is now pending.");
+            SaveState();
         }
     }
 
@@ -4118,7 +4827,7 @@ public sealed class DefenderStateStore
             waitUntil = DateTimeOffset.MinValue;
             message = string.Empty;
 
-            if (!options.OutdoorPowerRuleEnabled || state.Weather?.OutdoorTemperatureCelsius is not { } outdoor)
+            if (!options.OutdoorPowerRuleEnabled || GetFreshWeatherLocked(now)?.OutdoorTemperatureCelsius is not { } outdoor)
             {
                 return false;
             }
@@ -6598,8 +7307,9 @@ public sealed class DefenderStateStore
                 state.LastAppliedScheduleKey = null;
             }
 
-            var allowed = IsWeatherRuleAllowed(weatherMode, reading, state.Weather);
-            state.UpdatedAt = DateTimeOffset.UtcNow;
+            var decisionNow = DateTimeOffset.UtcNow;
+            var allowed = IsWeatherRuleAllowed(weatherMode, reading, GetFreshWeatherLocked(decisionNow));
+            state.UpdatedAt = decisionNow;
             SaveState();
             return new ActiveRuleResult(activeSchedule, weatherMode, allowed);
         }
@@ -6695,6 +7405,65 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>Computes the defender target: applies Comfort Memory/Compromise modifiers, then the warm-room "approach below current room temperature" rule (DefenderOptions.WarmRoomApproachCelsius, default 0.5 C), stepping down by that approach per cycle while cooling stalls but never below the website target.</summary>
+    public CoolingSetPointPlan PlanExpectedSetPoint(
+        double currentTemperatureCelsius,
+        string hvacAction,
+        double? currentSetPointCelsius = null,
+        DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var previousActive = state.ActiveCoolingSetPointCelsius;
+            var previousSafeBand = state.ActiveCoolingStartedInSafeBand;
+            var previousLastWalk = state.LastWalkStepAt;
+            var previousBoost = state.BoostOffsetCelsius;
+
+            var expected = CalculateExpectedSetPoint(
+                currentTemperatureCelsius,
+                hvacAction,
+                currentSetPointCelsius,
+                nowOverride);
+            var plan = new CoolingSetPointPlan(
+                expected,
+                previousActive,
+                previousSafeBand,
+                previousLastWalk,
+                previousBoost,
+                state.ActiveCoolingSetPointCelsius,
+                state.ActiveCoolingStartedInSafeBand,
+                state.LastWalkStepAt,
+                state.BoostOffsetCelsius);
+
+            // Calculation is speculative until every quiet/safety guard passes and Home Assistant
+            // accepts the command. Restore the live state now; CommitCoolingSetPointPlan applies
+            // the candidate only after that proof.
+            state.ActiveCoolingSetPointCelsius = previousActive;
+            state.ActiveCoolingStartedInSafeBand = previousSafeBand;
+            state.LastWalkStepAt = previousLastWalk;
+            state.BoostOffsetCelsius = previousBoost;
+            return plan;
+        }
+    }
+
+    public void CommitCoolingSetPointPlan(
+        CoolingSetPointPlan plan,
+        bool commandAccepted,
+        DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            state.ActiveCoolingSetPointCelsius = plan.NextActiveSetPointCelsius;
+            state.ActiveCoolingStartedInSafeBand = plan.NextStartedInSafeBand;
+            state.BoostOffsetCelsius = plan.NextBoostOffsetCelsius;
+            state.LastWalkStepAt = commandAccepted
+                ? nowOverride ?? DateTimeOffset.UtcNow
+                : plan.PreviousLastWalkStepAt;
+            state.UpdatedAt = nowOverride ?? DateTimeOffset.UtcNow;
+            SaveState();
+        }
+    }
+
+    /// <summary>Legacy immediate calculation used by deterministic state-store tests; production actuator paths use <see cref="PlanExpectedSetPoint"/> and commit only after acceptance.</summary>
     public double CalculateExpectedSetPoint(double currentTemperatureCelsius, string hvacAction, double? currentSetPointCelsius = null, DateTimeOffset? nowOverride = null)
     {
         lock (gate)
@@ -6834,6 +7603,7 @@ public sealed class DefenderStateStore
         {
             return state.Settings.FanEnergySaverEnabled
                 && !string.IsNullOrWhiteSpace(state.Settings.FanEnergySaverMode)
+                && !IsFanCommandAwaitingEchoLocked(state.Settings.FanEnergySaverMode, DateTimeOffset.UtcNow)
                 && Math.Abs(reading.CurrentTemperatureCelsius - state.TargetTemperatureCelsius) <= state.Settings.FanEnergySaverThresholdCelsius
                 && !string.Equals(reading.FanMode, state.Settings.FanEnergySaverMode, StringComparison.OrdinalIgnoreCase)
                 && (reading.AvailableFanModes.Count == 0
@@ -6849,6 +7619,7 @@ public sealed class DefenderStateStore
                 && state.Settings.PeakPowerSaverFanSaverEnabled
                 && IsPeakPowerSaverActive(DateTimeOffset.UtcNow)
                 && !string.IsNullOrWhiteSpace(state.Settings.PeakPowerSaverFanMode)
+                && !IsFanCommandAwaitingEchoLocked(state.Settings.PeakPowerSaverFanMode, DateTimeOffset.UtcNow)
                 && reading.CurrentTemperatureCelsius <= state.TargetTemperatureCelsius + state.Settings.PeakPowerSaverSafetyBandCelsius
                 && !string.Equals(reading.FanMode, state.Settings.PeakPowerSaverFanMode, StringComparison.OrdinalIgnoreCase)
                 && (reading.AvailableFanModes.Count == 0
@@ -7015,6 +7786,80 @@ public sealed class DefenderStateStore
         state.ComfortCompromiseEffectiveTargetCelsius = effectiveTarget;
         state.ComfortCompromiseStatus = $"Comfort compromise is easing from {boundedPreference:0.0} C toward {target:0.0} C; effective target is {effectiveTarget:0.0} C.";
         return effectiveTarget;
+    }
+
+    private void ReconcileModeAndFanCommandEchoes(
+        ThermostatReading reading,
+        string? previousMode,
+        string? previousFanMode,
+        DateTimeOffset now)
+    {
+        var modeChanged = !string.Equals(previousMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase);
+        var fanChanged = !string.Equals(previousFanMode, reading.FanMode, StringComparison.OrdinalIgnoreCase);
+
+        if (state.InFlightCommandAt is not null)
+        {
+            var modeEcho = modeChanged
+                && state.InFlightCommandSetPointCelsius is null
+                && !string.IsNullOrWhiteSpace(state.InFlightCommandHvacMode)
+                && string.Equals(state.InFlightCommandHvacMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase);
+            var fanEcho = fanChanged
+                && state.InFlightCommandSetPointCelsius is null
+                && string.IsNullOrWhiteSpace(state.InFlightCommandHvacMode)
+                && !string.IsNullOrWhiteSpace(state.InFlightCommandFanMode)
+                && string.Equals(state.InFlightCommandFanMode, reading.FanMode, StringComparison.OrdinalIgnoreCase);
+            if (modeEcho || fanEcho)
+            {
+                var label = string.IsNullOrWhiteSpace(state.InFlightCommandSourceLabel)
+                    ? "AC Defender"
+                    : state.InFlightCommandSourceLabel;
+                AddEvent("info", $"Home Assistant reconciled the unconfirmed {label} {(modeEcho ? $"mode {reading.HvacMode}" : $"fan {reading.FanMode}")} request.");
+                ClearInFlightThermostatCommandIntent();
+            }
+        }
+
+        PruneRecentThermostatCommandIntents(now);
+        for (var i = state.RecentCommandIntents.Count - 1; i >= 0; i--)
+        {
+            var recent = state.RecentCommandIntents[i];
+            var modeEcho = modeChanged
+                && recent.SetPointCelsius is null
+                && !string.IsNullOrWhiteSpace(recent.HvacMode)
+                && string.Equals(recent.HvacMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase);
+            var fanEcho = fanChanged
+                && recent.SetPointCelsius is null
+                && string.IsNullOrWhiteSpace(recent.HvacMode)
+                && !string.IsNullOrWhiteSpace(recent.FanMode)
+                && string.Equals(recent.FanMode, reading.FanMode, StringComparison.OrdinalIgnoreCase);
+            if (!modeEcho && !fanEcho)
+            {
+                continue;
+            }
+
+            AddEvent("info", $"Home Assistant reconciled a recently superseded {(modeEcho ? $"mode {reading.HvacMode}" : $"fan {reading.FanMode}")} request.");
+            state.RecentCommandIntents.RemoveAt(i);
+            break;
+        }
+
+        if (state.PendingCommandSetPointCelsius is null
+            && state.PendingCommandAt is { } pendingAt
+            && now - pendingAt <= TimeSpan.FromSeconds(Math.Max(15, options.CommandGraceSeconds)))
+        {
+            var pendingModeEcho = modeChanged
+                && !string.IsNullOrWhiteSpace(state.PendingCommandHvacMode)
+                && string.Equals(state.PendingCommandHvacMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase);
+            var pendingFanEcho = fanChanged
+                && string.IsNullOrWhiteSpace(state.PendingCommandHvacMode)
+                && !string.IsNullOrWhiteSpace(state.PendingCommandFanMode)
+                && string.Equals(state.PendingCommandFanMode, reading.FanMode, StringComparison.OrdinalIgnoreCase);
+            if (pendingModeEcho || pendingFanEcho)
+            {
+                var label = string.IsNullOrWhiteSpace(state.PendingCommandSourceLabel)
+                    ? "AC Defender"
+                    : state.PendingCommandSourceLabel;
+                ClearPendingSetpointEcho($"Home Assistant echoed {(pendingModeEcho ? $"mode {reading.HvacMode}" : $"fan {reading.FanMode}")} from {label}.");
+            }
+        }
     }
 
     private void DetectExternalSetPointChange(ThermostatReading reading, DateTimeOffset now)
@@ -7357,20 +8202,120 @@ public sealed class DefenderStateStore
             false);
         detail = string.Empty;
 
+        var intentGrace = TimeSpan.FromSeconds(Math.Max(60, options.CommandGraceSeconds * 2));
+        if (state.InFlightCommandAt is { } intentAt)
+        {
+            if (now - intentAt > intentGrace)
+            {
+                ClearInFlightThermostatCommandIntent();
+            }
+            else
+            {
+                var intentSetpointEcho = state.InFlightCommandSetPointCelsius is { } intentSetPoint
+                    && Math.Abs(intentSetPoint - reading.SetPointCelsius) <= 0.15;
+                var previousIntentMode = state.HomeAssistantThermostat?.HvacMode;
+                var intentModeEcho = state.InFlightCommandSetPointCelsius is null
+                    && !string.IsNullOrWhiteSpace(state.InFlightCommandHvacMode)
+                    && string.Equals(state.InFlightCommandHvacMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(previousIntentMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase);
+                var intentFanEcho = state.InFlightCommandSetPointCelsius is null
+                    && string.IsNullOrWhiteSpace(state.InFlightCommandHvacMode)
+                    && !string.IsNullOrWhiteSpace(state.InFlightCommandFanMode)
+                    && string.Equals(state.InFlightCommandFanMode, reading.FanMode, StringComparison.OrdinalIgnoreCase);
+                if (intentSetpointEcho || intentModeEcho || intentFanEcho)
+                {
+                    var intentKind = string.IsNullOrWhiteSpace(state.InFlightCommandSourceKind)
+                        ? "defender-service"
+                        : state.InFlightCommandSourceKind!;
+                    var intentLabel = string.IsNullOrWhiteSpace(state.InFlightCommandSourceLabel)
+                        ? "AC Defender"
+                        : state.InFlightCommandSourceLabel!;
+                    detail = string.IsNullOrWhiteSpace(state.InFlightCommandSourceDetail)
+                        ? "A real Home Assistant reading confirmed an actuator request whose HTTP response was still unconfirmed."
+                        : state.InFlightCommandSourceDetail!;
+                    source = new ChangeSourceClassification(intentKind, intentLabel, detail, false);
+                    if (intentSetpointEcho)
+                    {
+                        state.LastDefenderCommandedSetPointCelsius = Math.Round(reading.SetPointCelsius, 1);
+                        state.LastDefenderCommandedSetPointAt = now;
+                    }
+
+                    ClearInFlightThermostatCommandIntent();
+                    return true;
+                }
+            }
+        }
+
+        PruneRecentThermostatCommandIntents(now);
+        for (var i = state.RecentCommandIntents.Count - 1; i >= 0; i--)
+        {
+            var recent = state.RecentCommandIntents[i];
+            var recentSetpointEcho = recent.SetPointCelsius is { } recentSetPoint
+                && Math.Abs(recentSetPoint - reading.SetPointCelsius) <= 0.15;
+            var previousRecentMode = state.HomeAssistantThermostat?.HvacMode;
+            var recentModeEcho = recent.SetPointCelsius is null
+                && !string.IsNullOrWhiteSpace(recent.HvacMode)
+                && string.Equals(recent.HvacMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(previousRecentMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase);
+            var previousRecentFan = state.HomeAssistantThermostat?.FanMode;
+            var recentFanEcho = recent.SetPointCelsius is null
+                && string.IsNullOrWhiteSpace(recent.HvacMode)
+                && !string.IsNullOrWhiteSpace(recent.FanMode)
+                && string.Equals(recent.FanMode, reading.FanMode, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(previousRecentFan, reading.FanMode, StringComparison.OrdinalIgnoreCase);
+            if (!recentSetpointEcho && !recentModeEcho && !recentFanEcho)
+            {
+                continue;
+            }
+
+            var recentKind = string.IsNullOrWhiteSpace(recent.SourceKind)
+                ? "defender-service"
+                : recent.SourceKind!;
+            var recentLabel = string.IsNullOrWhiteSpace(recent.SourceLabel)
+                ? "AC Defender"
+                : recent.SourceLabel!;
+            detail = string.IsNullOrWhiteSpace(recent.SourceDetail)
+                ? "A real Home Assistant reading reconciled a recently superseded actuator request."
+                : recent.SourceDetail!;
+            source = new ChangeSourceClassification(recentKind, recentLabel, detail, false);
+            if (recentSetpointEcho)
+            {
+                state.LastDefenderCommandedSetPointCelsius = Math.Round(reading.SetPointCelsius, 1);
+                state.LastDefenderCommandedSetPointAt = now;
+            }
+
+            state.RecentCommandIntents.RemoveAt(i);
+            return true;
+        }
+
         if (state.PendingCommandAt is not { } pendingAt
             || now - pendingAt > TimeSpan.FromSeconds(Math.Max(15, options.CommandGraceSeconds)))
         {
             return false;
         }
 
+        // This classifier runs because the setpoint changed. A matching setpoint is the normal
+        // proof. A mode-only command may also produce a simultaneous device-normalized setpoint
+        // change, but accept that only when the real mode actually transitioned and we did not
+        // command any setpoint. Merely remaining in COOL is never proof: that old OR behavior
+        // swallowed real human raises whenever both parties happened to use the same mode.
         var setpointEcho = state.PendingCommandSetPointCelsius is { } pendingSetPoint
             && Math.Abs(pendingSetPoint - reading.SetPointCelsius) <= 0.15;
         var modeEcho = !string.IsNullOrWhiteSpace(state.PendingCommandHvacMode)
             && string.Equals(state.PendingCommandHvacMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase);
+        var previousMode = state.HomeAssistantThermostat?.HvacMode;
+        var modeOnlyTransitionEcho = state.PendingCommandSetPointCelsius is null
+            && modeEcho
+            && !string.Equals(previousMode, reading.HvacMode, StringComparison.OrdinalIgnoreCase);
         var fanEcho = !string.IsNullOrWhiteSpace(state.PendingCommandFanMode)
             && string.Equals(state.PendingCommandFanMode, reading.FanMode, StringComparison.OrdinalIgnoreCase);
+        var previousFanMode = state.HomeAssistantThermostat?.FanMode;
+        var fanOnlyTransitionEcho = state.PendingCommandSetPointCelsius is null
+            && string.IsNullOrWhiteSpace(state.PendingCommandHvacMode)
+            && fanEcho
+            && !string.Equals(previousFanMode, reading.FanMode, StringComparison.OrdinalIgnoreCase);
 
-        if (!setpointEcho && !modeEcho && !fanEcho)
+        if (!setpointEcho && !modeOnlyTransitionEcho && !fanOnlyTransitionEcho)
         {
             return false;
         }
@@ -7389,8 +8334,8 @@ public sealed class DefenderStateStore
         var echoedParts = string.Join(", ", new[]
         {
             setpointEcho ? $"{reading.SetPointCelsius:0.0} C" : null,
-            modeEcho ? $"mode {reading.HvacMode}" : null,
-            fanEcho ? $"fan {reading.FanMode}" : null
+            modeOnlyTransitionEcho ? $"mode {reading.HvacMode}" : null,
+            fanOnlyTransitionEcho ? $"fan {reading.FanMode}" : null
         }.Where(item => item is not null));
         ClearPendingSetpointEcho($"Home Assistant echoed {echoedParts} from {label}.");
         return true;
@@ -8660,6 +9605,16 @@ public sealed class DefenderStateStore
                     return false;
                 }
 
+                if (!state.CoolingFailureShutdownOffSent && !modeOff)
+                {
+                    turnOff = true;
+                    until = nextCheck;
+                    message = "Cooling-failure shutdown is retrying the real OFF command; no successful OFF has been recorded yet.";
+                    state.CoolingFailureShutdownStatus = message;
+                    SaveState();
+                    return true;
+                }
+
                 // HUMAN OVERRIDE: we sent OFF, the command grace passed, and the mode reads not-off
                 // again — someone turned the AC back on. Respect them and end the shutdown.
                 if (state.CoolingFailureShutdownOffSent
@@ -8676,6 +9631,40 @@ public sealed class DefenderStateStore
                 var rise = Math.Round(reading.CurrentTemperatureCelsius - baseline, 2);
                 if (rise >= CoolingFailureShutdownReleaseRiseCelsius)
                 {
+                    var offSince = state.CoolingFailureShutdownOffCommandedAt
+                        ?? state.CoolingFailureShutdownStartedAt
+                        ?? now;
+                    var minimumDwellUntil = offSince.Add(AutomaticMinimumOffDwell);
+                    if (now < minimumDwellUntil && !ShouldBypassNaturalRecovery(reading))
+                    {
+                        state.CoolingFailureShutdownReleaseCandidateAt = null;
+                        until = minimumDwellUntil;
+                        message = $"Room briefly reached the release rise, but the anti-short-cycle OFF dwell runs until {minimumDwellUntil.ToLocalTime():HH:mm:ss}.";
+                        state.CoolingFailureShutdownStatus = message;
+                        SaveState();
+                        return true;
+                    }
+
+                    if (state.CoolingFailureShutdownReleaseCandidateAt is not { } candidateAt)
+                    {
+                        state.CoolingFailureShutdownReleaseCandidateAt = now;
+                        until = now.AddSeconds(CoolingFailureShutdownReleaseConfirmSeconds);
+                        message = $"Room reached the {CoolingFailureShutdownReleaseRiseCelsius:0.0} C release rise; waiting for the next real reading to confirm it before restoring cool.";
+                        state.CoolingFailureShutdownStatus = message;
+                        SaveState();
+                        return true;
+                    }
+
+                    var confirmAt = candidateAt.AddSeconds(CoolingFailureShutdownReleaseConfirmSeconds);
+                    if (now < confirmAt)
+                    {
+                        until = confirmAt;
+                        message = $"Cooling-failure release reading is being confirmed until {confirmAt.ToLocalTime():HH:mm:ss}; AC remains off.";
+                        state.CoolingFailureShutdownStatus = message;
+                        SaveState();
+                        return true;
+                    }
+
                     var reason = $"Room rose {rise:0.0} C to {reading.CurrentTemperatureCelsius:0.0} C since the cooling-failure shutdown — restoring cool.";
                     // Only command a restore for an off WE sent and that is genuinely still off; an
                     // adopted/human off falls through to the normal pipeline (cool-mode restore).
@@ -8683,16 +9672,11 @@ public sealed class DefenderStateStore
                     {
                         // Mode-only restore: the next cycle's normal pipeline computes the setpoint.
                         restoreCool = true;
-                        RecordPendingThermostatCommand(
-                            commandedSetPointCelsius: null,
-                            commandedHvacMode: "cool",
-                            commandedFanMode: null,
-                            commandSourceKind: "cooling-failure-restore",
-                            commandSourceLabel: "Cooling-Failure Shutdown",
-                            commandSourceDetail: "The room warmed by the release margin after a cooling-failure shutdown; AC Defender restored cool mode.");
-                        state.LastCommand = $"Home Assistant {reading.EntityId} cool mode restored (room rose {rise:0.0} C after cooling-failure shutdown).";
                         until = nextCheck;
                         message = reason;
+                        state.CoolingFailureShutdownStatus = $"{reason} Waiting for Home Assistant to accept the restore.";
+                        SaveState();
+                        return false;
                     }
 
                     ClearCoolingFailureShutdownLocked(reason);
@@ -8700,6 +9684,8 @@ public sealed class DefenderStateStore
                     SaveState();
                     return false;
                 }
+
+                state.CoolingFailureShutdownReleaseCandidateAt = null;
 
                 // STILL HOLDING: the AC stays off until the room warms the release margin. Do not
                 // re-command off (the entry command already did); just hold the cycle.
@@ -8717,31 +9703,40 @@ public sealed class DefenderStateStore
                 return false;
             }
 
+            // A restore command (or a newly observed COOL transition) starts the shared compressor
+            // minimum-ON dwell. The no-drop detector intentionally retains real room history, so an
+            // old sample from before the shutdown can re-arm MEGA as soon as Home Assistant echoes
+            // `cooling`. Never let that retained evidence create a COOL -> OFF short cycle; after the
+            // dwell expires the still-active alert can open a fresh shutdown normally.
+            if (!modeOff && TryGetAutomaticMinimumOnDwellLocked(reading, now, out var minimumOnUntil))
+            {
+                until = minimumOnUntil;
+                message = $"Cooling-failure alert remains under observation, but cooling was just enabled; the five-minute minimum-ON dwell prevents OFF until {minimumOnUntil.ToLocalTime():HH:mm:ss}.";
+                state.CoolingFailureShutdownStatus = message;
+                state.UpdatedAt = now;
+                SaveState();
+                // Do not hold the rest of the defender cycle: direct warm-room setpoint preparation
+                // may still be needed after the mode restore. This method only vetoes reopening the
+                // cooling-failure OFF episode until the compressor dwell has elapsed.
+                return false;
+            }
+
             state.CoolingFailureShutdownActive = true;
             state.CoolingFailureShutdownBaselineCelsius = Math.Round(reading.CurrentTemperatureCelsius, 2);
             state.CoolingFailureShutdownStartedAt = now;
+            state.CoolingFailureShutdownReleaseCandidateAt = null;
             state.CoolingFailureShutdownOffSent = false;
             state.CoolingFailureShutdownOffCommandedAt = null;
             if (!modeOff)
             {
                 turnOff = true;
-                state.CoolingFailureShutdownOffSent = true;
-                state.CoolingFailureShutdownOffCommandedAt = now;
-                RecordPendingThermostatCommand(
-                    commandedSetPointCelsius: null,
-                    commandedHvacMode: "off",
-                    commandedFanMode: null,
-                    commandSourceKind: "cooling-failure-shutdown",
-                    commandSourceLabel: "Cooling-Failure Shutdown",
-                    commandSourceDetail: "A cooling-failure MEGA/OMEGA alert fired; AC Defender turned the AC off until the room warms by the release margin.");
-                state.LastCommand = $"Home Assistant {reading.EntityId} thermostat turned off (cooling-failure shutdown at {reading.CurrentTemperatureCelsius:0.0} C).";
             }
 
             until = nextCheck;
             message = $"Cooling-failure shutdown: MEGA/OMEGA alert active — AC off until the room rises "
                 + $"{CoolingFailureShutdownReleaseRiseCelsius:0.0} C from {state.CoolingFailureShutdownBaselineCelsius:0.0} C.";
             state.CoolingFailureShutdownStatus = message;
-            AddEvent("warning", $"Cooling-failure shutdown: turned the AC off (room {reading.CurrentTemperatureCelsius:0.0} C); holding until it rises {CoolingFailureShutdownReleaseRiseCelsius:0.0} C.");
+            AddEvent("warning", $"Cooling-failure shutdown selected at room {reading.CurrentTemperatureCelsius:0.0} C; requesting AC off and holding until it rises {CoolingFailureShutdownReleaseRiseCelsius:0.0} C.");
             state.UpdatedAt = now;
             SaveState();
             return true;
@@ -8749,11 +9744,63 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>Ends the cooling-failure shutdown hold (does not SaveState — callers do).</summary>
+    public void RecordCoolingFailureShutdownOffCommand(string entityId, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            if (!state.CoolingFailureShutdownActive)
+            {
+                return;
+            }
+
+            state.CoolingFailureShutdownOffSent = true;
+            state.CoolingFailureShutdownOffCommandedAt = now;
+            state.LastCommand = $"Home Assistant {entityId} thermostat turned off for the cooling-failure shutdown.";
+            state.UpdatedAt = now;
+            RecordPendingThermostatCommand(
+                commandedSetPointCelsius: null,
+                commandedHvacMode: "off",
+                commandedFanMode: null,
+                commandSourceKind: "cooling-failure-shutdown",
+                commandSourceLabel: "Cooling-Failure Shutdown",
+                commandSourceDetail: "A cooling-failure MEGA/OMEGA alert fired; AC Defender turned the AC off until the room warms by the release margin.",
+                nowOverride: now);
+            AddEvent("warning", "Cooling-failure shutdown: Home Assistant accepted the thermostat OFF command.");
+            SaveState();
+        }
+    }
+
+    public void RecordCoolingFailureRestoreCommand(string entityId, DateTimeOffset? nowOverride = null)
+    {
+        lock (gate)
+        {
+            var now = nowOverride ?? DateTimeOffset.UtcNow;
+            ClearCoolingFailureShutdownLocked($"Home Assistant {entityId} accepted the cooling-failure restore.");
+            state.UpdatedAt = now;
+            AddEvent("info", "Cooling-failure shutdown: Home Assistant accepted the cooling restore; the shutdown is closed.");
+            SaveState();
+        }
+    }
+
+    private bool IsFanCommandAwaitingEchoLocked(string fanMode, DateTimeOffset now)
+    {
+        var grace = TimeSpan.FromSeconds(Math.Max(15, options.CommandGraceSeconds));
+        var pending = state.PendingCommandAt is { } pendingAt
+            && now - pendingAt <= grace
+            && string.Equals(state.PendingCommandFanMode, fanMode, StringComparison.OrdinalIgnoreCase);
+        var inFlight = state.InFlightCommandAt is { } intentAt
+            && now - intentAt <= TimeSpan.FromSeconds(Math.Max(60, options.CommandGraceSeconds * 2))
+            && string.Equals(state.InFlightCommandFanMode, fanMode, StringComparison.OrdinalIgnoreCase);
+        return pending || inFlight;
+    }
+
     private void ClearCoolingFailureShutdownLocked(string reason)
     {
         state.CoolingFailureShutdownActive = false;
         state.CoolingFailureShutdownBaselineCelsius = null;
         state.CoolingFailureShutdownStartedAt = null;
+        state.CoolingFailureShutdownReleaseCandidateAt = null;
         state.CoolingFailureShutdownOffSent = false;
         state.CoolingFailureShutdownOffCommandedAt = null;
         state.CoolingFailureShutdownStatus = reason;
@@ -9710,6 +10757,31 @@ public sealed class DefenderStateStore
         saved.NightCoolingLastSampleAt = null;
         saved.ElectricityCostLastSampleAt = null; // downtime must not accrue electricity cost
         saved.ElectricityCostLastPowerKilowatts = null;
+        saved.RecentCommandIntents ??= [];
+        saved.RecentCommandIntents.RemoveAll(intent =>
+            DateTimeOffset.UtcNow - intent.At > TimeSpan.FromSeconds(Math.Max(60, options.CommandGraceSeconds * 2)));
+
+        // Forward-compatible anti-short-cycle migration: older state files can retain an OFF
+        // thermostat snapshot without either of the new dwell timestamps. Preserve its real sample
+        // time so the first post-upgrade cycle cannot immediately restore COOL from missing metadata.
+        if (saved.HomeAssistantThermostat is { } retainedThermostat
+            && string.Equals(retainedThermostat.HvacMode, "off", StringComparison.OrdinalIgnoreCase)
+            && saved.LastAcceptedHvacModeOffAt is null
+            && saved.LastObservedHvacModeOffAt is null)
+        {
+            saved.LastObservedHvacModeOffAt = retainedThermostat.UpdatedAt == default
+                ? DateTimeOffset.UtcNow
+                : retainedThermostat.UpdatedAt;
+        }
+        if (saved.HomeAssistantThermostat is { } retainedCoolThermostat
+            && string.Equals(retainedCoolThermostat.HvacMode, "cool", StringComparison.OrdinalIgnoreCase)
+            && saved.LastAcceptedHvacModeCoolAt is null
+            && saved.LastObservedHvacModeCoolAt is null)
+        {
+            saved.LastObservedHvacModeCoolAt = retainedCoolThermostat.UpdatedAt == default
+                ? DateTimeOffset.UtcNow
+                : retainedCoolThermostat.UpdatedAt;
+        }
 
         // Cool-Outdoor episode flags PERSIST (a restart must never re-send OFF over a deliberate
         // manual re-enable); only the command-grace timestamp restarts cleanly.
@@ -10176,6 +11248,17 @@ public sealed class DefenderStateStore
             saved.PendingCommandSourceLabel = null;
             saved.PendingCommandSourceDetail = null;
             saved.SetpointEchoStatus = "Setpoint echo is watching.";
+        }
+        if (saved.InFlightCommandAt is { } intentAt
+            && DateTimeOffset.UtcNow - intentAt > TimeSpan.FromMinutes(5))
+        {
+            saved.InFlightCommandSetPointCelsius = null;
+            saved.InFlightCommandHvacMode = null;
+            saved.InFlightCommandFanMode = null;
+            saved.InFlightCommandAt = null;
+            saved.InFlightCommandSourceKind = null;
+            saved.InFlightCommandSourceLabel = null;
+            saved.InFlightCommandSourceDetail = null;
         }
         saved.SensorRhythmStatus = string.IsNullOrWhiteSpace(saved.SensorRhythmStatus)
             ? "Sensor rhythm is watching."
@@ -11086,7 +12169,7 @@ public sealed class DefenderStateStore
             || (forecastFresh && projection.MaxCelsius is { } gateMax && gateMax < restoreAt);
         var offSince = state.CoolOutdoorOffCommandedAt ?? state.CoolOutdoorEpisodeStartedAt;
         var dwellRemaining = state.CoolOutdoorEpisodeActive && offSince is { } since
-            ? (int)Math.Max(0, (since.AddMinutes(Math.Max(1, s.CoolOutdoorMinimumOffMinutes)) - now).TotalSeconds)
+            ? (int)Math.Max(0, (since.AddMinutes(Math.Max(AutomaticMinimumOffDwell.TotalMinutes, s.CoolOutdoorMinimumOffMinutes)) - now).TotalSeconds)
             : 0;
 
         return new CoolOutdoorShutdownSnapshot(
@@ -11105,7 +12188,7 @@ public sealed class DefenderStateStore
                 ? (s.CoolOutdoorShutdownEnabled ? "Watching the outdoor temperature." : "Cool-Outdoor Shutdown is off.")
                 : state.CoolOutdoorStatus!,
             state.CoolOutdoorEpisodeActive && offSince is { } activeSince
-                ? activeSince.AddMinutes(Math.Max(1, s.CoolOutdoorMinimumOffMinutes))
+                ? activeSince.AddMinutes(Math.Max(AutomaticMinimumOffDwell.TotalMinutes, s.CoolOutdoorMinimumOffMinutes))
                 : null);
     }
 
@@ -11361,6 +12444,80 @@ public sealed class DefenderStateStore
         state.SetpointEchoStatus = status;
     }
 
+    private void ClearInFlightThermostatCommandIntent()
+    {
+        state.InFlightCommandSetPointCelsius = null;
+        state.InFlightCommandHvacMode = null;
+        state.InFlightCommandFanMode = null;
+        state.InFlightCommandAt = null;
+        state.InFlightCommandSourceKind = null;
+        state.InFlightCommandSourceLabel = null;
+        state.InFlightCommandSourceDetail = null;
+    }
+
+    private void ArchiveCurrentThermostatCommandIntent(DateTimeOffset now)
+    {
+        PruneRecentThermostatCommandIntents(now);
+        if (state.InFlightCommandAt is not { } intentAt)
+        {
+            return;
+        }
+
+        state.RecentCommandIntents.Add(new ThermostatCommandIntentState
+        {
+            SetPointCelsius = state.InFlightCommandSetPointCelsius,
+            HvacMode = state.InFlightCommandHvacMode,
+            FanMode = state.InFlightCommandFanMode,
+            At = intentAt,
+            SourceKind = state.InFlightCommandSourceKind,
+            SourceLabel = state.InFlightCommandSourceLabel,
+            SourceDetail = state.InFlightCommandSourceDetail
+        });
+        if (state.RecentCommandIntents.Count > 8)
+        {
+            state.RecentCommandIntents.RemoveRange(0, state.RecentCommandIntents.Count - 8);
+        }
+    }
+
+    private void PruneRecentThermostatCommandIntents(DateTimeOffset now)
+    {
+        var grace = TimeSpan.FromSeconds(Math.Max(60, options.CommandGraceSeconds * 2));
+        state.RecentCommandIntents.RemoveAll(intent => now - intent.At > grace);
+    }
+
+    private static bool CommandSignatureMatches(
+        double? leftSetPoint,
+        string? leftHvacMode,
+        string? leftFanMode,
+        double? rightSetPoint,
+        string? rightHvacMode,
+        string? rightFanMode)
+    {
+        var setPointMatches = leftSetPoint is { } leftValue && rightSetPoint is { } rightValue
+            ? Math.Abs(leftValue - rightValue) <= 0.05
+            : leftSetPoint is null && rightSetPoint is null;
+        return setPointMatches
+            && string.Equals(leftHvacMode?.Trim(), rightHvacMode?.Trim(), StringComparison.OrdinalIgnoreCase)
+            && string.Equals(leftFanMode?.Trim(), rightFanMode?.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool CommandSignatureContains(
+        double? acceptedSetPoint,
+        string? acceptedHvacMode,
+        string? acceptedFanMode,
+        double? requestedSetPoint,
+        string? requestedHvacMode,
+        string? requestedFanMode)
+    {
+        var setPointMatches = requestedSetPoint is not { } requestedValue
+            || (acceptedSetPoint is { } acceptedValue && Math.Abs(acceptedValue - requestedValue) <= 0.05);
+        var modeMatches = string.IsNullOrWhiteSpace(requestedHvacMode)
+            || string.Equals(acceptedHvacMode?.Trim(), requestedHvacMode.Trim(), StringComparison.OrdinalIgnoreCase);
+        var fanMatches = string.IsNullOrWhiteSpace(requestedFanMode)
+            || string.Equals(acceptedFanMode?.Trim(), requestedFanMode.Trim(), StringComparison.OrdinalIgnoreCase);
+        return setPointMatches && modeMatches && fanMatches;
+    }
+
     private void RecordPendingThermostatCommand(
         double? commandedSetPointCelsius,
         string? commandedHvacMode,
@@ -11371,6 +12528,31 @@ public sealed class DefenderStateStore
         DateTimeOffset? nowOverride = null)
     {
         var now = nowOverride ?? DateTimeOffset.UtcNow;
+        ClearInFlightThermostatCommandIntent();
+        if (CommandSignatureMatches(
+            state.LastRejectedCommandSetPointCelsius,
+            state.LastRejectedCommandHvacMode,
+            state.LastRejectedCommandFanMode,
+            commandedSetPointCelsius,
+            commandedHvacMode,
+            commandedFanMode))
+        {
+            state.LastRejectedCommandSetPointCelsius = null;
+            state.LastRejectedCommandHvacMode = null;
+            state.LastRejectedCommandFanMode = null;
+            state.LastRejectedCommandAt = null;
+            state.RejectedCommandRetryAt = null;
+            state.ConsecutiveRejectedCommandCount = 0;
+            state.LastRejectedCommandWasUrgent = false;
+        }
+        if (string.Equals(commandedHvacMode, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            state.LastAcceptedHvacModeOffAt = now;
+        }
+        else if (string.Equals(commandedHvacMode, "cool", StringComparison.OrdinalIgnoreCase))
+        {
+            state.LastAcceptedHvacModeCoolAt = now;
+        }
 
         // Long-lived echo memory: even when a Home Assistant echo arrives long after the pending
         // grace window, a reading landing exactly on our last commanded setpoint must never be
@@ -11785,6 +12967,19 @@ public sealed class DefenderStateStore
         }
     }
 
+    private WeatherRuntimeState? GetFreshWeatherLocked(DateTimeOffset now)
+    {
+        if (state.Weather is not { } weather)
+        {
+            return null;
+        }
+
+        var age = now - weather.UpdatedAt;
+        return age >= TimeSpan.FromMinutes(-5) && age <= WeatherDecisionMaxAge
+            ? weather
+            : null;
+    }
+
     private static bool IsWeatherRuleAllowed(string mode, ThermostatReading reading, WeatherRuntimeState? weather)
     {
         var outdoor = weather?.OutdoorTemperatureCelsius;
@@ -11938,6 +13133,8 @@ public sealed class DefenderStateStore
         // the off command is sent only once per window (manual re-enables are respected).
         public bool NightShutdownActive { get; set; }
 
+        public DateTimeOffset? NightShutdownOffCommandedAt { get; set; }
+
         // When the walk-down state machine last took a 0.5 C step; paces gentle stepping.
         public DateTimeOffset? LastWalkStepAt { get; set; }
 
@@ -11976,6 +13173,8 @@ public sealed class DefenderStateStore
         public bool CoolOutdoorOffSentThisEpisode { get; set; }
 
         public DateTimeOffset? CoolOutdoorOffCommandedAt { get; set; }
+
+        public DateTimeOffset? CoolOutdoorReentryBlockedUntil { get; set; }
 
         public bool CoolOutdoorHumanOverrideThisEpisode { get; set; }
 
@@ -12152,11 +13351,51 @@ public sealed class DefenderStateStore
 
         public DateTimeOffset? PendingCommandAt { get; set; }
 
+        public DateTimeOffset? LastAcceptedHvacModeOffAt { get; set; }
+
+        public DateTimeOffset? LastObservedHvacModeOffAt { get; set; }
+
+        public DateTimeOffset? LastAcceptedHvacModeCoolAt { get; set; }
+
+        public DateTimeOffset? LastObservedHvacModeCoolAt { get; set; }
+
         public string? PendingCommandSourceKind { get; set; }
 
         public string? PendingCommandSourceLabel { get; set; }
 
         public string? PendingCommandSourceDetail { get; set; }
+
+        // Non-audit actuator intent used only to reconcile ambiguous or very fast echoes. It is
+        // never shown as an accepted command and never increments command/activity statistics.
+        public double? InFlightCommandSetPointCelsius { get; set; }
+
+        public string? InFlightCommandHvacMode { get; set; }
+
+        public string? InFlightCommandFanMode { get; set; }
+
+        public DateTimeOffset? InFlightCommandAt { get; set; }
+
+        public string? InFlightCommandSourceKind { get; set; }
+
+        public string? InFlightCommandSourceLabel { get; set; }
+
+        public string? InFlightCommandSourceDetail { get; set; }
+
+        public List<ThermostatCommandIntentState> RecentCommandIntents { get; set; } = [];
+
+        public double? LastRejectedCommandSetPointCelsius { get; set; }
+
+        public string? LastRejectedCommandHvacMode { get; set; }
+
+        public string? LastRejectedCommandFanMode { get; set; }
+
+        public DateTimeOffset? LastRejectedCommandAt { get; set; }
+
+        public bool LastRejectedCommandWasUrgent { get; set; }
+
+        public DateTimeOffset? RejectedCommandRetryAt { get; set; }
+
+        public int ConsecutiveRejectedCommandCount { get; set; }
 
         // Rival Schedule Watch: the AC app's own temperature schedule (observed, never followed).
         public string? RivalScheduleActiveBlockName { get; set; }
@@ -12425,6 +13664,8 @@ public sealed class DefenderStateStore
         public double? CoolingFailureShutdownBaselineCelsius { get; set; }
 
         public DateTimeOffset? CoolingFailureShutdownStartedAt { get; set; }
+
+        public DateTimeOffset? CoolingFailureShutdownReleaseCandidateAt { get; set; }
 
         public bool CoolingFailureShutdownOffSent { get; set; }
 
@@ -12819,6 +14060,23 @@ public sealed record ComfortRuleResult(
     bool BypassCooldown,
     double EffectiveTargetCelsius,
     string Status);
+
+public sealed class ThermostatCommandIntentState
+{
+    public double? SetPointCelsius { get; set; }
+
+    public string? HvacMode { get; set; }
+
+    public string? FanMode { get; set; }
+
+    public DateTimeOffset At { get; set; }
+
+    public string? SourceKind { get; set; }
+
+    public string? SourceLabel { get; set; }
+
+    public string? SourceDetail { get; set; }
+}
 
 internal sealed record ChangeSourceClassification(
     string Kind,

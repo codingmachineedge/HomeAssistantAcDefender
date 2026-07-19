@@ -71,6 +71,10 @@ Optional Home Assistant entities:
 ```text
 HomeAssistant__WeatherEntityId=weather.home
 HomeAssistant__OutdoorTemperatureEntityId=sensor.outdoor_temperature
+HomeAssistant__OpenMeteoBackupEnabled=true
+HomeAssistant__OpenMeteoLatitude=
+HomeAssistant__OpenMeteoLongitude=
+HomeAssistant__OpenMeteoRefreshMinutes=30
 HomeAssistant__UsagePowerEntityId=sensor.alectra_hui_current_power
 HomeAssistant__UsageEnergyEntityId=sensor.alectra_hui_energy_today
 HomeAssistant__UsageCostEntityId=sensor.alectra_hui_cost_today
@@ -87,6 +91,26 @@ entity, `OutdoorTemperatureEntityId` can still provide outdoor temperature. The 
 come from the Alectra Hui integration; AC Defender only reads them once Home Assistant has
 created them, and historical usage needs the entity recorded by the recorder
 (`api/history/period`).
+
+The Open-Meteo backup is enabled by default and is used only when Home Assistant cannot supply
+the corresponding real outdoor condition or forecast. If latitude and longitude are blank, AC
+Defender reads the installation coordinates from Home Assistant's authenticated `/api/config`
+endpoint and caches them. Set both coordinate values to override that location, or set
+`OpenMeteoBackupEnabled=false` to disable external weather calls. An incomplete one-coordinate
+override is ignored as a pair so two different locations can never be combined. Before the public
+request, the location is rounded to two decimal places (roughly kilometre-scale) so exact household
+coordinates never leave the Home Assistant client. The refresh
+interval is clamped to at least 10 minutes; one request returns the current `temperature_2m` /
+`weather_code` and 48
+hourly forecast points, so the default cadence stays far below the free non-commercial API limit.
+The Open-Meteo client is separate from the Home Assistant client and never receives the Home
+Assistant access token. Weather data is provided by [Open-Meteo](https://open-meteo.com/) under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); AC Defender maps WMO weather codes to
+display labels but does not otherwise alter the temperature forecast.
+
+The key-free endpoint is intended for non-commercial use and has no uptime guarantee; commercial
+deployments should review Open-Meteo's current plan and terms before enabling it. A failed backup
+request never creates synthetic weather, and AC Defender continues retrying on its throttled cadence.
 
 Any `Defender` option from `appsettings.json` can be overridden the same way, e.g.
 `Defender__RivalScheduleWatchEnabled=false` or `Defender__AcEstimatedAmps=20`. See

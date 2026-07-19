@@ -7,7 +7,7 @@
     <section class="api-hero">
         <div class="api-hero__main">
             <div class="api-hero__eyebrow">AUTHENTICATED MINIMAL API</div>
-            <div class="api-hero__title">AC Defender API</div>
+            <h2 class="api-hero__title">AC Defender API</h2>
             <p class="api-hero__copy">
                 Every private endpoint below is mapped under <code>/api</code> in the running app and requires the same signed-in session as the dashboard.
                 Command routes use the real defender state store and, where noted, the real configured Home Assistant climate entity.
@@ -31,15 +31,15 @@
 
     <section class="api-info-grid">
         <div class="api-info-card">
-            <div class="ops-panel__label">AUTHENTICATION</div>
+            <h2 class="ops-panel__label">AUTHENTICATION</h2>
             <p>Private routes use the app's cookie-auth session. Same-origin JavaScript calls should include credentials; external callers need to sign in first and preserve the session cookie.</p>
         </div>
         <div class="api-info-card api-info-card--warn">
-            <div class="ops-panel__label">THERMOSTAT SAFETY</div>
+            <h2 class="ops-panel__label">THERMOSTAT SAFETY</h2>
             <p>Thermostat endpoints do not mock HVAC. They call Home Assistant or return a real error. Repeated thermostat-affecting commands can return <code>429</code> with the current snapshot.</p>
         </div>
         <div class="api-info-card">
-            <div class="ops-panel__label">CONTENT TYPE</div>
+            <h2 class="ops-panel__label">CONTENT TYPE</h2>
             <p>JSON endpoints accept and return <code>application/json</code>. <code>/api/status/stream</code> returns Server-Sent Events, and <code>/api/camera/webrtc</code> exchanges SDP strings.</p>
         </div>
     </section>
@@ -54,7 +54,7 @@
 
     <div class="api-docs-grid">
         <aside class="api-toc">
-            <div class="ops-panel__label">ENDPOINT GROUPS</div>
+            <h2 class="ops-panel__label">ENDPOINT GROUPS</h2>
             @foreach (var group in EndpointGroups)
             {
                 var count = FilteredEndpoints.Count(e => e.Group == group);
@@ -69,12 +69,12 @@
                 </a>
             }
 
-            <div class="ops-panel__label api-toc__schema-label">SCHEMAS</div>
+            <h2 class="ops-panel__label api-toc__schema-label">SCHEMAS</h2>
             <a href="#request-schemas" class="api-toc__link"><span>Request payloads</span><span>@RequestSchemaCount</span></a>
             <a href="#model-schemas" class="api-toc__link"><span>Response models</span><span>@ResponseSchemaCount</span></a>
         </aside>
 
-        <main class="api-main">
+        <div class="api-main">
             @if (!FilteredEndpoints.Any())
             {
                 <div class="ops-alert-row">
@@ -94,7 +94,7 @@
 
                 <section class="api-group" id="@Slug(group)">
                     <div class="ops-roster-group__head">
-                        <span class="ops-roster-group__title">@group</span>
+                        <h2 class="ops-roster-group__title">@group</h2>
                         <span class="ops-roster-group__rule"></span>
                         <span class="ops-roster-group__count">@endpoints.Count ROUTE@(endpoints.Count == 1 ? "" : "S")</span>
                     </div>
@@ -105,7 +105,7 @@
                             <article class="api-endpoint-card" id="@endpoint.Anchor">
                                 <header class="api-endpoint-card__head">
                                     <span class="@MethodClass(endpoint.Method)">@endpoint.Method</span>
-                                    <code class="api-path">@endpoint.Path</code>
+                                    <h3 class="api-path"><code>@endpoint.Path</code></h3>
                                     <span class="api-endpoint-card__auth">@endpoint.Auth</span>
                                 </header>
 
@@ -150,7 +150,7 @@
                                     </ul>
                                 }
 
-                                <pre class="api-example"><code>@endpoint.Example</code></pre>
+                                <pre class="api-example" tabindex="0" aria-label="@($"{endpoint.Method} {endpoint.Path} example")"><code>@endpoint.Example</code></pre>
                             </article>
                         }
                     </div>
@@ -159,7 +159,7 @@
 
             <section class="api-group" id="request-schemas">
                 <div class="ops-roster-group__head">
-                    <span class="ops-roster-group__title">Request Payloads</span>
+                    <h2 class="ops-roster-group__title">Request Payloads</h2>
                     <span class="ops-roster-group__rule"></span>
                     <span class="ops-roster-group__count">@RequestSchemaCount MODELS</span>
                 </div>
@@ -196,7 +196,7 @@
 
             <section class="api-group" id="model-schemas">
                 <div class="ops-roster-group__head">
-                    <span class="ops-roster-group__title">Response And State Models</span>
+                    <h2 class="ops-roster-group__title">Response And State Models</h2>
                     <span class="ops-roster-group__rule"></span>
                     <span class="ops-roster-group__count">@ResponseSchemaCount MODELS</span>
                 </div>
@@ -230,7 +230,7 @@
                     }
                 </div>
             </section>
-        </main>
+        </div>
     </div>
 </div>
 
