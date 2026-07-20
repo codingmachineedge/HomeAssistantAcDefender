@@ -3640,43 +3640,56 @@ internal sealed class DefenderSetPointRegressionTests
         var now = DateTimeOffset.UtcNow;
         var comfyReading = new ThermostatReading("climate.dining_room", 22.3, 22.0, "cool", "idle", null, []);
 
-        // Below 20 C outside -> silenced.
-        store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "cloudy"));
-        if (!store.TryRespectOutdoorPowerRule(comfyReading, bypassForComfort: false, now, out _, out var coldMsg)
-            || !coldMsg.Contains("Silenced", StringComparison.OrdinalIgnoreCase))
+        // Below 23 C outside -> locked out at every hour, not only during a night window.
+        var dayStart = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
+        foreach (var checkTime in new[] { dayStart.AddHours(2), dayStart.AddHours(14), dayStart.AddHours(22) })
         {
-            throw new InvalidOperationException("Defender should be silenced when it is below 20 C outside.");
+            store.RecordWeatherReading(new WeatherReading("weather.home", 22.9, "cloudy"), checkTime);
+            if (!store.TryRespectOutdoorPowerRule(comfyReading, bypassForComfort: false, checkTime, out _, out var coldMsg)
+                || !coldMsg.Contains("All-day outdoor lockout", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Defender should stay off below 23 C at {checkTime:HH:mm}; got: {coldMsg}");
+            }
         }
 
-        // 20-22 C outside, room near target -> lite mode holds.
-        store.RecordWeatherReading(new WeatherReading("weather.home", 21.0, "cloudy"));
+        // Exactly 23 C is outside the full lockout and enters the gentler band instead.
+        store.RecordWeatherReading(new WeatherReading("weather.home", 23.0, "cloudy"), now);
+        if (!store.TryRespectOutdoorPowerRule(comfyReading, bypassForComfort: false, now, out _, out var boundaryMsg)
+            || !boundaryMsg.Contains("Lite mode", StringComparison.OrdinalIgnoreCase)
+            || boundaryMsg.Contains("All-day outdoor lockout", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Exactly 23 C should leave the full lockout and enter lite mode; got: {boundaryMsg}");
+        }
+
+        // 23-25 C outside, room near target -> lite mode holds.
+        store.RecordWeatherReading(new WeatherReading("weather.home", 24.0, "cloudy"));
         if (!store.TryRespectOutdoorPowerRule(comfyReading, bypassForComfort: false, now, out _, out var liteMsg)
             || !liteMsg.Contains("Lite mode", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Defender should run in lite mode between 20 and 22 C outside.");
+            throw new InvalidOperationException("Defender should run in lite mode between 23 and 25 C outside.");
         }
 
-        // 20-22 C outside, room above the lite band (but below the comfort-override) -> lets it through.
+        // 23-25 C outside, room above the lite band (but below the comfort override) -> lets it through.
         var warmReading = comfyReading with { CurrentTemperatureCelsius = 23.5 };
-        store.RecordWeatherReading(new WeatherReading("weather.home", 21.0, "cloudy"));
+        store.RecordWeatherReading(new WeatherReading("weather.home", 24.0, "cloudy"));
         if (store.TryRespectOutdoorPowerRule(warmReading, bypassForComfort: false, now, out _, out _))
         {
             throw new InvalidOperationException("Lite mode must still cool a room more than 1 C above target.");
         }
 
-        // Below 20 C outside but the room is dangerously hot -> comfort safety wins, not silenced.
+        // Below 23 C outside but the room is dangerously hot -> comfort safety still wins.
         var hotReading = comfyReading with { CurrentTemperatureCelsius = 24.5 };
-        store.RecordWeatherReading(new WeatherReading("weather.home", 18.0, "cloudy"));
+        store.RecordWeatherReading(new WeatherReading("weather.home", 22.9, "cloudy"));
         if (store.TryRespectOutdoorPowerRule(hotReading, bypassForComfort: false, now, out _, out _))
         {
             throw new InvalidOperationException("A genuinely hot room must override the cold-outside silence.");
         }
 
-        // Warm outside (>=22) -> rule does nothing.
+        // Warm outside (>=25) -> rule does nothing.
         store.RecordWeatherReading(new WeatherReading("weather.home", 26.0, "sunny"));
         if (store.TryRespectOutdoorPowerRule(comfyReading, bypassForComfort: false, now, out _, out _))
         {
-            throw new InvalidOperationException("The outdoor power rule must not engage at or above 22 C outside.");
+            throw new InvalidOperationException("The outdoor power rule must not engage at or above 25 C outside.");
         }
     }
 
@@ -3729,7 +3742,7 @@ internal sealed class DefenderSetPointRegressionTests
         }
 
         if (!store.TryRespectOutdoorPowerRule(safeRoom, bypassForComfort: false, night.AddSeconds(1), out _, out var freshMessage)
-            || !freshMessage.Contains("Silenced", StringComparison.OrdinalIgnoreCase))
+            || !freshMessage.Contains("All-day outdoor lockout", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("A fresh cold reading should still activate the ordinary Outdoor Power Rule silence.");
         }
@@ -3956,14 +3969,14 @@ internal sealed class DefenderSetPointRegressionTests
             var defenderOptions = new DefenderOptions
             {
                 OutdoorPowerRuleEnabled = true,
-                OutdoorSilenceBelowCelsius = 20.0,
-                OutdoorLiteBelowCelsius = 22.0,
+                OutdoorSilenceBelowCelsius = 23.0,
+                OutdoorLiteBelowCelsius = 25.0,
                 PollIntervalSeconds = 5,
             };
             using var fixture = DefenderStoreFixture.Create(contentRoot, defenderOptions);
 
             // Isolate the ordinary cold-outdoor power rule. The thermostat starts OFF and the
-            // five-second worker cycle must not briefly restore COOL before noticing 18 C outdoors.
+            // five-second worker cycle must not briefly restore COOL before noticing 22.9 C outdoors.
             var settings = fixture.Store.GetSettings();
             settings.NightShutdownEnabled = false;
             settings.CoolOutdoorShutdownEnabled = false;
@@ -4007,9 +4020,9 @@ internal sealed class DefenderSetPointRegressionTests
             }
 
             var snapshot = fixture.Store.GetSnapshot();
-            if (!snapshot.NextAction.Contains("Silenced", StringComparison.OrdinalIgnoreCase))
+            if (!snapshot.NextAction.Contains("All-day outdoor lockout", StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException($"Cold-outdoor cycle should report the silence decision, got: {snapshot.NextAction}");
+                throw new InvalidOperationException($"Cold-outdoor cycle should report the all-day lockout decision, got: {snapshot.NextAction}");
             }
         }
         finally
@@ -6692,7 +6705,7 @@ internal sealed class ColdOutdoorHomeAssistantHandler : HttpMessageHandler
             "api/states/climate.dining_room" =>
                 "{\"entity_id\":\"climate.dining_room\",\"state\":\"off\",\"attributes\":{\"current_temperature\":22.3,\"temperature\":22.0,\"hvac_action\":\"off\",\"fan_modes\":[],\"min_temp\":16.0,\"max_temp\":30.0},\"context\":{\"id\":\"test-context\",\"parent_id\":null,\"user_id\":null}}",
             "api/states/sensor.outdoor_temperature" =>
-                "{\"entity_id\":\"sensor.outdoor_temperature\",\"state\":\"18.0\",\"attributes\":{\"friendly_name\":\"Outdoor temperature\",\"unit_of_measurement\":\"°C\"}}",
+                "{\"entity_id\":\"sensor.outdoor_temperature\",\"state\":\"22.9\",\"attributes\":{\"friendly_name\":\"Outdoor temperature\",\"unit_of_measurement\":\"°C\"}}",
             _ when path.StartsWith("api/history/period/", StringComparison.OrdinalIgnoreCase) => "[]",
             _ => string.Empty,
         };

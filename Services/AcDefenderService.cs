@@ -381,7 +381,7 @@ public sealed class AcDefenderService
             var rivalScheduleBypass = stateStore.ShouldBypassQuietTimingForRivalSchedule(reading, quietBypassNow);
             var bypassQuietTiming = comfort.BypassCooldown || coolerIntentBypass || superDefenderBypass || rivalScheduleBypass;
 
-            // Outdoor power rule: silence when it is cold outside (<20 C), lite mode between 20-22 C.
+            // All-day outdoor power rule: stand down below 23 C; use lite mode from 23-25 C.
             if (stateStore.TryRespectOutdoorPowerRule(reading, bypassQuietTiming, quietBypassNow, out var outdoorUntil, out var outdoorMessage))
             {
                 stateStore.SetNextAction(outdoorMessage, outdoorUntil);

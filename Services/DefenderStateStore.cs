@@ -4810,10 +4810,10 @@ public sealed class DefenderStateStore
     }
 
     /// <summary>
-    /// Outdoor power rule: stand the defender down when it is cool outside (cooling is rarely needed).
-    /// Below OutdoorSilenceBelowCelsius (default 20 C) it silences entirely; between that and
-    /// OutdoorLiteBelowCelsius (default 22 C) it runs in "lite mode", correcting only once the room is
-    /// more than OutdoorLiteModeBandCelsius above target. Always yields to the comfort safety bypass.
+    /// All-day outdoor power rule: stand the defender down when it is cool outside (cooling is rarely
+    /// needed). Below OutdoorSilenceBelowCelsius (default 23 C) it silences on every poll; between that
+    /// and OutdoorLiteBelowCelsius (default 25 C) it runs in "lite mode", correcting only once the room
+    /// is more than OutdoorLiteModeBandCelsius above target. Always yields to the comfort safety bypass.
     /// </summary>
     public bool TryRespectOutdoorPowerRule(
         ThermostatReading reading,
@@ -4845,7 +4845,7 @@ public sealed class DefenderStateStore
             if (outdoor < silenceBelow)
             {
                 waitUntil = recheck;
-                message = $"Silenced: only {outdoor:0.0} C outside (below {silenceBelow:0.0} C), so cooling is not needed.";
+                message = $"All-day outdoor lockout: only {outdoor:0.0} C outside (below {silenceBelow:0.0} C), so the defender stays off.";
                 return true;
             }
 

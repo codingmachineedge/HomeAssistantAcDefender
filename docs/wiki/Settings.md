@@ -281,5 +281,7 @@ A few features are tuned in `appsettings.json` / environment rather than on the 
 - **Electricity cost tracking** rates and all-in bill factors (`Electricity*`) and the
   **AC-only cost estimate** load (`AcCostEstimateEnabled`, `AcEstimatedAmps`,
   `AcEstimatedVolts`) — see [Energy & Costs](Energy-and-Costs.html).
-- **Outdoor power rule** thresholds (`Outdoor*`) and the warm-room approach step
-  (`WarmRoomApproachCelsius`).
+- **Outdoor power rule** thresholds (`Outdoor*`): the production default checks every five-second
+  cycle all day, keeps the defender off below 23 C, and uses lite mode from 23-25 C. Fresh real
+  weather is required, and direct room-comfort safety still overrides the hold. The warm-room
+  approach step remains `WarmRoomApproachCelsius`.
